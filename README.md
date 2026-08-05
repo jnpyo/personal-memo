@@ -20,8 +20,8 @@
 ## 핵심 설계
 
 - **AI는 제안만 합니다.** 분석 결과는 별도 proposal로 저장되며, 승인 API만 canonical 태그와 할 일을 생성합니다.
-- **원문을 독립적으로 보존합니다.** 메모 수정마다 immutable revision이 추가되고, 이전 revision의 늦은 분석 결과는 `STALE`로 바뀌어 적용할 수 없습니다.
-- **재시도를 안전하게 처리합니다.** 주요 mutation은 요청 본문 해시와 `Idempotency-Key`를 함께 저장합니다. 같은 요청은 원래 응답을 재생하고, 같은 키의 다른 요청은 거절합니다.
+- **원문과 기록 맥락을 독립적으로 보존합니다.** 메모 수정마다 immutable revision이 추가되고, 각 revision에는 브라우저가 기록한 시각과 IANA 시간대를 함께 저장합니다. 이전 revision의 늦은 분석 결과는 `STALE`로 바뀌어 적용할 수 없습니다.
+- **재시도를 안전하게 처리합니다.** 주요 mutation은 요청 본문 해시와 `Idempotency-Key`를 함께 저장합니다. 같은 요청은 원래 응답을 재생하고, 같은 키의 다른 요청은 거절합니다. 메모 수정 재시도도 최초 시도에서 고정한 원문·client timestamp·시간대·키를 그대로 사용합니다.
 - **승인 단위를 되돌립니다.** application provenance를 따라 파생 데이터만 제거하며 원본 메모와 revision 이력은 남깁니다.
 - **기한 초과는 사실이 아니라 시점에 따른 상태입니다.** `OVERDUE`를 저장하지 않고 `TODO`와 현재 시각을 기준으로 조회할 때 계산합니다. 날짜만 지정한 기한은 UTC 자정으로 왜곡하지 않고 `due_local_date`로 보존합니다.
 - **그래프는 canonical 데이터의 투영입니다.** 메모 유형을 거대한 공통 노드로 만들지 않고 노드의 속성·필터·아이콘으로 표현합니다.
@@ -33,7 +33,7 @@
 
 - Android Chrome을 첫 대상으로 한 React 19 + TypeScript + Vite PWA
 - 메모 캡처, 연결/실패/재시도 상태, 제안 제목·유형·태그 수정
-- 활성/휴지통 메모 목록, 새 revision 편집, 휴지통 이동·복원, 기존 메모 재분석
+- 활성/휴지통 메모 목록, 기록 시각·시간대를 포함한 새 revision 편집, 휴지통 이동·복원, 기존 메모 재분석
 - 제안 승인·보류·거절과 마지막 application 되돌리기
 - 새로고침 뒤 마지막 application과 검토 중·보류한 제안 복구
 - `TODO` / `DONE` / `CANCELLED` 전환, 날짜 전용 기한과 기한 초과 표시
@@ -50,7 +50,7 @@
 - revision 경쟁 검증, transactional apply/undo, tag 정규화와 provenance
 - HTTP DTO·domain snapshot과 JDBC persistence mapping의 분리
 - PostgreSQL advisory transaction lock과 응답 저장을 이용한 요청-해시 멱등성
-- PostgreSQL 17.6 + Flyway 순방향 마이그레이션과 owner-aware composite foreign key
+- PostgreSQL 17.6 + Flyway 순방향 마이그레이션, revision capture context와 owner-aware composite foreign key
 
 ### Verification
 

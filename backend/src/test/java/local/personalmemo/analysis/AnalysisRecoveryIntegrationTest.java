@@ -229,8 +229,8 @@ class AnalysisRecoveryIntegrationTest extends PostgresIntegrationTestSupport {
         .param("when", timestamp)
         .update();
     db.sql(
-            "insert into memo_revisions(memo_id,owner_id,revision,content,content_hash,created_at,created_by) "
-                + "values(:memoId,:ownerId,1,'foreign',repeat('f',64),:when,:ownerId)")
+            "insert into memo_revisions(memo_id,owner_id,revision,content,content_hash,created_at,created_by,client_recorded_at,source_time_zone) "
+                + "values(:memoId,:ownerId,1,'foreign',repeat('f',64),:when,:ownerId,:when,'Asia/Seoul')")
         .param("memoId", memoId)
         .param("ownerId", ownerId)
         .param("when", timestamp)

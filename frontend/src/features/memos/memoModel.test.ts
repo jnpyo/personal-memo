@@ -21,11 +21,18 @@ function memo(overrides: Partial<MemoView> = {}): MemoView {
 
 describe('memo model', () => {
   it('builds an optimistic revision request without normalizing the raw text', () => {
-    const request = buildUpdateMemoRequest(memo({ currentRevision: 4 }), '  원문 줄바꿈\n유지  ');
+    const request = buildUpdateMemoRequest(
+      memo({ currentRevision: 4 }),
+      '  원문 줄바꿈\n유지  ',
+      '2026-08-05T02:03:04.000Z',
+      'Asia/Seoul',
+    );
 
     expect(request).toEqual({
       expectedRevision: 4,
       content: '  원문 줄바꿈\n유지  ',
+      clientUpdatedAt: '2026-08-05T02:03:04.000Z',
+      timeZone: 'Asia/Seoul',
     });
   });
 

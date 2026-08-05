@@ -47,8 +47,8 @@ class OwnerIsolationIntegrationTest extends PostgresIntegrationTestSupport {
         .param("now", now)
         .update();
     db.sql(
-            "insert into memo_revisions(memo_id,owner_id,revision,content,content_hash,created_at,created_by) "
-                + "values(:id,:owner,1,'다른 사용자의 비공개 메모',repeat('a',64),:now,:owner)")
+            "insert into memo_revisions(memo_id,owner_id,revision,content,content_hash,created_at,created_by,client_recorded_at,source_time_zone) "
+                + "values(:id,:owner,1,'다른 사용자의 비공개 메모',repeat('a',64),:now,:owner,:now,'Asia/Seoul')")
         .param("id", otherMemoId)
         .param("owner", otherOwnerId)
         .param("now", now)

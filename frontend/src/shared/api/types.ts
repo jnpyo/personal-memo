@@ -9,10 +9,22 @@ export type MemoView = {
 
 export type MemoStatus = 'ACTIVE' | 'TRASHED';
 
-export type UpdateMemoRequest = {
+type UpdateMemoContent = {
   expectedRevision: number;
   content: string;
 };
+
+type UpdateMemoCaptureContext =
+  | {
+      clientUpdatedAt: string;
+      timeZone: string;
+    }
+  | {
+      clientUpdatedAt?: never;
+      timeZone?: never;
+    };
+
+export type UpdateMemoRequest = UpdateMemoContent & UpdateMemoCaptureContext;
 
 export type AnalysisRun = {
   id: string;

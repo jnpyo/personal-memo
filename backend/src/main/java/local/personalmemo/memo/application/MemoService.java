@@ -76,9 +76,11 @@ public class MemoService {
     db.sql(
             """
             insert into memo_revisions(
-              memo_id, owner_id, revision, content, content_hash, created_at, created_by
+              memo_id, owner_id, revision, content, content_hash, created_at, created_by,
+              client_recorded_at, source_time_zone
             ) values (
-              :memoId, :ownerId, 1, :content, :contentHash, :now, :ownerId
+              :memoId, :ownerId, 1, :content, :contentHash, :now, :ownerId,
+              :clientRecordedAt, :sourceTimeZone
             )
             """)
         .param("memoId", command.id())
@@ -86,6 +88,8 @@ public class MemoService {
         .param("contentHash", Hashing.sha256(command.content()))
         .param("now", now)
         .param("ownerId", identity.ownerId())
+        .param("clientRecordedAt", Timestamp.from(command.clientCreatedAt().toInstant()))
+        .param("sourceTimeZone", command.timeZone())
         .update();
 
     View response = toView(findCurrent(command.id(), false));
@@ -107,6 +111,8 @@ public class MemoService {
             select m.id,
                    m.current_revision,
                    r.content,
+                   r.client_recorded_at,
+                   r.source_time_zone,
                    m.status,
                    m.created_at,
                    coalesce((
@@ -146,6 +152,7 @@ public class MemoService {
 
   @Transactional
   public View update(UUID id, String key, Update command) {
+    validateUpdateCaptureContext(command);
     String requestHash = idempotency.hashRequest(new UpdateRequest(id, command));
     Optional<IdempotencyService.StoredResult> replay =
         idempotency.find(UPDATE_OPERATION, key, requestHash);
@@ -163,12 +170,21 @@ public class MemoService {
 
     int nextRevision = current.currentRevision() + 1;
     Timestamp now = Timestamp.from(Instant.now());
+    Timestamp clientRecordedAt =
+        Timestamp.from(
+            command.clientUpdatedAt() == null
+                ? now.toInstant()
+                : command.clientUpdatedAt().toInstant());
+    String sourceTimeZone =
+        command.timeZone() == null ? current.sourceTimeZone() : command.timeZone();
     db.sql(
             """
             insert into memo_revisions(
-              memo_id, owner_id, revision, content, content_hash, created_at, created_by
+              memo_id, owner_id, revision, content, content_hash, created_at, created_by,
+              client_recorded_at, source_time_zone
             ) values (
-              :memoId, :ownerId, :revision, :content, :contentHash, :now, :ownerId
+              :memoId, :ownerId, :revision, :content, :contentHash, :now, :ownerId,
+              :clientRecordedAt, :sourceTimeZone
             )
             """)
         .param("memoId", id)
@@ -177,6 +193,8 @@ public class MemoService {
         .param("contentHash", Hashing.sha256(command.content()))
         .param("now", now)
         .param("ownerId", identity.ownerId())
+        .param("clientRecordedAt", clientRecordedAt)
+        .param("sourceTimeZone", sourceTimeZone)
         .update();
     db.sql(
             """
@@ -295,6 +313,8 @@ public class MemoService {
             select m.id,
                    m.current_revision,
                    r.content,
+                   r.client_recorded_at,
+                   r.source_time_zone,
                    m.status,
                    m.created_at,
                    coalesce((
@@ -327,6 +347,8 @@ public class MemoService {
         resultSet.getObject("id", UUID.class),
         resultSet.getInt("current_revision"),
         resultSet.getString("content"),
+        resultSet.getTimestamp("client_recorded_at").toInstant(),
+        resultSet.getString("source_time_zone"),
         resultSet.getString("status"),
         resultSet.getTimestamp("created_at").toInstant(),
         resultSet.getString("analysis_state"));
@@ -346,6 +368,19 @@ public class MemoService {
     if (!ZoneId.getAvailableZoneIds().contains(timeZone)) {
       throw DomainException.invalid(
           "INVALID_TIME_ZONE", "timeZone must be a recognized IANA time-zone identifier.");
+    }
+  }
+
+  private void validateUpdateCaptureContext(Update command) {
+    boolean hasClientUpdatedAt = command.clientUpdatedAt() != null;
+    boolean hasTimeZone = command.timeZone() != null;
+    if (hasClientUpdatedAt != hasTimeZone) {
+      throw DomainException.invalid(
+          "INVALID_CAPTURE_CONTEXT",
+          "clientUpdatedAt and timeZone must either both be provided or both be omitted.");
+    }
+    if (hasTimeZone) {
+      validateTimeZone(command.timeZone());
     }
   }
 

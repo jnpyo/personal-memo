@@ -297,9 +297,8 @@ export function useMemoWorkspace() {
     setFeedback({ kind: 'info', message: '보류한 제안을 다시 열었습니다.' });
   }
 
-  async function updateMemo(memo: MemoView, nextContent: string): Promise<boolean> {
+  async function runUpdateMemo(memo: MemoView, body: ReturnType<typeof buildUpdateMemoRequest>) {
     const scope = `update:${memo.id}`;
-    const body = buildUpdateMemoRequest(memo, nextContent);
     const idempotencyKey = retryIdentities.current.keyFor(scope, JSON.stringify(body));
     setBusyAction(scope);
     clearRetry(scope);
@@ -325,12 +324,22 @@ export function useMemoWorkspace() {
           run: () => void refreshMemos(),
         });
       } else {
-        fail(error, scope, '원문 저장 다시 시도', () => void updateMemo(memo, nextContent));
+        fail(error, scope, '원문 저장 다시 시도', () => void runUpdateMemo(memo, body));
       }
       return false;
     } finally {
       setBusyAction(null);
     }
+  }
+
+  function updateMemo(memo: MemoView, nextContent: string): Promise<boolean> {
+    const body = buildUpdateMemoRequest(
+      memo,
+      nextContent,
+      new Date().toISOString(),
+      timeZone.current,
+    );
+    return runUpdateMemo(memo, body);
   }
 
   async function trashMemo(memo: MemoView) {

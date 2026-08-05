@@ -113,6 +113,8 @@ paths:
       description: >-
         expectedRevision provides optimistic concurrency. A successful content edit
         increments currentRevision and marks older unapplied analysis runs STALE.
+        clientUpdatedAt and timeZone are an optional pair; the PWA always sends both,
+        and retries reuse the original body snapshot and idempotency key.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -188,7 +190,10 @@ paths:
       tags: [Analysis]
       operationId: startFakeAnalysis
       summary: Create a reviewable Fake analysis proposal
-      description: This operation never creates canonical tags, tasks, or graph relations.
+      description: >-
+        This operation never creates canonical tags, tasks, or graph relations. Date
+        interpretation uses client_recorded_at and source_time_zone from the referenced
+        immutable memo revision, rather than request time or mutable user settings.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -584,6 +589,9 @@ components:
       type: object
       additionalProperties: false
       required: [expectedRevision, content]
+      dependentRequired:
+        clientUpdatedAt: [timeZone]
+        timeZone: [clientUpdatedAt]
       properties:
         expectedRevision:
           type: integer
@@ -592,6 +600,16 @@ components:
           type: string
           minLength: 1
           maxLength: 20000
+        clientUpdatedAt:
+          type: string
+          format: date-time
+          description: Client-recorded time for this immutable revision.
+        timeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          examples: [Asia/Seoul]
+          description: IANA time zone captured with clientUpdatedAt.
     MemoStatus:
       enum: [ACTIVE, TRASHED]
     MemoView:

@@ -23,24 +23,34 @@ afterEach(() => {
 });
 
 describe('memo API client', () => {
-  it('sends optimistic revision data and the caller-owned idempotency key when editing', async () => {
+  it('reuses the exact update body snapshot and caller-owned key on retry', async () => {
     const fetchMock = vi.fn(async () => okResponse());
     vi.stubGlobal('fetch', fetchMock);
 
-    await api.updateMemo(
-      memo.id,
-      { expectedRevision: 1, content: '수정한 원문' },
-      'stable-edit-key',
-    );
+    const body = {
+      expectedRevision: 1,
+      content: '수정한 원문',
+      clientUpdatedAt: '2026-08-05T02:03:04.000Z',
+      timeZone: 'Asia/Seoul',
+    } as const;
+    await api.updateMemo(memo.id, body, 'stable-edit-key');
+    await api.updateMemo(memo.id, body, 'stable-edit-key');
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/memos/memo-1', {
+    const expectedRequest = {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
         'Idempotency-Key': 'stable-edit-key',
       },
-      body: JSON.stringify({ expectedRevision: 1, content: '수정한 원문' }),
-    });
+      body: JSON.stringify({
+        expectedRevision: 1,
+        content: '수정한 원문',
+        clientUpdatedAt: '2026-08-05T02:03:04.000Z',
+        timeZone: 'Asia/Seoul',
+      }),
+    };
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/memos/memo-1', expectedRequest);
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/memos/memo-1', expectedRequest);
   });
 
   it('uses separate idempotent soft-trash and restore endpoints', async () => {

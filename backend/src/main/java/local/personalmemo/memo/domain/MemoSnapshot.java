@@ -7,6 +7,8 @@ public record MemoSnapshot(
     UUID id,
     int currentRevision,
     String content,
+    Instant clientRecordedAt,
+    String sourceTimeZone,
     String status,
     Instant createdAt,
     String analysisState) {

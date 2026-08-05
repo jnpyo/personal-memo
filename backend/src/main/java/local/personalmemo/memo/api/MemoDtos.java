@@ -18,7 +18,10 @@ public final class MemoDtos {
       @NotBlank @Size(max = 64) String timeZone) {}
 
   public record Update(
-      @Min(1) int expectedRevision, @NotBlank @Size(max = 20_000) String content) {}
+      @Min(1) int expectedRevision,
+      @NotBlank @Size(max = 20_000) String content,
+      OffsetDateTime clientUpdatedAt,
+      @Size(max = 64) String timeZone) {}
 
   public record View(
       UUID id,

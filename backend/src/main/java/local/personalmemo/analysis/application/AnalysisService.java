@@ -73,9 +73,13 @@ public class AnalysisService {
     UUID runId = UUID.randomUUID();
     UUID proposalId = UUID.randomUUID();
     Instant now = Instant.now();
-    String timeZone = ownerTimeZone();
     ObjectNode proposal =
-        analyzer.analyze(memoId, request.memoRevision(), memo.content(), now, timeZone);
+        analyzer.analyze(
+            memoId,
+            request.memoRevision(),
+            memo.content(),
+            memo.clientRecordedAt(),
+            memo.sourceTimeZone());
     proposalValidator.validate(proposal, memoId, request.memoRevision(), memo.content().length());
     validateProposalReferences(proposal);
 
@@ -371,14 +375,6 @@ public class AnalysisService {
       throw DomainException.invalid(
           "INVALID_ANALYSIS_PROPOSAL", "A proposed tag is not available to this owner.");
     }
-  }
-
-  private String ownerTimeZone() {
-    return db.sql("select time_zone from user_settings where user_id = :ownerId")
-        .param("ownerId", identity.ownerId())
-        .query(String.class)
-        .optional()
-        .orElseThrow(() -> DomainException.notFound("User settings"));
   }
 
   private void requireActiveCurrentRevision(MemoSnapshot memo, int expectedRevision) {

@@ -46,7 +46,7 @@ Bean Validation 오류는 `fieldErrors`에 `{ "field", "message" }`를 담는다
 
 서버는 owner, operation, key, request hash와 원래 response를 같은 transaction에 저장한다. 같은 key와 같은 요청은 최초 응답을 반환하고 추가 record를 만들지 않는다. 같은 key를 다른 payload에 재사용하면 `409 IDEMPOTENCY_KEY_REUSED`를 반환한다. PostgreSQL advisory transaction lock으로 동시에 들어온 동일 요청도 직렬화한다.
 
-메모 수정은 `Idempotency-Key`와 `expectedRevision`을 함께 사용한다. 전자는 동일 mutation의 안전한 재시도를, 후자는 다른 편집과의 optimistic concurrency를 보장한다. 휴지통 이동과 복원은 body가 없으므로 request hash에 path의 memo identity를 포함한다.
+메모 수정은 `Idempotency-Key`와 `expectedRevision`을 함께 사용한다. 전자는 동일 mutation의 안전한 재시도를, 후자는 다른 편집과의 optimistic concurrency를 보장한다. 브라우저는 최초 시도에서 `clientUpdatedAt`과 `timeZone`을 포함한 body snapshot을 만들고, 재시도할 때 그 body와 idempotency key를 그대로 사용한다. 휴지통 이동과 복원은 body가 없으므로 request hash에 path의 memo identity를 포함한다.
 
 ## Memo
 
@@ -110,11 +110,15 @@ Content-Type: application/json
 ```json
 {
   "expectedRevision": 1,
-  "content": "11.26 OS과제 제출"
+  "content": "11.26 OS과제 제출",
+  "clientUpdatedAt": "2026-08-05T11:04:00+09:00",
+  "timeZone": "Asia/Seoul"
 }
 ```
 
-성공하면 `200 OK`와 갱신된 `MemoView`를 반환하고, immutable `memo_revisions` row를 추가해 `currentRevision`을 증가시킨다. 적용되지 않은 과거 revision 분석은 `STALE`이 된다. revision이 이미 바뀌었으면 `409 STALE_MEMO_REVISION`이다. 휴지통의 memo는 수정할 수 없다.
+`clientUpdatedAt`과 `timeZone`은 둘 다 제공하거나 둘 다 생략해야 한다. `timeZone`은 실제 IANA zone이어야 하며 한쪽만 보내면 `422 INVALID_CAPTURE_CONTEXT`다. 현재 PWA는 항상 둘 다 전송한다. 호환 client가 둘 다 생략하면 서버 기록 시각과 직전 revision의 시간대를 사용한다.
+
+성공하면 `200 OK`와 갱신된 `MemoView`를 반환하고, immutable `memo_revisions` row에 원문과 해당 revision의 client recorded time·source time zone을 함께 추가해 `currentRevision`을 증가시킨다. 적용되지 않은 과거 revision 분석은 `STALE`이 된다. revision이 이미 바뀌었으면 `409 STALE_MEMO_REVISION`이다. 휴지통의 memo는 수정할 수 없다.
 
 ### Move to trash and restore
 
@@ -147,7 +151,7 @@ Content-Type: application/json
 }
 ```
 
-현재 구현은 동기 Fake 분석을 실행한다. `200 OK`:
+현재 구현은 동기 Fake 분석을 실행한다. 분석 기준 시각과 시간대는 전역 설정이나 요청 시점이 아니라 지정한 immutable memo revision의 `client_recorded_at`과 `source_time_zone`을 사용한다. 따라서 수정 후 재분석과 네트워크 지연 뒤 재시도에서도 원문을 기록한 맥락이 유지된다. `200 OK`:
 
 ```json
 {

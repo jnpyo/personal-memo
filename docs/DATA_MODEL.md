@@ -1,11 +1,12 @@
 # Data model — implemented Milestone 1
 
-이 문서는 현재 Flyway `V1`–`V5`가 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다.
+이 문서는 현재 Flyway `V1`–`V6`가 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다.
 
 ## Invariants
 
 - raw memo identity와 immutable revision은 AI-derived record와 독립적으로 보존한다.
 - analysis run은 정확히 하나의 `memo_revision`을 참조한다.
+- 날짜 해석은 analysis 요청 시점의 전역 값이 아니라 참조한 revision의 기록 시각과 시간대를 사용한다.
 - proposal과 confirmed canonical record는 분리한다.
 - 파생 record는 `analysis_application` provenance를 보유한다.
 - 모든 사용자 데이터 read/write는 `owner_id` 범위 안에서 수행하며, owner-bound foreign key가 교차 owner 참조를 거절한다.
@@ -63,11 +64,15 @@ content TEXT
 content_hash VARCHAR(64)
 created_at TIMESTAMPTZ
 created_by UUID FK -> users
+client_recorded_at TIMESTAMPTZ NOT NULL
+source_time_zone VARCHAR(64) NOT NULL
 PRIMARY KEY (memo_id, revision)
 UNIQUE (memo_id, revision, owner_id)
 ```
 
-content update는 새 row를 insert한 뒤 `memos.current_revision`을 증가시킨다. 과거 raw content를 proposal JSON이나 derived title로 대체하지 않는다.
+`client_recorded_at`은 사용자가 해당 원문을 기록한 client 시각을 UTC instant로 보존하고, `source_time_zone`은 그때의 IANA zone을 별도로 보존한다. Create의 `clientCreatedAt`과 Update의 `clientUpdatedAt`이 같은 내부 의미로 매핑된다. V6 이전 row는 기존 `created_at`과 owner의 `user_settings.time_zone`으로 backfill한다.
+
+content update는 새 row를 insert한 뒤 `memos.current_revision`을 증가시킨다. Update capture context는 API에서 둘 다 제공하거나 둘 다 생략하며, 생략 시 server now와 직전 revision의 zone을 사용한다. 과거 raw content나 capture context를 proposal JSON이나 derived title로 대체하지 않는다.
 
 ## Retry safety
 
@@ -106,7 +111,7 @@ FK (memo_id, owner_id) -> memos(id, owner_id)
 FK (memo_id, memo_revision, owner_id) -> memo_revisions(memo_id, revision, owner_id)
 ```
 
-Milestone 1은 `MOCK` route를 사용한다. memo가 수정되면 현재 revision보다 오래된 미적용 run을 `STALE`로 표시하며 application 단계에서도 revision을 다시 검사한다.
+Milestone 1은 `MOCK` route를 사용한다. analyzer는 run이 참조하는 revision의 `client_recorded_at`과 `source_time_zone`을 입력으로 사용한다. memo가 수정되면 현재 revision보다 오래된 미적용 run을 `STALE`로 표시하며 application 단계에서도 revision을 다시 검사한다.
 
 ### `analysis_proposals`
 

@@ -205,9 +205,11 @@ class MemoLifecycleIntegrationTest extends PostgresIntegrationTestSupport {
     db.sql(
             """
             insert into memo_revisions(
-              memo_id, owner_id, revision, content, content_hash, created_at, created_by
+              memo_id, owner_id, revision, content, content_hash, created_at, created_by,
+              client_recorded_at, source_time_zone
             ) values (
-              :memoId, :ownerId, 1, 'foreign memo', repeat('f', 64), :now, :ownerId
+              :memoId, :ownerId, 1, 'foreign memo', repeat('f', 64), :now, :ownerId,
+              :now, 'Asia/Seoul'
             )
             """)
         .param("memoId", memoId)

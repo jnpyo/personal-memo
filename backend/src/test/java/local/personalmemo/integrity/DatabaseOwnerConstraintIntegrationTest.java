@@ -171,8 +171,8 @@ class DatabaseOwnerConstraintIntegrationTest extends PostgresIntegrationTestSupp
         .param("now", now)
         .update();
     db.sql(
-            "insert into memo_revisions(memo_id,owner_id,revision,content,content_hash,created_at,created_by) "
-                + "values(:memo,:owner,1,'foreign',repeat('f',64),:now,:owner)")
+            "insert into memo_revisions(memo_id,owner_id,revision,content,content_hash,created_at,created_by,client_recorded_at,source_time_zone) "
+                + "values(:memo,:owner,1,'foreign',repeat('f',64),:now,:owner,:now,'Asia/Seoul')")
         .param("memo", memo)
         .param("owner", owner)
         .param("now", now)

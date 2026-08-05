@@ -24,10 +24,17 @@ export function analysisStateTone(state: string): 'neutral' | 'attention' | 'com
   return 'neutral';
 }
 
-export function buildUpdateMemoRequest(memo: MemoView, content: string): UpdateMemoRequest {
+export function buildUpdateMemoRequest(
+  memo: MemoView,
+  content: string,
+  clientUpdatedAt: string,
+  timeZone: string,
+): UpdateMemoRequest {
   return {
     expectedRevision: memo.currentRevision,
     content,
+    clientUpdatedAt,
+    timeZone,
   };
 }
 
