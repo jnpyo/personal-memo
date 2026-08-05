@@ -7,4 +7,4 @@ RUN npm run lint
 RUN npm run test
 RUN npm run build
 EXPOSE 5173
-CMD ["npm","run","dev"]
+CMD ["npm", "run", "preview"]

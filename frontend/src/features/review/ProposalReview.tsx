@@ -1,6 +1,19 @@
 import { useState } from 'react';
-import type { ItemKind, TagCandidate } from '../../shared/api/types';
-import type { ReviewDraft } from './reviewModel';
+import type { DateCandidate, ItemKind, TagCandidate } from '../../shared/api/types';
+import {
+  changeItemDue,
+  changeItemDueValue,
+  changeItemKind,
+  changeItemTitle,
+  changeReviewTitle,
+  changeSelectedType,
+  createCustomDateOnly,
+  isValidDue,
+  isValidReviewDraft,
+  ITEM_KINDS,
+  usableDateCandidates,
+  type ReviewDraft,
+} from './reviewModel';
 
 type Props = {
   review: ReviewDraft;
@@ -19,6 +32,20 @@ const TYPE_LABEL: Record<ItemKind, string> = {
   RECORD: '기록',
 };
 
+function sameDate(left: DateCandidate, right: DateCandidate): boolean {
+  return (
+    left.surfaceText === right.surfaceText &&
+    left.value === right.value &&
+    left.precision === right.precision &&
+    left.timeSpecified === right.timeSpecified
+  );
+}
+
+function dateCandidateLabel(candidate: DateCandidate): string {
+  const interpreted = candidate.value ?? '날짜 미확정';
+  return `${candidate.surfaceText} → ${interpreted} (${candidate.precision})`;
+}
+
 export function ProposalReview({
   review,
   busy,
@@ -28,6 +55,7 @@ export function ProposalReview({
   onReject,
 }: Props) {
   const [newTag, setNewTag] = useState('');
+  const dateCandidates = usableDateCandidates(review.proposal);
 
   const removeTag = (index: number) => {
     onChange({ ...review, tags: review.tags.filter((_, candidateIndex) => candidateIndex !== index) });
@@ -47,10 +75,7 @@ export function ProposalReview({
     setNewTag('');
   };
 
-  const isValid =
-    review.title.trim().length > 0 &&
-    review.items.length > 0 &&
-    review.items.every((item) => item.title.trim().length > 0);
+  const isValid = isValidReviewDraft(review);
 
   return (
     <section className="review-card" aria-labelledby="review-title">
@@ -62,52 +87,154 @@ export function ProposalReview({
 
       <div className="review-fields">
         <label>
-          제목
+          대표 제목
           <input
             value={review.title}
             disabled={busy}
             maxLength={200}
-            onChange={(event) => onChange({ ...review, title: event.target.value })}
+            onChange={(event) => onChange(changeReviewTitle(review, event.target.value))}
           />
         </label>
 
         <label>
-          유형
+          대표 유형
           <select
             value={review.selectedType}
             disabled={busy}
             onChange={(event) =>
-              onChange({ ...review, selectedType: event.target.value as ItemKind })
+              onChange(changeSelectedType(review, event.target.value as ItemKind))
             }
           >
-            {review.proposal.typeCandidates.map((candidate) => (
-              <option key={candidate.value} value={candidate.value}>
-                {TYPE_LABEL[candidate.value]}
+            {ITEM_KINDS.map((kind) => (
+              <option key={kind} value={kind}>
+                {TYPE_LABEL[kind]}
               </option>
             ))}
           </select>
         </label>
       </div>
 
-      <fieldset disabled={busy}>
+      <fieldset className="review-items" disabled={busy}>
         <legend>생성할 항목</legend>
-        {review.items.map((item, index) => (
-          <label className="item-editor" key={item.candidateId ?? `${item.kind}-${index}`}>
-            <span>{TYPE_LABEL[item.kind]}</span>
-            <input
-              value={item.title}
-              maxLength={200}
-              onChange={(event) =>
-                onChange({
-                  ...review,
-                  items: review.items.map((candidate, candidateIndex) =>
-                    candidateIndex === index ? { ...candidate, title: event.target.value } : candidate,
-                  ),
-                })
-              }
-            />
-          </label>
-        ))}
+        {review.items.map((item, index) => {
+          const matchedCandidate = item.due
+            ? dateCandidates.findIndex((candidate) => sameDate(candidate, item.due!))
+            : -1;
+          const dueChoice = item.due
+            ? matchedCandidate >= 0
+              ? String(matchedCandidate)
+              : 'custom'
+            : 'none';
+          const dueIsValid = item.due === null || isValidDue(item.due);
+          const dateHelpId = `item-${index}-date-help`;
+
+          return (
+            <fieldset className="item-editor" key={item.candidateId ?? `${item.kind}-${index}`}>
+              <legend>항목 {index + 1}</legend>
+              <div className="item-editor__fields">
+                <label>
+                  유형
+                  <select
+                    aria-label={`항목 ${index + 1} 유형`}
+                    value={item.kind}
+                    onChange={(event) =>
+                      onChange(changeItemKind(review, index, event.target.value as ItemKind))
+                    }
+                  >
+                    {ITEM_KINDS.map((kind) => (
+                      <option key={kind} value={kind}>
+                        {TYPE_LABEL[kind]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  제목
+                  <input
+                    aria-label={`항목 ${index + 1} 제목`}
+                    value={item.title}
+                    maxLength={200}
+                    onChange={(event) =>
+                      onChange(changeItemTitle(review, index, event.target.value))
+                    }
+                  />
+                </label>
+              </div>
+
+              {item.kind === 'TASK' && (
+                <div className="task-date-editor">
+                  <label>
+                    마감 날짜
+                    <select
+                      aria-describedby={dateHelpId}
+                      value={dueChoice}
+                      onChange={(event) => {
+                        const choice = event.target.value;
+                        if (choice === 'none') {
+                          onChange(changeItemDue(review, index, null));
+                        } else if (choice === 'custom') {
+                          onChange(changeItemDue(review, index, createCustomDateOnly()));
+                        } else {
+                          onChange(changeItemDue(review, index, dateCandidates[Number(choice)]));
+                        }
+                      }}
+                    >
+                      <option value="none">날짜 포함 안 함</option>
+                      {dateCandidates.map((candidate, candidateIndex) => (
+                        <option key={`${candidate.precision}-${candidateIndex}`} value={candidateIndex}>
+                          {dateCandidateLabel(candidate)}
+                        </option>
+                      ))}
+                      <option value="custom">날짜 직접 입력</option>
+                    </select>
+                  </label>
+
+                  {item.due?.precision === 'DATE_ONLY' && (
+                    <label>
+                      확정 날짜
+                      <input
+                        type="date"
+                        value={item.due.value ?? ''}
+                        aria-invalid={!dueIsValid}
+                        aria-describedby={dateHelpId}
+                        onChange={(event) =>
+                          onChange(changeItemDueValue(review, index, event.target.value))
+                        }
+                      />
+                    </label>
+                  )}
+
+                  {(item.due?.precision === 'EXACT_TIME' ||
+                    item.due?.precision === 'RELATIVE_EXACT') && (
+                    <label>
+                      확정 시각 (UTC offset 포함)
+                      <input
+                        type="text"
+                        value={item.due.value ?? ''}
+                        aria-invalid={!dueIsValid}
+                        aria-describedby={dateHelpId}
+                        placeholder="2026-11-25T18:00:00+09:00"
+                        onChange={(event) =>
+                          onChange(changeItemDueValue(review, index, event.target.value))
+                        }
+                      />
+                    </label>
+                  )}
+
+                  <p
+                    id={dateHelpId}
+                    className={dueIsValid ? 'field-help' : 'field-error'}
+                    role={dueIsValid ? undefined : 'alert'}
+                  >
+                    {dueIsValid
+                      ? '각 할 일의 날짜는 별도로 선택되며, 날짜만 있는 값은 현지 달력 날짜로 보존됩니다.'
+                      : '유효한 날짜를 입력하거나 날짜 포함 안 함을 선택해 주세요.'}
+                  </p>
+                </div>
+              )}
+            </fieldset>
+          );
+        })}
       </fieldset>
 
       <fieldset disabled={busy}>
@@ -143,16 +270,6 @@ export function ProposalReview({
           </button>
         </div>
       </fieldset>
-
-      {review.proposal.dateCandidates[0] && (
-        <p className="date-candidate">
-          날짜 원문 <strong>{review.proposal.dateCandidates[0].surfaceText}</strong>
-          <span aria-hidden="true"> · </span>
-          {review.proposal.dateCandidates[0].value ?? '날짜 미확정'}
-          <span aria-hidden="true"> · </span>
-          {review.proposal.dateCandidates[0].precision}
-        </p>
-      )}
 
       {review.proposal.ambiguityReasons && review.proposal.ambiguityReasons.length > 0 && (
         <p className="ambiguity-note">

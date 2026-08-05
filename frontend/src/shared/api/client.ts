@@ -4,11 +4,15 @@ import type {
   ApplicationResult,
   ApplyProposalRequest,
   GraphProjection,
+  LatestApplication,
   MemoView,
+  MemoStatus,
   Proposal,
+  ProposalSummary,
   ReviewDispositionResult,
   Task,
   TaskStatus,
+  UpdateMemoRequest,
 } from './types';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
@@ -21,6 +25,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     throw await toApiError(response);
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
   }
 
   return response.json() as Promise<T>;
@@ -47,6 +55,34 @@ export const api = {
       }),
     }),
 
+  memos: (status: MemoStatus, limit = 50) =>
+    request<MemoView[]>(
+      `/api/v1/memos?status=${status}&limit=${Math.min(Math.max(limit, 1), 50)}`,
+    ),
+
+  updateMemo: (
+    memoId: string,
+    body: UpdateMemoRequest,
+    idempotencyKey: string,
+  ) =>
+    request<MemoView>(`/api/v1/memos/${memoId}`, {
+      method: 'PATCH',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify(body),
+    }),
+
+  trashMemo: (memoId: string, idempotencyKey: string) =>
+    request<MemoView>(`/api/v1/memos/${memoId}`, {
+      method: 'DELETE',
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+
+  restoreMemo: (memoId: string, idempotencyKey: string) =>
+    request<MemoView>(`/api/v1/memos/${memoId}/restore`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+
   analyze: (memoId: string, memoRevision: number, idempotencyKey: string) =>
     request<AnalysisRun>(`/api/v1/memos/${memoId}/analysis-runs`, {
       method: 'POST',
@@ -56,6 +92,14 @@ export const api = {
 
   proposal: (proposalId: string) =>
     request<Proposal>(`/api/v1/analysis-proposals/${proposalId}`),
+
+  proposals: (status: 'REVIEW_REQUIRED' | 'POSTPONED', limit = 1) =>
+    request<ProposalSummary[]>(
+      `/api/v1/analysis-proposals?status=${status}&limit=${Math.min(Math.max(limit, 1), 50)}`,
+    ),
+
+  latestApplication: () =>
+    request<LatestApplication>('/api/v1/analysis-applications/latest'),
 
   apply: (proposalId: string, body: ApplyProposalRequest, idempotencyKey: string) =>
     request<ApplicationResult>(`/api/v1/analysis-proposals/${proposalId}/apply`, {

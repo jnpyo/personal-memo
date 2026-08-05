@@ -2,9 +2,16 @@ export type MemoView = {
   id: string;
   currentRevision: number;
   content: string;
-  status: string;
+  status: MemoStatus;
   analysisState: string;
   createdAt: string;
+};
+
+export type MemoStatus = 'ACTIVE' | 'TRASHED';
+
+export type UpdateMemoRequest = {
+  expectedRevision: number;
+  content: string;
 };
 
 export type AnalysisRun = {
@@ -20,10 +27,17 @@ export type ScoredValue<T extends string = string> = {
   score?: number;
 };
 
+export type DatePrecision =
+  | 'EXACT_TIME'
+  | 'DATE_ONLY'
+  | 'RELATIVE_EXACT'
+  | 'APPROXIMATE'
+  | 'UNKNOWN';
+
 export type DateCandidate = {
   surfaceText: string;
   value: string | null;
-  precision: string;
+  precision: DatePrecision;
   timeSpecified: boolean;
   confidence?: number;
   ambiguityReasons?: string[];
@@ -80,7 +94,13 @@ export type ApplyProposalRequest = {
   items: Array<{
     kind: ItemKind;
     title: string;
-    due: (DateCandidate & { timeZone: string }) | null;
+    due: {
+      surfaceText: string;
+      value: string | null;
+      precision: DatePrecision;
+      timeZone: string;
+      timeSpecified: boolean;
+    } | null;
   }>;
 };
 
@@ -91,7 +111,19 @@ export type ApplicationResult = {
 
 export type ReviewDispositionResult = {
   proposalId: string;
-  status: 'REJECTED' | 'REVIEW_REQUIRED';
+  status: 'REJECTED' | 'POSTPONED';
+};
+
+export type LatestApplication = {
+  applicationId: string | null;
+  status: 'NONE' | 'APPLIED' | 'UNDONE';
+};
+
+export type ProposalSummary = {
+  proposalId: string;
+  status: 'REVIEW_REQUIRED' | 'POSTPONED';
+  createdAt: string;
+  proposal: Proposal;
 };
 
 export type TaskStatus = 'TODO' | 'DONE' | 'CANCELLED';
@@ -109,8 +141,8 @@ export type GraphNode = {
   id: string;
   kind: 'MEMO' | 'TAG';
   label: string;
-  memoType?: ItemKind;
-  taskState?: TaskStatus | 'NONE';
+  memoType?: ItemKind | null;
+  taskState?: TaskStatus | 'NONE' | null;
   overdue?: boolean;
 };
 

@@ -4,8 +4,10 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import local.personalmemo.analysis.api.AnalysisDtos.ProposalRecoveryView;
 import local.personalmemo.analysis.api.AnalysisDtos.ReviewDispositionView;
 import local.personalmemo.analysis.api.AnalysisDtos.RunView;
 import local.personalmemo.analysis.api.AnalysisDtos.Start;
@@ -29,6 +31,7 @@ public class AnalysisService {
   private static final String START_OPERATION = "ANALYSIS_START";
   private static final String REJECT_OPERATION = "ANALYSIS_REJECT";
   private static final String POSTPONE_OPERATION = "ANALYSIS_POSTPONE";
+  private static final int MAX_RECOVERY_PROPOSALS = 100;
 
   private final JdbcClient db;
   private final DevIdentity identity;
@@ -115,9 +118,10 @@ public class AnalysisService {
     db.sql(
             """
             insert into analysis_proposals(
-              id, analysis_run_id, proposal_json, proposal_hash, created_at
+              id, owner_id, analysis_run_id, proposal_json, proposal_hash, created_at
             ) values (
               :proposalId,
+              :ownerId,
               :runId,
               cast(:proposalJson as jsonb),
               :proposalHash,
@@ -125,6 +129,7 @@ public class AnalysisService {
             )
             """)
         .param("proposalId", proposalId)
+        .param("ownerId", identity.ownerId())
         .param("runId", runId)
         .param("proposalJson", proposal.toString())
         .param("proposalHash", Hashing.sha256(proposal.toString()))
@@ -144,9 +149,11 @@ public class AnalysisService {
                 """
                 select p.proposal_json::text
                   from analysis_proposals p
-                  join analysis_runs r on r.id = p.analysis_run_id
+                  join analysis_runs r
+                    on r.id = p.analysis_run_id
+                   and r.owner_id = p.owner_id
                  where p.id = :proposalId
-                   and r.owner_id = :ownerId
+                   and p.owner_id = :ownerId
                 """)
             .param("proposalId", proposalId)
             .param("ownerId", identity.ownerId())
@@ -154,6 +161,47 @@ public class AnalysisService {
             .optional()
             .orElseThrow(() -> DomainException.notFound("Analysis proposal"));
     return parse(proposalJson);
+  }
+
+  @Transactional(readOnly = true)
+  public List<ProposalRecoveryView> recoveryProposals(String status, int requestedLimit) {
+    if (!SetLike.RECOVERABLE.contains(status)) {
+      throw DomainException.invalid(
+          "INVALID_PROPOSAL_STATUS",
+          "status must be REVIEW_REQUIRED or POSTPONED for proposal recovery.");
+    }
+    int limit = Math.max(1, Math.min(requestedLimit, MAX_RECOVERY_PROPOSALS));
+    return db.sql(
+            """
+            select p.id,
+                   r.status,
+                   p.created_at,
+                   p.proposal_json::text as proposal_json
+              from analysis_proposals p
+              join analysis_runs r
+                on r.id = p.analysis_run_id
+               and r.owner_id = p.owner_id
+              join memos m
+                on m.id = r.memo_id
+               and m.owner_id = r.owner_id
+             where p.owner_id = :ownerId
+               and r.status = :status
+               and m.status = 'ACTIVE'
+               and m.current_revision = r.memo_revision
+             order by p.created_at desc, r.id desc, p.id desc
+             limit :limit
+            """)
+        .param("ownerId", identity.ownerId())
+        .param("status", status)
+        .param("limit", limit)
+        .query(
+            (resultSet, rowNumber) ->
+                new ProposalRecoveryView(
+                    resultSet.getObject("id", UUID.class),
+                    resultSet.getString("status"),
+                    resultSet.getTimestamp("created_at").toInstant(),
+                    parse(resultSet.getString("proposal_json"))))
+        .list();
   }
 
   @Transactional
@@ -237,9 +285,11 @@ public class AnalysisService {
                    r.memo_revision,
                    r.status
               from analysis_proposals p
-              join analysis_runs r on r.id = p.analysis_run_id
+              join analysis_runs r
+                on r.id = p.analysis_run_id
+               and r.owner_id = p.owner_id
              where p.id = :proposalId
-               and r.owner_id = :ownerId
+               and p.owner_id = :ownerId
             """
                 + lockingClause)
         .param("proposalId", proposalId)
@@ -360,6 +410,8 @@ public class AnalysisService {
   private record ProposalRun(UUID runId, UUID memoId, int memoRevision, String status) {}
 
   private static final class SetLike {
+    private static final java.util.Set<String> RECOVERABLE =
+        java.util.Set.of("REVIEW_REQUIRED", "POSTPONED");
     private static final java.util.Set<String> REJECTABLE =
         java.util.Set.of("REVIEW_REQUIRED", "POSTPONED", "REJECTED");
     private static final java.util.Set<String> POSTPONABLE =

@@ -47,8 +47,8 @@ class OwnerIsolationIntegrationTest extends PostgresIntegrationTestSupport {
         .param("now", now)
         .update();
     db.sql(
-            "insert into memo_revisions(memo_id,revision,content,content_hash,created_at,created_by) "
-                + "values(:id,1,'다른 사용자의 비공개 메모',repeat('a',64),:now,:owner)")
+            "insert into memo_revisions(memo_id,owner_id,revision,content,content_hash,created_at,created_by) "
+                + "values(:id,:owner,1,'다른 사용자의 비공개 메모',repeat('a',64),:now,:owner)")
         .param("id", otherMemoId)
         .param("owner", otherOwnerId)
         .param("now", now)
@@ -63,9 +63,10 @@ class OwnerIsolationIntegrationTest extends PostgresIntegrationTestSupport {
         .param("now", now)
         .update();
     db.sql(
-            "insert into analysis_proposals(id,analysis_run_id,proposal_json,proposal_hash,created_at) "
-                + "values(:id,:run,'{\"schemaVersion\":\"1\"}',repeat('b',64),:now)")
+            "insert into analysis_proposals(id,owner_id,analysis_run_id,proposal_json,proposal_hash,created_at) "
+                + "values(:id,:owner,:run,'{\"schemaVersion\":\"1\"}',repeat('b',64),:now)")
         .param("id", otherProposalId)
+        .param("owner", otherOwnerId)
         .param("run", otherRunId)
         .param("now", now)
         .update();
@@ -95,13 +96,15 @@ class OwnerIsolationIntegrationTest extends PostgresIntegrationTestSupport {
         .param("application", otherApplicationId)
         .param("now", now)
         .update();
-    db.sql("insert into task_details(memo_item_id,status) values(:id,'TODO')")
+    db.sql("insert into task_details(memo_item_id,owner_id,status) values(:id,:owner,'TODO')")
         .param("id", otherItemId)
+        .param("owner", otherOwnerId)
         .update();
     db.sql(
-            "insert into item_tags(memo_item_id,tag_id,application_id,source,confirmed_at) "
-                + "values(:item,:tag,:application,'USER',:now)")
+            "insert into item_tags(memo_item_id,owner_id,tag_id,application_id,source,confirmed_at) "
+                + "values(:item,:owner,:tag,:application,'USER',:now)")
         .param("item", otherItemId)
+        .param("owner", otherOwnerId)
         .param("tag", otherTagId)
         .param("application", otherApplicationId)
         .param("now", now)

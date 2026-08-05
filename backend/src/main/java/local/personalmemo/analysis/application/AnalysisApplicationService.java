@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import local.personalmemo.analysis.api.AnalysisDtos.ApplicationRecoveryView;
 import local.personalmemo.analysis.api.AnalysisDtos.ApplicationView;
 import local.personalmemo.analysis.api.AnalysisDtos.Apply;
 import local.personalmemo.analysis.domain.AnalysisApplicationValidator;
@@ -142,6 +143,7 @@ public class AnalysisApplicationService {
       return idempotency.convert(replay.get().response(), ApplicationView.class);
     }
 
+    acquireOwnerUndoLock();
     ApplicationRecord application = findApplicationForUpdate(applicationId);
     if ("APPLIED".equals(application.status())) {
       reverseDerivedRecords(application, Timestamp.from(Instant.now()));
@@ -153,6 +155,25 @@ public class AnalysisApplicationService {
     ApplicationView response = new ApplicationView(applicationId, "UNDONE");
     idempotency.store(UNDO_OPERATION, key, requestHash, applicationId, response);
     return response;
+  }
+
+  @Transactional(readOnly = true)
+  public ApplicationRecoveryView latest() {
+    return db.sql(
+            """
+            select id, status
+              from analysis_applications
+             where owner_id = :ownerId
+             order by applied_at desc, id desc
+             limit 1
+            """)
+        .param("ownerId", identity.ownerId())
+        .query(
+            (resultSet, rowNumber) ->
+                new ApplicationRecoveryView(
+                    resultSet.getObject("id", UUID.class), resultSet.getString("status")))
+        .optional()
+        .orElseGet(() -> new ApplicationRecoveryView(null, "NONE"));
   }
 
   private List<UUID> createOrValidateTags(
@@ -273,6 +294,7 @@ public class AnalysisApplicationService {
             """
             insert into task_details(
               memo_item_id,
+              owner_id,
               status,
               due_at_utc,
               due_local_date,
@@ -282,6 +304,7 @@ public class AnalysisApplicationService {
               time_was_explicit
             ) values (
               :itemId,
+              :ownerId,
               'TODO',
               :dueAt,
               :dueDate,
@@ -292,6 +315,7 @@ public class AnalysisApplicationService {
             )
             """)
         .param("itemId", itemId)
+        .param("ownerId", identity.ownerId())
         .param("dueAt", dueAt)
         .param("dueDate", dueDate)
         .param("surfaceText", due == null ? null : due.surfaceText())
@@ -307,12 +331,19 @@ public class AnalysisApplicationService {
       db.sql(
               """
               insert into item_tags(
-                memo_item_id, tag_id, application_id, source, score, confirmed_at
+                memo_item_id,
+                owner_id,
+                tag_id,
+                application_id,
+                source,
+                score,
+                confirmed_at
               ) values (
-                :itemId, :tagId, :applicationId, 'USER', null, :confirmedAt
+                :itemId, :ownerId, :tagId, :applicationId, 'USER', null, :confirmedAt
               )
               """)
           .param("itemId", itemId)
+          .param("ownerId", identity.ownerId())
           .param("tagId", tagId)
           .param("applicationId", applicationId)
           .param("confirmedAt", confirmedAt)
@@ -325,12 +356,7 @@ public class AnalysisApplicationService {
             """
             delete from item_tags it
              where it.application_id = :applicationId
-               and exists (
-                 select 1
-                   from memo_items i
-                  where i.id = it.memo_item_id
-                    and i.owner_id = :ownerId
-               )
+               and it.owner_id = :ownerId
             """)
         .param("applicationId", application.id())
         .param("ownerId", identity.ownerId())
@@ -338,10 +364,11 @@ public class AnalysisApplicationService {
     db.sql(
             """
             delete from task_details t
-             where exists (
-               select 1
-                 from memo_items i
-                where i.id = t.memo_item_id
+             where t.owner_id = :ownerId
+               and exists (
+                 select 1
+                   from memo_items i
+                  where i.id = t.memo_item_id
                   and i.application_id = :applicationId
                   and i.owner_id = :ownerId
              )
@@ -360,17 +387,6 @@ public class AnalysisApplicationService {
         .update();
     db.sql(
             """
-            delete from tags t
-             where t.created_by_application_id = :applicationId
-               and t.owner_id = :ownerId
-               and not exists (select 1 from item_tags it where it.tag_id = t.id)
-               and not exists (select 1 from tag_aliases ta where ta.tag_id = t.id)
-            """)
-        .param("applicationId", application.id())
-        .param("ownerId", identity.ownerId())
-        .update();
-    db.sql(
-            """
             update analysis_applications
                set status = 'UNDONE',
                    undone_at = :undoneAt
@@ -382,6 +398,7 @@ public class AnalysisApplicationService {
         .param("applicationId", application.id())
         .param("ownerId", identity.ownerId())
         .update();
+    removeOrphanedTagsFromUndoneApplications();
     db.sql(
             """
             update analysis_runs r
@@ -406,6 +423,48 @@ public class AnalysisApplicationService {
         .update();
   }
 
+  private void acquireOwnerUndoLock() {
+    String lockScope = identity.ownerId() + ":ANALYSIS_UNDO_OWNER";
+    db.sql("select pg_advisory_xact_lock(hashtextextended(:lockScope, 0))")
+        .param("lockScope", lockScope)
+        .query(
+            (resultSet, rowNumber) -> {
+              resultSet.getObject(1);
+              return rowNumber;
+            })
+        .single();
+  }
+
+  private void removeOrphanedTagsFromUndoneApplications() {
+    db.sql(
+            """
+            delete from tags t
+             where t.owner_id = :ownerId
+               and t.created_by_application_id is not null
+               and exists (
+                 select 1
+                   from analysis_applications creator
+                  where creator.id = t.created_by_application_id
+                    and creator.owner_id = t.owner_id
+                    and creator.status = 'UNDONE'
+               )
+               and not exists (
+                 select 1
+                   from item_tags it
+                  where it.tag_id = t.id
+                    and it.owner_id = t.owner_id
+               )
+               and not exists (
+                 select 1
+                   from tag_aliases ta
+                  where ta.tag_id = t.id
+                    and ta.owner_id = t.owner_id
+               )
+            """)
+        .param("ownerId", identity.ownerId())
+        .update();
+  }
+
   private ProposalRun findProposalRun(UUID proposalId, boolean forUpdate) {
     String lockingClause = forUpdate ? " for update of p, r" : "";
     return db.sql(
@@ -415,9 +474,11 @@ public class AnalysisApplicationService {
                    r.memo_revision,
                    r.status
               from analysis_proposals p
-              join analysis_runs r on r.id = p.analysis_run_id
+              join analysis_runs r
+                on r.id = p.analysis_run_id
+               and r.owner_id = p.owner_id
              where p.id = :proposalId
-               and r.owner_id = :ownerId
+               and p.owner_id = :ownerId
             """
                 + lockingClause)
         .param("proposalId", proposalId)
@@ -453,11 +514,14 @@ public class AnalysisApplicationService {
                    a.memo_revision,
                    r.id as run_id
               from analysis_applications a
-              join analysis_proposals p on p.id = a.proposal_id
-              join analysis_runs r on r.id = p.analysis_run_id
+              join analysis_proposals p
+                on p.id = a.proposal_id
+               and p.owner_id = a.owner_id
+              join analysis_runs r
+                on r.id = p.analysis_run_id
+               and r.owner_id = p.owner_id
              where a.id = :applicationId
                and a.owner_id = :ownerId
-               and r.owner_id = :ownerId
              for update of a
             """)
         .param("applicationId", applicationId)

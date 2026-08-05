@@ -1,6 +1,7 @@
 package local.personalmemo.analysis.api;
 
 import jakarta.validation.Valid;
+import java.util.List;
 import java.util.UUID;
 import local.personalmemo.analysis.application.AnalysisApplicationService;
 import local.personalmemo.analysis.application.AnalysisService;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.databind.JsonNode;
 
@@ -38,6 +40,13 @@ public class AnalysisController {
     return analysisService.proposal(id);
   }
 
+  @GetMapping("/analysis-proposals")
+  List<AnalysisDtos.ProposalRecoveryView> proposals(
+      @RequestParam(name = "status") String status,
+      @RequestParam(name = "limit", defaultValue = "1") int limit) {
+    return analysisService.recoveryProposals(status, limit);
+  }
+
   @PostMapping("/analysis-proposals/{id}/apply")
   AnalysisDtos.ApplicationView apply(
       @PathVariable UUID id,
@@ -62,5 +71,10 @@ public class AnalysisController {
   AnalysisDtos.ApplicationView undo(
       @PathVariable UUID id, @RequestHeader("Idempotency-Key") String key) {
     return applicationService.undo(id, key);
+  }
+
+  @GetMapping("/analysis-applications/latest")
+  AnalysisDtos.ApplicationRecoveryView latestApplication() {
+    return applicationService.latest();
   }
 }

@@ -9,6 +9,9 @@ describe('retry request identity', () => {
     expect(store.keyFor('apply:1', 'body-a')).toBe('key-1');
     expect(store.keyFor('apply:1', 'body-a')).toBe('key-1');
     expect(store.keyFor('apply:1', 'body-b')).toBe('key-2');
+
+    store.clear('apply:1');
+    expect(store.keyFor('apply:1', 'body-b')).toBe('key-3');
   });
 
   it('keeps memo id, timestamps, and both mutation keys stable in a capture attempt', () => {

@@ -5,7 +5,9 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import local.personalmemo.common.DevIdentity;
 import local.personalmemo.common.error.DomainException;
@@ -22,6 +24,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class MemoService {
   private static final String CREATE_OPERATION = "MEMO_CREATE";
+  private static final String UPDATE_OPERATION = "MEMO_UPDATE";
+  private static final String TRASH_OPERATION = "MEMO_TRASH";
+  private static final String RESTORE_OPERATION = "MEMO_RESTORE";
+  private static final Set<String> LISTABLE_STATUSES = Set.of("ACTIVE", "TRASHED");
+  private static final int MAX_LIST_LIMIT = 100;
 
   private final JdbcClient db;
   private final DevIdentity identity;
@@ -69,9 +76,9 @@ public class MemoService {
     db.sql(
             """
             insert into memo_revisions(
-              memo_id, revision, content, content_hash, created_at, created_by
+              memo_id, owner_id, revision, content, content_hash, created_at, created_by
             ) values (
-              :memoId, 1, :content, :contentHash, :now, :ownerId
+              :memoId, :ownerId, 1, :content, :contentHash, :now, :ownerId
             )
             """)
         .param("memoId", command.id())
@@ -90,6 +97,47 @@ public class MemoService {
     return toView(findCurrent(id, false));
   }
 
+  @Transactional(readOnly = true)
+  public List<View> list(String requestedStatus, int requestedLimit) {
+    String status = validateListStatus(requestedStatus);
+    int limit = Math.max(1, Math.min(requestedLimit, MAX_LIST_LIMIT));
+
+    return db.sql(
+            """
+            select m.id,
+                   m.current_revision,
+                   r.content,
+                   m.status,
+                   m.created_at,
+                   coalesce((
+                     select ar.status
+                       from analysis_runs ar
+                      where ar.memo_id = m.id
+                        and ar.owner_id = m.owner_id
+                        and ar.memo_revision = m.current_revision
+                      order by ar.created_at desc
+                      limit 1
+                   ), 'NOT_STARTED') as analysis_state
+              from memos m
+              join memo_revisions r
+                on r.memo_id = m.id
+               and r.owner_id = m.owner_id
+               and r.revision = m.current_revision
+             where m.owner_id = :ownerId
+               and m.status = :status
+             order by m.updated_at desc, m.id
+             limit :limit
+            """)
+        .param("ownerId", identity.ownerId())
+        .param("status", status)
+        .param("limit", limit)
+        .query(this::mapSnapshot)
+        .list()
+        .stream()
+        .map(this::toView)
+        .toList();
+  }
+
   /** Locks the memo identity row so revision-sensitive work serializes with memo updates. */
   @Transactional
   public MemoSnapshot getCurrentForUpdate(UUID id) {
@@ -97,7 +145,14 @@ public class MemoService {
   }
 
   @Transactional
-  public View update(UUID id, Update command) {
+  public View update(UUID id, String key, Update command) {
+    String requestHash = idempotency.hashRequest(new UpdateRequest(id, command));
+    Optional<IdempotencyService.StoredResult> replay =
+        idempotency.find(UPDATE_OPERATION, key, requestHash);
+    if (replay.isPresent()) {
+      return idempotency.convert(replay.get().response(), View.class);
+    }
+
     MemoSnapshot current = findCurrent(id, true);
     if (!current.isActive()) {
       throw DomainException.conflict("MEMO_NOT_ACTIVE", "A trashed memo cannot be edited.");
@@ -111,9 +166,9 @@ public class MemoService {
     db.sql(
             """
             insert into memo_revisions(
-              memo_id, revision, content, content_hash, created_at, created_by
+              memo_id, owner_id, revision, content, content_hash, created_at, created_by
             ) values (
-              :memoId, :revision, :content, :contentHash, :now, :ownerId
+              :memoId, :ownerId, :revision, :content, :contentHash, :now, :ownerId
             )
             """)
         .param("memoId", id)
@@ -151,7 +206,86 @@ public class MemoService {
         .param("revision", nextRevision)
         .update();
 
-    return toView(findCurrent(id, false));
+    View response = toView(findCurrent(id, false));
+    idempotency.store(UPDATE_OPERATION, key, requestHash, id, response);
+    return response;
+  }
+
+  @Transactional
+  public View trash(UUID id, String key) {
+    String requestHash = idempotency.hashRequest(new StatusChangeRequest(id));
+    Optional<IdempotencyService.StoredResult> replay =
+        idempotency.find(TRASH_OPERATION, key, requestHash);
+    if (replay.isPresent()) {
+      return idempotency.convert(replay.get().response(), View.class);
+    }
+
+    MemoSnapshot current = findCurrent(id, true);
+    if (current.isActive()) {
+      Timestamp now = Timestamp.from(Instant.now());
+      db.sql(
+              """
+              update memos
+                 set status = 'TRASHED',
+                     deleted_at = :now,
+                     updated_at = :now,
+                     version = version + 1
+               where id = :memoId
+                 and owner_id = :ownerId
+              """)
+          .param("now", now)
+          .param("memoId", id)
+          .param("ownerId", identity.ownerId())
+          .update();
+      db.sql(
+              """
+              update analysis_runs
+                 set status = 'STALE'
+               where memo_id = :memoId
+                 and owner_id = :ownerId
+                 and status in ('REVIEW_REQUIRED', 'POSTPONED')
+              """)
+          .param("memoId", id)
+          .param("ownerId", identity.ownerId())
+          .update();
+    }
+
+    View response = toView(findCurrent(id, false));
+    idempotency.store(TRASH_OPERATION, key, requestHash, id, response);
+    return response;
+  }
+
+  @Transactional
+  public View restore(UUID id, String key) {
+    String requestHash = idempotency.hashRequest(new StatusChangeRequest(id));
+    Optional<IdempotencyService.StoredResult> replay =
+        idempotency.find(RESTORE_OPERATION, key, requestHash);
+    if (replay.isPresent()) {
+      return idempotency.convert(replay.get().response(), View.class);
+    }
+
+    MemoSnapshot current = findCurrent(id, true);
+    if (!current.isActive()) {
+      Timestamp now = Timestamp.from(Instant.now());
+      db.sql(
+              """
+              update memos
+                 set status = 'ACTIVE',
+                     deleted_at = null,
+                     updated_at = :now,
+                     version = version + 1
+               where id = :memoId
+                 and owner_id = :ownerId
+              """)
+          .param("now", now)
+          .param("memoId", id)
+          .param("ownerId", identity.ownerId())
+          .update();
+    }
+
+    View response = toView(findCurrent(id, false));
+    idempotency.store(RESTORE_OPERATION, key, requestHash, id, response);
+    return response;
   }
 
   private MemoSnapshot findCurrent(UUID id, boolean forUpdate) {
@@ -175,6 +309,7 @@ public class MemoService {
               from memos m
               join memo_revisions r
                 on r.memo_id = m.id
+               and r.owner_id = m.owner_id
                and r.revision = m.current_revision
              where m.id = :memoId
                and m.owner_id = :ownerId
@@ -214,8 +349,20 @@ public class MemoService {
     }
   }
 
+  private String validateListStatus(String status) {
+    if (!LISTABLE_STATUSES.contains(status)) {
+      throw DomainException.invalid(
+          "INVALID_MEMO_STATUS", "status must be ACTIVE or TRASHED.");
+    }
+    return status;
+  }
+
   private DomainException staleRevision() {
     return DomainException.conflict(
         "STALE_MEMO_REVISION", "The memo changed after this revision was read.");
   }
+
+  private record UpdateRequest(UUID memoId, Update command) {}
+
+  private record StatusChangeRequest(UUID memoId) {}
 }

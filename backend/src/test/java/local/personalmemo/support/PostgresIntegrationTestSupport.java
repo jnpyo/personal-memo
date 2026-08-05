@@ -1,5 +1,6 @@
 package local.personalmemo.support;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
@@ -113,8 +114,18 @@ public abstract class PostgresIntegrationTestSupport {
 
   protected MvcResult updateMemo(UUID memoId, int expectedRevision, String content)
       throws Exception {
+    return updateMemo(
+        memoId,
+        "memo-update-" + memoId + "-" + expectedRevision + "-" + UUID.randomUUID(),
+        expectedRevision,
+        content);
+  }
+
+  protected MvcResult updateMemo(
+      UUID memoId, String key, int expectedRevision, String content) throws Exception {
     return mvc.perform(
             patch("/api/v1/memos/{id}", memoId)
+                .header("Idempotency-Key", key)
                 .contentType("application/json")
                 .content(
                     json.writeValueAsBytes(
@@ -130,6 +141,18 @@ public abstract class PostgresIntegrationTestSupport {
                 .content(
                     json.writeValueAsBytes(
                         Map.of("memoRevision", memoRevision, "policy", "AUTO"))))
+        .andReturn();
+  }
+
+  protected MvcResult trashMemo(UUID memoId, String key) throws Exception {
+    return mvc.perform(
+            delete("/api/v1/memos/{id}", memoId).header("Idempotency-Key", key))
+        .andReturn();
+  }
+
+  protected MvcResult restoreMemo(UUID memoId, String key) throws Exception {
+    return mvc.perform(
+            post("/api/v1/memos/{id}/restore", memoId).header("Idempotency-Key", key))
         .andReturn();
   }
 

@@ -53,9 +53,15 @@ public class TaskService {
                      )
                    ) as overdue
               from memo_items i
-              join task_details t on t.memo_item_id = i.id
+              join task_details t
+                on t.memo_item_id = i.id
+               and t.owner_id = i.owner_id
+              join memos m
+                on m.id = i.memo_id
+               and m.owner_id = i.owner_id
              where i.owner_id = :ownerId
                and i.archived_at is null
+               and m.status = 'ACTIVE'
              order by t.due_local_date nulls last,
                       t.due_at_utc nulls last,
                       i.created_at desc
@@ -74,10 +80,13 @@ public class TaskService {
       return idempotency.convert(replay.get().response(), UpdateView.class);
     }
 
-    String currentStatus = findOwnedStatusForUpdate(taskId);
+    TaskState current = findOwnedStateForUpdate(taskId);
+    if (!"ACTIVE".equals(current.memoStatus())) {
+      throw DomainException.conflict("MEMO_NOT_ACTIVE", "The task's memo is not active.");
+    }
     Timestamp completedAt =
         "DONE".equals(request.status()) ? Timestamp.from(Instant.now()) : null;
-    boolean changed = !currentStatus.equals(request.status());
+    boolean changed = !current.taskStatus().equals(request.status());
     if (changed) {
       db.sql(
               """
@@ -85,11 +94,19 @@ public class TaskService {
                  set status = :status,
                      completed_at = :completedAt
                where memo_item_id = :taskId
+                 and owner_id = :ownerId
                  and exists (
                    select 1
                      from memo_items i
                     where i.id = task_details.memo_item_id
                       and i.owner_id = :ownerId
+                      and exists (
+                        select 1
+                          from memos m
+                         where m.id = i.memo_id
+                           and m.owner_id = i.owner_id
+                           and m.status = 'ACTIVE'
+                      )
                  )
               """)
           .param("status", request.status())
@@ -104,19 +121,29 @@ public class TaskService {
     return response;
   }
 
-  private String findOwnedStatusForUpdate(UUID taskId) {
+  private TaskState findOwnedStateForUpdate(UUID taskId) {
     return db.sql(
             """
-            select t.status
+            select t.status as task_status,
+                   m.status as memo_status
               from task_details t
-              join memo_items i on i.id = t.memo_item_id
+              join memo_items i
+                on i.id = t.memo_item_id
+               and i.owner_id = t.owner_id
+              join memos m
+                on m.id = i.memo_id
+               and m.owner_id = i.owner_id
              where t.memo_item_id = :taskId
-               and i.owner_id = :ownerId
-             for update of t
+               and t.owner_id = :ownerId
+             for update of t, m
             """)
         .param("taskId", taskId)
         .param("ownerId", identity.ownerId())
-        .query(String.class)
+        .query(
+            (resultSet, rowNumber) ->
+                new TaskState(
+                    resultSet.getString("task_status"),
+                    resultSet.getString("memo_status")))
         .optional()
         .orElseThrow(() -> DomainException.notFound("Task"));
   }
@@ -134,4 +161,6 @@ public class TaskService {
   }
 
   private record UpdateRequest(UUID taskId, Update request) {}
+
+  private record TaskState(String taskStatus, String memoStatus) {}
 }

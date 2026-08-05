@@ -1,6 +1,6 @@
 # Data model — implemented Milestone 1
 
-이 문서는 현재 Flyway `V1`–`V4`가 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다.
+이 문서는 현재 Flyway `V1`–`V5`가 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다.
 
 ## Invariants
 
@@ -8,7 +8,7 @@
 - analysis run은 정확히 하나의 `memo_revision`을 참조한다.
 - proposal과 confirmed canonical record는 분리한다.
 - 파생 record는 `analysis_application` provenance를 보유한다.
-- 모든 사용자 데이터 read/write는 `owner_id` 범위 안에서 수행한다.
+- 모든 사용자 데이터 read/write는 `owner_id` 범위 안에서 수행하며, owner-bound foreign key가 교차 owner 참조를 거절한다.
 - graph는 canonical table의 projection이며 rendered node 위치를 원본으로 저장하지 않는다.
 - `OVERDUE`는 column이나 task source status가 아니다.
 
@@ -49,18 +49,22 @@ deleted_at TIMESTAMPTZ NULL
 version BIGINT
 ```
 
+휴지통 이동은 row를 삭제하지 않고 `status = TRASHED`와 `deleted_at`을 설정한다. 복원은 `status = ACTIVE`로 되돌리고 `deleted_at`을 비운다. raw revision과 이미 승인된 파생 record는 어느 동작에서도 삭제하지 않으며, task/graph projection은 활성 memo만 조회한다.
+
 ### `memo_revisions`
 
 원문 snapshot은 append-only 방식으로 추가한다.
 
 ```text
-memo_id UUID FK -> memos
+memo_id UUID
+owner_id UUID NOT NULL
 revision INTEGER
 content TEXT
 content_hash VARCHAR(64)
 created_at TIMESTAMPTZ
 created_by UUID FK -> users
 PRIMARY KEY (memo_id, revision)
+UNIQUE (memo_id, revision, owner_id)
 ```
 
 content update는 새 row를 insert한 뒤 `memos.current_revision`을 증가시킨다. 과거 raw content를 proposal JSON이나 derived title로 대체하지 않는다.
@@ -89,7 +93,7 @@ protected mutation과 idempotency record를 같은 database transaction에 쓴�
 ```text
 id UUID PK
 owner_id UUID FK -> users
-memo_id UUID FK -> memos
+memo_id UUID
 memo_revision INTEGER
 route MOCK | LOCAL | CLOUD | HYBRID
 status QUEUED | RUNNING | REVIEW_REQUIRED | POSTPONED | FAILED | STALE | APPLIED | REJECTED
@@ -98,6 +102,8 @@ analyzer_version VARCHAR(64)
 ambiguity_reasons JSONB
 created_at TIMESTAMPTZ
 completed_at TIMESTAMPTZ NULL
+FK (memo_id, owner_id) -> memos(id, owner_id)
+FK (memo_id, memo_revision, owner_id) -> memo_revisions(memo_id, revision, owner_id)
 ```
 
 Milestone 1은 `MOCK` route를 사용한다. memo가 수정되면 현재 revision보다 오래된 미적용 run을 `STALE`로 표시하며 application 단계에서도 revision을 다시 검사한다.
@@ -106,10 +112,12 @@ Milestone 1은 `MOCK` route를 사용한다. memo가 수정되면 현재 revisio
 
 ```text
 id UUID PK
-analysis_run_id UUID FK -> analysis_runs UNIQUE
+owner_id UUID NOT NULL
+analysis_run_id UUID UNIQUE
 proposal_json JSONB
 proposal_hash VARCHAR(64)
 created_at TIMESTAMPTZ
+FK (analysis_run_id, owner_id) -> analysis_runs(id, owner_id)
 ```
 
 proposal은 review input일 뿐 canonical domain data가 아니다.
@@ -121,8 +129,8 @@ proposal은 review input일 뿐 canonical domain data가 아니다.
 ```text
 id UUID PK
 owner_id UUID FK -> users
-proposal_id UUID FK -> analysis_proposals
-memo_id UUID FK -> memos
+proposal_id UUID
+memo_id UUID
 memo_revision INTEGER
 idempotency_key VARCHAR(128)
 status APPLIED | UNDONE
@@ -130,6 +138,9 @@ selection_json JSONB
 applied_at TIMESTAMPTZ
 undone_at TIMESTAMPTZ NULL
 UNIQUE (owner_id, idempotency_key)
+FK (proposal_id, owner_id) -> analysis_proposals(id, owner_id)
+FK (memo_id, owner_id) -> memos(id, owner_id)
+FK (memo_id, memo_revision, owner_id) -> memo_revisions(memo_id, revision, owner_id)
 ```
 
 `selection_json`은 model output 전체를 실행 명령으로 보관하는 필드가 아니라, 사용자가 실제로 승인한 selection의 audit/provenance다.
@@ -143,13 +154,17 @@ UNIQUE (owner_id, idempotency_key)
 ```text
 id UUID PK
 owner_id UUID FK -> users
-memo_id UUID FK -> memos
+memo_id UUID
 memo_revision INTEGER
-application_id UUID FK -> analysis_applications
+application_id UUID
 kind TASK | EVENT | INFORMATION | IDEA | RECORD
 title VARCHAR(200)
 created_at TIMESTAMPTZ
 archived_at TIMESTAMPTZ NULL
+FK (memo_id, owner_id) -> memos(id, owner_id)
+FK (memo_id, memo_revision, owner_id) -> memo_revisions(memo_id, revision, owner_id)
+FK (application_id, memo_id, memo_revision, owner_id)
+  -> analysis_applications(id, memo_id, memo_revision, owner_id)
 ```
 
 `kind`는 graph node metadata/filter/icon으로 사용하며 모든 memo를 연결하는 거대한 system node를 만들지 않는다.
@@ -159,7 +174,8 @@ archived_at TIMESTAMPTZ NULL
 `TASK` memo item의 source state와 기한 표현을 저장한다.
 
 ```text
-memo_item_id UUID PK/FK -> memo_items
+memo_item_id UUID PK
+owner_id UUID NOT NULL
 status TODO | DONE | CANCELLED
 due_at_utc TIMESTAMPTZ NULL
 due_local_date DATE NULL
@@ -169,6 +185,7 @@ source_time_zone VARCHAR(64) NULL
 time_was_explicit BOOLEAN
 completed_at TIMESTAMPTZ NULL
 CHECK (due_at_utc IS NULL OR due_local_date IS NULL)
+FK (memo_item_id, owner_id) -> memo_items(id, owner_id)
 ```
 
 두 due column의 의미는 다음과 같다.
@@ -193,8 +210,9 @@ state VARCHAR(16)
 created_at TIMESTAMPTZ
 updated_at TIMESTAMPTZ
 version BIGINT
-created_by_application_id UUID FK -> analysis_applications NULL
+created_by_application_id UUID NULL
 UNIQUE (owner_id, normalized_name)
+FK (created_by_application_id, owner_id) -> analysis_applications(id, owner_id)
 ```
 
 정규화한 이름은 owner 안에서 유일하다. 승인 중 새로 생성한 tag는 `created_by_application_id`로 provenance를 남겨 undo 때 기존 tag와 구분한다.
@@ -204,12 +222,13 @@ UNIQUE (owner_id, normalized_name)
 ```text
 id UUID PK
 owner_id UUID FK -> users
-tag_id UUID FK -> tags
+tag_id UUID
 alias VARCHAR(100)
 normalized_alias VARCHAR(100)
 source USER | ANALYSIS | IMPORT
 created_at TIMESTAMPTZ
 UNIQUE (owner_id, normalized_alias)
+FK (tag_id, owner_id) -> tags(id, owner_id)
 ```
 
 Milestone 1 seed data는 `OS`를 `운영체제` tag의 alias로 제공한다.
@@ -217,16 +236,38 @@ Milestone 1 seed data는 `OS`를 `운영체제` tag의 alias로 제공한다.
 ### `item_tags`
 
 ```text
-memo_item_id UUID FK -> memo_items
-tag_id UUID FK -> tags
-application_id UUID FK -> analysis_applications
+memo_item_id UUID
+owner_id UUID NOT NULL
+tag_id UUID
+application_id UUID
 source USER | LOCAL | CLOUD
 score DOUBLE PRECISION NULL
 confirmed_at TIMESTAMPTZ
 PRIMARY KEY (memo_item_id, tag_id)
+FK (memo_item_id, application_id, owner_id)
+  -> memo_items(id, application_id, owner_id)
+FK (tag_id, owner_id) -> tags(id, owner_id)
 ```
 
 review에서 승인된 link만 이 table에 들어간다. model-facing analyzer에는 insert/update 권한이 없다.
+
+## Owner integrity in V5
+
+공개 identity는 계속 전역 UUID primary key를 사용한다. V5가 추가한 `(identity, owner_id)` unique key는 API identity를 바꾸기 위한 것이 아니라 PostgreSQL composite foreign key의 target을 만들기 위한 것이다.
+
+Composite target용 unique key는 `memos(id, owner_id)`, `memo_revisions(memo_id, revision, owner_id)`, `analysis_runs(id, owner_id)`, `analysis_proposals(id, owner_id)`, `analysis_applications(id, owner_id)`, `analysis_applications(id, memo_id, memo_revision, owner_id)`, `tags(id, owner_id)`, `memo_items(id, owner_id)`, `memo_items(id, application_id, owner_id)`다.
+
+```text
+memos(owner) ── memo_revisions(owner)
+      └──────── analysis_runs(owner) ── analysis_proposals(owner)
+
+analysis_applications(owner, memo, revision)
+      └──────── memo_items(owner, same memo/revision/application)
+                     ├── task_details(owner)
+                     └── item_tags(owner, same application) ── tags(owner)
+```
+
+따라서 application, item, task, tag link를 만들 때 application owner와 memo/tag owner가 다르면 service query를 우회하더라도 database constraint가 write를 거절한다. `analysis_proposals`, `memo_revisions`, `task_details`, `item_tags`의 `owner_id`는 V5에서 canonical parent로부터 backfill한 뒤 `NOT NULL`로 강화했다.
 
 ## Apply and undo
 
@@ -266,6 +307,9 @@ memos + memo_items + task_details
 - `task_details(status, due_at_utc)`
 - `task_details(status, due_local_date)`
 - partial `tags(created_by_application_id)`
+- `analysis_proposals(owner_id, created_at DESC)`
+- `task_details(owner_id, status, due_at_utc, due_local_date)`
+- `item_tags(owner_id, tag_id)`
 - owner/operation/key primary key on idempotency records
 - owner-scoped normalized tag and alias unique constraints
 

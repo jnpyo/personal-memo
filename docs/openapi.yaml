@@ -8,6 +8,7 @@ info:
     canonical 태그와 할 일은 사용자 승인 endpoint를 통해서만 생성됩니다.
 servers:
   - url: /api/v1
+security: []
 tags:
   - name: Health
   - name: Memos
@@ -30,6 +31,36 @@ paths:
                 $ref: "#/components/schemas/HealthResponse"
 
   /memos:
+    get:
+      tags: [Memos]
+      operationId: listMemos
+      summary: List current raw memo revisions by lifecycle status
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/MemoStatus"
+            default: ACTIVE
+        - name: limit
+          in: query
+          required: false
+          description: Requested result bound; the server clamps it to 1–100.
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Owner-scoped memo views ordered by most recently updated first.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 100
+                items:
+                  $ref: "#/components/schemas/MemoView"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
     post:
       tags: [Memos]
       operationId: createMemo
@@ -82,6 +113,8 @@ paths:
       description: >-
         expectedRevision provides optimistic concurrency. A successful content edit
         increments currentRevision and marks older unapplied analysis runs STALE.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -91,6 +124,52 @@ paths:
       responses:
         "200":
           description: Updated current memo view.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoView"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+    delete:
+      tags: [Memos]
+      operationId: trashMemo
+      summary: Soft-delete a memo while preserving raw revisions
+      description: >-
+        Marks the memo TRASHED and pending review runs STALE. Derived records remain
+        stored but are hidden from active task and graph projections.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Current TRASHED memo view.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoView"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /memos/{memoId}/restore:
+    parameters:
+      - $ref: "#/components/parameters/MemoId"
+    post:
+      tags: [Memos]
+      operationId: restoreMemo
+      summary: Restore a soft-deleted memo to ACTIVE
+      description: Restoring a memo does not revive analysis runs already marked STALE.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Current ACTIVE memo view.
           content:
             application/json:
               schema:
@@ -148,6 +227,39 @@ paths:
                 $ref: ../contracts/analysis-proposal.schema.json
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /analysis-proposals:
+    get:
+      tags: [Analysis]
+      operationId: listRecoverableAnalysisProposals
+      summary: List recoverable proposals awaiting review
+      parameters:
+        - name: status
+          in: query
+          required: true
+          schema:
+            enum: [REVIEW_REQUIRED, POSTPONED]
+        - name: limit
+          in: query
+          required: false
+          description: Requested result bound; the server clamps it to 1–100.
+          schema:
+            type: integer
+            default: 1
+      responses:
+        "200":
+          description: >-
+            Newest owner-scoped proposals in the requested review state whose memo is
+            ACTIVE and whose analyzed revision is still current.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 100
+                items:
+                  $ref: "#/components/schemas/ProposalRecoveryView"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
 
   /analysis-proposals/{proposalId}/apply:
     parameters:
@@ -270,6 +382,21 @@ paths:
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
+  /analysis-applications/latest:
+    get:
+      tags: [Analysis]
+      operationId: getLatestAnalysisApplication
+      summary: Recover the latest application state for undo UI
+      responses:
+        "200":
+          description: >-
+            Latest owner-scoped application, or an explicit NONE state when the owner
+            has no application.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationRecoveryView"
+
   /tasks:
     get:
       tags: [Tasks]
@@ -327,8 +454,6 @@ paths:
           description: Requested node bound; the server clamps it to 1–100.
           schema:
             type: integer
-            minimum: 1
-            maximum: 100
             default: 100
       responses:
         "200":
@@ -467,6 +592,8 @@ components:
           type: string
           minLength: 1
           maxLength: 20000
+    MemoStatus:
+      enum: [ACTIVE, TRASHED]
     MemoView:
       type: object
       additionalProperties: false
@@ -481,7 +608,7 @@ components:
         content:
           type: string
         status:
-          enum: [ACTIVE, TRASHED]
+          $ref: "#/components/schemas/MemoStatus"
         analysisState:
           type: string
         createdAt:
@@ -517,6 +644,21 @@ components:
         proposalId:
           type: string
           format: uuid
+    ProposalRecoveryView:
+      type: object
+      additionalProperties: false
+      required: [proposalId, status, createdAt, proposal]
+      properties:
+        proposalId:
+          type: string
+          format: uuid
+        status:
+          enum: [REVIEW_REQUIRED, POSTPONED]
+        createdAt:
+          type: string
+          format: date-time
+        proposal:
+          $ref: ../contracts/analysis-proposal.schema.json
 
     ItemKind:
       enum: [TASK, EVENT, INFORMATION, IDEA, RECORD]
@@ -623,6 +765,28 @@ components:
           format: uuid
         status:
           enum: [APPLIED, UNDONE]
+    ApplicationRecoveryView:
+      type: object
+      additionalProperties: false
+      required: [applicationId, status]
+      properties:
+        applicationId:
+          type: [string, "null"]
+          format: uuid
+        status:
+          enum: [NONE, APPLIED, UNDONE]
+      oneOf:
+        - properties:
+            applicationId:
+              type: "null"
+            status:
+              const: NONE
+        - properties:
+            applicationId:
+              type: string
+              format: uuid
+            status:
+              enum: [APPLIED, UNDONE]
     ReviewDispositionView:
       type: object
       additionalProperties: false
@@ -690,9 +854,12 @@ components:
         label:
           type: string
         memoType:
-          $ref: "#/components/schemas/ItemKind"
+          anyOf:
+            - $ref: "#/components/schemas/ItemKind"
+            - type: "null"
         taskState:
-          enum: [NONE, TODO, DONE, CANCELLED]
+          type: [string, "null"]
+          enum: [NONE, TODO, DONE, CANCELLED, null]
         overdue:
           type: boolean
           readOnly: true

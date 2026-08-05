@@ -1,6 +1,7 @@
 import { MemoCapture } from '../features/capture/MemoCapture';
 import { MemoTagGraph } from '../features/graph/MemoTagGraph';
 import { ConnectionStatus } from '../features/health/ConnectionStatus';
+import { MemoLibrary } from '../features/memos/MemoLibrary';
 import { PostponedReview } from '../features/review/PostponedReview';
 import { ProposalReview } from '../features/review/ProposalReview';
 import { TaskList } from '../features/tasks/TaskList';
@@ -10,11 +11,15 @@ import { useMemoWorkspace } from './useMemoWorkspace';
 export function App() {
   const workspace = useMemoWorkspace();
 
-  const capturePrompt = workspace.review
-    ? '현재 제안을 먼저 승인·보류·거절해 주세요.'
-    : workspace.postponedReview
-      ? '보류한 제안을 먼저 검토해 주세요.'
-      : '메모 원문은 AI 결과와 별도로 먼저 저장됩니다.';
+  const capturePrompt = workspace.recoveryLoading
+    ? '서버에 저장된 검토 상태를 복원하고 있습니다.'
+    : workspace.recoveryError
+      ? '원문은 지금 저장할 수 있습니다. Fake 분석은 검토 상태를 복구한 뒤 시작합니다.'
+      : workspace.review
+        ? '현재 제안을 먼저 승인·보류·거절해 주세요.'
+        : workspace.postponedReview
+          ? '보류한 제안을 먼저 검토해 주세요.'
+          : '메모 원문은 AI 결과와 별도로 먼저 저장됩니다.';
 
   return (
     <main>
@@ -32,6 +37,41 @@ export function App() {
         retryLabel={workspace.retryAction?.label}
         onRetry={workspace.retryAction ? workspace.retry : undefined}
         onDismiss={workspace.dismissFeedback}
+      />
+
+      {workspace.recoveryLoading && (
+        <p className="recovery-state" role="status" aria-live="polite">
+          마지막 적용과 검토 중·보류한 제안을 불러오는 중입니다…
+        </p>
+      )}
+
+      {workspace.recoveryError && (
+        <aside className="recovery-state recovery-state--error" role="alert">
+          <p>저장된 검토 상태를 불러오지 못했습니다. 원문 저장은 가능하지만 Fake 분석은 잠시 보류됩니다.</p>
+          <button type="button" className="secondary-button" onClick={workspace.refreshRecovery}>
+            검토 상태 다시 불러오기
+          </button>
+        </aside>
+      )}
+
+      <MemoLibrary
+        activeMemos={workspace.activeMemos}
+        trashedMemos={workspace.trashedMemos}
+        loading={workspace.memosLoading}
+        error={workspace.memosError}
+        busy={workspace.busy}
+        pendingScope={workspace.pendingMemoScope}
+        analysisBlocked={
+          workspace.recoveryLoading ||
+          workspace.recoveryError !== null ||
+          workspace.review !== null ||
+          workspace.postponedReview !== null
+        }
+        onRetry={workspace.refreshMemos}
+        onUpdate={workspace.updateMemo}
+        onTrash={workspace.trashMemo}
+        onRestore={workspace.restoreMemo}
+        onAnalyze={workspace.analyzeMemo}
       />
 
       <MemoTagGraph
@@ -89,6 +129,7 @@ export function App() {
         content={workspace.content}
         disabled={workspace.captureLocked}
         submitting={workspace.captureSubmitting}
+        rawOnly={workspace.recoveryError !== null}
         prompt={capturePrompt}
         onContentChange={workspace.changeContent}
         onSubmit={workspace.captureMemo}

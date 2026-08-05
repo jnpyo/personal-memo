@@ -36,6 +36,8 @@ Bean Validation 오류는 `fieldErrors`에 `{ "field", "message" }`를 담는다
 | Operation | Endpoint |
 | --- | --- |
 | memo 생성 | `POST /memos` |
+| memo 수정 | `PATCH /memos/{memoId}` |
+| memo 휴지통 이동/복원 | `DELETE /memos/{memoId}`, `POST /memos/{memoId}/restore` |
 | Fake 분석 시작 | `POST /memos/{memoId}/analysis-runs` |
 | 제안 적용 | `POST /analysis-proposals/{proposalId}/apply` |
 | 제안 거절/보류 | `POST /analysis-proposals/{proposalId}/reject`, `/postpone` |
@@ -44,7 +46,7 @@ Bean Validation 오류는 `fieldErrors`에 `{ "field", "message" }`를 담는다
 
 서버는 owner, operation, key, request hash와 원래 response를 같은 transaction에 저장한다. 같은 key와 같은 요청은 최초 응답을 반환하고 추가 record를 만들지 않는다. 같은 key를 다른 payload에 재사용하면 `409 IDEMPOTENCY_KEY_REUSED`를 반환한다. PostgreSQL advisory transaction lock으로 동시에 들어온 동일 요청도 직렬화한다.
 
-메모 수정은 idempotency key 대신 `expectedRevision`을 사용하는 optimistic concurrency 계약이다.
+메모 수정은 `Idempotency-Key`와 `expectedRevision`을 함께 사용한다. 전자는 동일 mutation의 안전한 재시도를, 후자는 다른 편집과의 optimistic concurrency를 보장한다. 휴지통 이동과 복원은 body가 없으므로 request hash에 path의 memo identity를 포함한다.
 
 ## Memo
 
@@ -88,10 +90,20 @@ GET /api/v1/memos/{memoId}
 
 현재 revision의 원문과 최신 analysis state를 memo view 형식으로 반환한다.
 
+### List by lifecycle status
+
+```http
+GET /api/v1/memos?status=ACTIVE&limit=50
+GET /api/v1/memos?status=TRASHED&limit=50
+```
+
+`status` 기본값은 `ACTIVE`이며 `ACTIVE` 또는 `TRASHED`만 허용한다. `limit` 기본값은 50이고 서버가 1–100으로 clamp한다. 현재 owner의 memo만 `updated_at` 내림차순으로 반환하며 각 원소는 `MemoView`다. 지원하지 않는 status는 `422 INVALID_MEMO_STATUS`다.
+
 ### Update content
 
 ```http
 PATCH /api/v1/memos/{memoId}
+Idempotency-Key: memo-update-018f...
 Content-Type: application/json
 ```
 
@@ -102,7 +114,21 @@ Content-Type: application/json
 }
 ```
 
-성공하면 immutable `memo_revisions` row를 추가하고 `currentRevision`을 증가시킨다. 적용되지 않은 과거 revision 분석은 `STALE`이 된다. revision이 이미 바뀌었으면 `409 STALE_MEMO_REVISION`이다.
+성공하면 `200 OK`와 갱신된 `MemoView`를 반환하고, immutable `memo_revisions` row를 추가해 `currentRevision`을 증가시킨다. 적용되지 않은 과거 revision 분석은 `STALE`이 된다. revision이 이미 바뀌었으면 `409 STALE_MEMO_REVISION`이다. 휴지통의 memo는 수정할 수 없다.
+
+### Move to trash and restore
+
+```http
+DELETE /api/v1/memos/{memoId}
+Idempotency-Key: memo-trash-018f...
+
+POST /api/v1/memos/{memoId}/restore
+Idempotency-Key: memo-restore-018f...
+```
+
+두 요청 모두 body가 없고 `200 OK`와 현재 `MemoView`를 반환한다. 휴지통 이동은 memo를 `TRASHED`로 soft-delete하고 `deleted_at`을 기록하며, 아직 검토 중이거나 보류된 run을 `STALE`로 바꾼다. raw memo와 모든 revision, 이미 승인된 파생 record는 삭제하지 않지만 task/graph 조회에서는 비활성 memo의 파생 record를 숨긴다.
+
+복원은 memo를 `ACTIVE`로 바꾸고 `deleted_at`을 비운다. 기존 `STALE` proposal을 되살리지는 않으며 현재 revision에 새 분석 run을 시작할 수 있다. 이미 목표 상태인 memo에 같은 operation을 다시 요청해도 안전하며, idempotency replay는 최초 응답을 돌려준다.
 
 ## Analysis proposal
 
@@ -142,6 +168,42 @@ GET /api/v1/analysis-proposals/{proposalId}
 ```
 
 `schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`, `tagCandidates`, `itemCandidates`, `ambiguityReasons`, `providerMetadata`를 포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag나 task를 생성하지 않는다.
+
+### Recover proposals awaiting review
+
+```http
+GET /api/v1/analysis-proposals?status=REVIEW_REQUIRED&limit=1
+GET /api/v1/analysis-proposals?status=POSTPONED&limit=1
+```
+
+Recovery query는 `REVIEW_REQUIRED`와 `POSTPONED`를 지원한다. `limit` 기본값은 1이고 서버가 1–100으로 clamp한다. 현재 owner의 활성 memo이면서 run의 revision이 그 memo의 현재 revision과 같은 proposal만 최신순으로 반환한다. 다른 owner, 휴지통 memo, stale revision은 노출하지 않는다. 클라이언트는 두 상태의 최신 결과를 `createdAt`으로 비교해 하나의 검토 화면만 복원한다. 응답 원소는 다음 envelope다.
+
+```json
+{
+  "proposalId": "6b41133d-e81a-4751-b4b0-623b8c794bf3",
+  "status": "POSTPONED",
+  "createdAt": "2026-08-05T02:00:00Z",
+  "proposal": {
+    "schemaVersion": "1",
+    "memoId": "61c6c3e8-846a-4472-a58a-321920001868",
+    "memoRevision": 1,
+    "suggestedTitle": {
+      "value": "나중에 검토할 메모",
+      "confidence": 0.9,
+      "needsConfirmation": false
+    },
+    "typeCandidates": [{ "value": "TASK", "score": 0.9 }],
+    "dateCandidates": [],
+    "tagCandidates": [],
+    "itemCandidates": [],
+    "relationCandidates": [],
+    "ambiguityReasons": [],
+    "providerMetadata": {}
+  }
+}
+```
+
+지원하지 않는 status는 `422 INVALID_PROPOSAL_STATUS`다. 분석 직후 아직 처리하지 않은 `REVIEW_REQUIRED` 제안도 서버에서 복구하므로 새로고침이 중복 분석 run을 만들지 않는다.
 
 ### Apply reviewed selection
 
@@ -227,6 +289,23 @@ Idempotency-Key: undo-018f...
 ```
 
 해당 application에서 파생된 item, task, tag link와 안전하게 제거할 수 있는 신규 tag만 되돌린다. source memo와 모든 raw revision은 보존한다.
+
+### Recover latest application
+
+```http
+GET /api/v1/analysis-applications/latest
+```
+
+현재 owner의 가장 최근 application을 조회해 새로고침 뒤 undo 상태를 복구한다. 항상 `200 OK`이며 application이 없으면 다음처럼 명시적인 empty state를 반환한다.
+
+```json
+{
+  "applicationId": null,
+  "status": "NONE"
+}
+```
+
+application이 있으면 `applicationId`와 현재 `APPLIED` 또는 `UNDONE` status를 반환한다. 다른 owner의 더 최근 application은 결과에 영향을 주지 않는다.
 
 ## Task
 

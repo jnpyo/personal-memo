@@ -7,8 +7,10 @@ import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import tools.jackson.databind.JsonNode;
 
 public final class AnalysisDtos {
   private AnalysisDtos() {}
@@ -43,6 +45,11 @@ public final class AnalysisDtos {
       @NotEmpty @Size(max = 3) List<@Valid Item> items) {}
 
   public record ApplicationView(UUID applicationId, String status) {}
+
+  public record ApplicationRecoveryView(UUID applicationId, String status) {}
+
+  public record ProposalRecoveryView(
+      UUID proposalId, String status, Instant createdAt, JsonNode proposal) {}
 
   public record ReviewDispositionView(UUID proposalId, String status) {}
 }
