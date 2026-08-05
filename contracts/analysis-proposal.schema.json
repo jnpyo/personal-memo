@@ -1,0 +1,275 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://personal-memo.local/schemas/analysis-proposal-v1.json",
+  "title": "AnalysisProposalV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "memoId",
+    "memoRevision",
+    "suggestedTitle",
+    "typeCandidates",
+    "dateCandidates",
+    "tagCandidates",
+    "itemCandidates",
+    "relationCandidates",
+    "ambiguityReasons",
+    "providerMetadata"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1"
+    },
+    "memoId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "memoRevision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "suggestedTitle": {
+      "$ref": "#/$defs/scoredText"
+    },
+    "typeCandidates": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["value", "score"],
+        "properties": {
+          "value": {
+            "enum": ["TASK", "EVENT", "INFORMATION", "IDEA", "RECORD", "UNKNOWN"]
+          },
+          "score": {
+            "$ref": "#/$defs/score"
+          }
+        }
+      }
+    },
+    "dateCandidates": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "$ref": "#/$defs/dateCandidate"
+      }
+    },
+    "tagCandidates": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "$ref": "#/$defs/tagCandidate"
+      }
+    },
+    "itemCandidates": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/$defs/itemCandidate"
+      }
+    },
+    "relationCandidates": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "$ref": "#/$defs/relationCandidate"
+      }
+    },
+    "ambiguityReasons": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ambiguityReason"
+      }
+    },
+    "providerMetadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "scoredText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "confidence", "needsConfirmation"],
+      "properties": {
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "confidence": {
+          "$ref": "#/$defs/score"
+        },
+        "needsConfirmation": {
+          "type": "boolean"
+        }
+      }
+    },
+    "sourceSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ambiguityReason": {
+      "enum": [
+        "LOW_TYPE_MARGIN",
+        "LOW_TAG_SIMILARITY",
+        "TAG_CONFLICT",
+        "NEW_TOPIC",
+        "MISSING_YEAR",
+        "MISSING_TIME",
+        "IMPRECISE_DATE",
+        "CONFLICTING_DATES",
+        "UNRESOLVED_REFERENCE",
+        "MISSING_ACTION",
+        "MISSING_OBJECT",
+        "MULTI_INTENT",
+        "LOCAL_CLOUD_CONFLICT"
+      ]
+    },
+    "dateCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "surfaceText",
+        "value",
+        "precision",
+        "timeSpecified",
+        "confidence",
+        "ambiguityReasons"
+      ],
+      "properties": {
+        "surfaceText": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": ["string", "null"]
+        },
+        "precision": {
+          "enum": ["EXACT_TIME", "DATE_ONLY", "RELATIVE_EXACT", "APPROXIMATE", "UNKNOWN"]
+        },
+        "timeSpecified": {
+          "type": "boolean"
+        },
+        "confidence": {
+          "$ref": "#/$defs/score"
+        },
+        "ambiguityReasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ambiguityReason"
+          }
+        }
+      }
+    },
+    "tagCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "existingTagId",
+        "canonicalName",
+        "matchedAlias",
+        "score",
+        "isNewProposal"
+      ],
+      "properties": {
+        "existingTagId": {
+          "type": ["string", "null"],
+          "format": "uuid"
+        },
+        "canonicalName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "matchedAlias": {
+          "type": ["string", "null"]
+        },
+        "score": {
+          "$ref": "#/$defs/score"
+        },
+        "isNewProposal": {
+          "type": "boolean"
+        }
+      }
+    },
+    "itemCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidateId", "kind", "title", "sourceSpan", "action", "object", "confidence"],
+      "properties": {
+        "candidateId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": ["TASK", "EVENT", "INFORMATION", "IDEA", "RECORD"]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "sourceSpan": {
+          "oneOf": [
+            { "$ref": "#/$defs/sourceSpan" },
+            { "type": "null" }
+          ]
+        },
+        "action": {
+          "type": ["string", "null"]
+        },
+        "object": {
+          "type": ["string", "null"]
+        },
+        "confidence": {
+          "$ref": "#/$defs/score"
+        }
+      }
+    },
+    "relationCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceCandidateId", "targetType", "targetId", "relationType", "score"],
+      "properties": {
+        "sourceCandidateId": {
+          "type": "string"
+        },
+        "targetType": {
+          "enum": ["MEMO", "TAG"]
+        },
+        "targetId": {
+          "type": "string"
+        },
+        "relationType": {
+          "enum": ["RELATED_TO", "CONTINUES", "DEPENDS_ON", "REFERENCES"]
+        },
+        "score": {
+          "$ref": "#/$defs/score"
+        }
+      }
+    }
+  }
+}
+

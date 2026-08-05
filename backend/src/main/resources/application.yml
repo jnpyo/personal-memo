@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: personal-memo
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/personal_memo}
+    username: ${SPRING_DATASOURCE_USERNAME:personal_memo}
+    password: ${SPRING_DATASOURCE_PASSWORD:local-development-only}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+server:
+  error:
+    include-message: never
+
