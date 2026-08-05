@@ -4,6 +4,13 @@
 
 Build vertical slices and keep every checkpoint runnable. Do not begin with a model experiment disconnected from the product flow.
 
+## Current checkpoint
+
+- Milestone 0: complete.
+- Milestone 1: complete, including memo lifecycle/recovery, production PWA packaging, and mobile E2E coverage.
+- Milestone 2: in progress. Korean date policy, versioned fixtures, runtime schema/domain validation, versioned field-level routing with persisted provenance, provider-independent Fake cloud enrichment, prompt-injection boundaries, and `UNKNOWN` user resolution are implemented.
+- Real local/cloud model adapters remain intentionally deferred by the current product decision. No provider is introduced merely to satisfy the original roadmap bullet.
+
 ## Milestone 0 — Decisions and scaffolding
 
 ### Deliverables
@@ -167,4 +174,3 @@ Do not hard-code a model before the benchmark and licensing review.
 - unit/integration/E2E tests appropriate to the change pass;
 - no sensitive memo text is added to ordinary logs;
 - measured behavior is reported instead of assumed where device/model performance is involved.
-

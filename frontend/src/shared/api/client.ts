@@ -1,4 +1,6 @@
 import { toApiError } from './errors';
+import { decodeProposal, decodeProposalSummaries } from './proposalDecoder';
+import type { ExpectedProposalIdentity } from './proposalDecoder';
 import type {
   AnalysisRun,
   ApplicationResult,
@@ -7,8 +9,6 @@ import type {
   LatestApplication,
   MemoView,
   MemoStatus,
-  Proposal,
-  ProposalSummary,
   ReviewDispositionResult,
   Task,
   TaskStatus,
@@ -90,12 +90,18 @@ export const api = {
       body: JSON.stringify({ memoRevision, policy: 'AUTO' }),
     }),
 
-  proposal: (proposalId: string) =>
-    request<Proposal>(`/api/v1/analysis-proposals/${proposalId}`),
+  proposal: async (proposalId: string, expectedIdentity?: ExpectedProposalIdentity) =>
+    decodeProposal(
+      await request<unknown>(`/api/v1/analysis-proposals/${proposalId}`),
+      expectedIdentity,
+    ),
 
-  proposals: (status: 'REVIEW_REQUIRED' | 'POSTPONED', limit = 1) =>
-    request<ProposalSummary[]>(
-      `/api/v1/analysis-proposals?status=${status}&limit=${Math.min(Math.max(limit, 1), 50)}`,
+  proposals: async (status: 'REVIEW_REQUIRED' | 'POSTPONED', limit = 1) =>
+    decodeProposalSummaries(
+      await request<unknown>(
+        `/api/v1/analysis-proposals?status=${status}&limit=${Math.min(Math.max(limit, 1), 50)}`,
+      ),
+      status,
     ),
 
   latestApplication: () =>

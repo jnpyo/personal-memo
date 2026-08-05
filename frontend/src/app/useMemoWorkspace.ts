@@ -8,6 +8,10 @@ import {
 } from '../shared/api/retryIdentity';
 import type { GraphProjection, MemoView, Task, TaskStatus } from '../shared/api/types';
 import type { Feedback } from '../shared/ui/FeedbackBanner';
+import {
+  canSubmitMemo,
+  type ConnectionState,
+} from '../features/capture/captureAvailability';
 import { buildUpdateMemoRequest } from '../features/memos/memoModel';
 import { buildApplyRequest, createReviewDraft, type ReviewDraft } from '../features/review/reviewModel';
 import {
@@ -34,7 +38,7 @@ function browserTimeZone(): string {
 }
 
 export function useMemoWorkspace() {
-  const [connection, setConnection] = useState<'checking' | 'online' | 'offline'>('checking');
+  const [connection, setConnection] = useState<ConnectionState>('checking');
   const [content, setContent] = useState('');
   const [review, setReview] = useState<ReviewDraft | null>(null);
   const [postponedReview, setPostponedReview] = useState<ReviewDraft | null>(null);
@@ -133,11 +137,23 @@ export function useMemoWorkspace() {
     void refreshRecovery();
   }, [checkConnection, refreshMemos, refreshRecovery, refreshWorkspace]);
 
+  useEffect(() => {
+    const handleOffline = () => setConnection('offline');
+    const handleOnline = () => void checkConnection();
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+    return () => {
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [checkConnection]);
+
   function clearRetry(scope?: string) {
     setRetryAction((current) => (!scope || current?.scope === scope ? null : current));
   }
 
   function fail(error: unknown, scope: string, label: string, retry: () => void) {
+    if (error instanceof TypeError) setConnection('offline');
     setFeedback({ kind: 'error', message: errorMessage(error) });
     setRetryAction({ scope, label, run: retry });
   }
@@ -151,7 +167,7 @@ export function useMemoWorkspace() {
       message:
         policy === 'RAW_ONLY'
           ? '원문을 먼저 안전하게 저장하고 있습니다.'
-          : '원문을 저장하고 Fake 분석 후보를 만들고 있습니다.',
+          : '원문을 저장하고 규칙 기반 분석 후보를 만들고 있습니다.',
     });
 
     try {
@@ -169,12 +185,15 @@ export function useMemoWorkspace() {
         clearRetry(scope);
         setFeedback({
           kind: 'success',
-          message: '원문을 저장했습니다. 검토 상태를 복구한 뒤 이 메모에서 Fake 분석을 시작할 수 있습니다.',
+          message: '원문을 저장했습니다. 검토 상태를 복구한 뒤 이 메모에서 제안 분석을 시작할 수 있습니다.',
         });
         return;
       }
       const run = await api.analyze(memo.id, memo.currentRevision, attempt.analysisKey);
-      const proposal = await api.proposal(run.proposalId);
+      const proposal = await api.proposal(run.proposalId, {
+        memoId: run.memoId,
+        memoRevision: run.memoRevision,
+      });
 
       setReview(createReviewDraft(run.proposalId, proposal));
       setPostponedReview(null);
@@ -190,6 +209,13 @@ export function useMemoWorkspace() {
   }
 
   function captureMemo(nextContent: string) {
+    if (!canSubmitMemo(connection)) {
+      setFeedback({
+        kind: 'info',
+        message: '서버에 다시 연결한 뒤 제출해 주세요. 현재 입력은 기기에 저장되지 않습니다.',
+      });
+      return;
+    }
     if (capturePolicy === 'LOCKED') {
       setFeedback({ kind: 'info', message: '서버의 검토 상태를 먼저 복원해 주세요.' });
       return;
@@ -400,22 +426,25 @@ export function useMemoWorkspace() {
     const idempotencyKey = retryIdentities.current.keyFor(scope, fingerprint);
     setBusyAction(scope);
     clearRetry(scope);
-    setFeedback({ kind: 'info', message: `revision ${memo.currentRevision}의 Fake 제안을 만들고 있습니다.` });
+    setFeedback({ kind: 'info', message: `revision ${memo.currentRevision}의 분석 제안을 만들고 있습니다.` });
 
     try {
       const run = await api.analyze(memo.id, memo.currentRevision, idempotencyKey);
-      const proposal = await api.proposal(run.proposalId);
+      const proposal = await api.proposal(run.proposalId, {
+        memoId: run.memoId,
+        memoRevision: run.memoRevision,
+      });
       setReview(createReviewDraft(run.proposalId, proposal));
       setPostponedReview(null);
       clearRetry(scope);
       setFeedback({
         kind: 'success',
-        message: '최신 원문은 그대로 두고 별도의 Fake 분석 제안을 열었습니다.',
+        message: '최신 원문은 그대로 두고 별도의 분석 제안을 열었습니다.',
       });
       await refreshMemos();
       retryIdentities.current.clear(scope);
     } catch (error) {
-      fail(error, scope, 'Fake 분석 다시 시도', () => void analyzeMemo(memo));
+      fail(error, scope, '제안 분석 다시 시도', () => void analyzeMemo(memo));
     } finally {
       setBusyAction(null);
     }

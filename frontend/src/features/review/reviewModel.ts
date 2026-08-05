@@ -6,8 +6,18 @@ import type {
   Proposal,
   TagCandidate,
 } from '../../shared/api/types';
+import {
+  isValidIsoDate,
+  isValidOffsetDateTime,
+} from '../../shared/validation/dateTime';
+
+export { isValidIsoDate, isValidOffsetDateTime } from '../../shared/validation/dateTime';
 
 export const ITEM_KINDS: ItemKind[] = ['TASK', 'EVENT', 'INFORMATION', 'IDEA', 'RECORD'];
+
+export function isItemKind(value: unknown): value is ItemKind {
+  return typeof value === 'string' && (ITEM_KINDS as readonly string[]).includes(value);
+}
 
 export type ReviewItemDraft = ItemCandidate & {
   due: DateCandidate | null;
@@ -17,35 +27,20 @@ export type ReviewDraft = {
   proposalId: string;
   proposal: Proposal;
   title: string;
-  selectedType: ItemKind;
+  selectedType: ItemKind | null;
   tags: TagCandidate[];
   items: ReviewItemDraft[];
 };
 
-const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
-const OFFSET_DATE_TIME = /(Z|[+-]\d{2}:\d{2})$/;
+type ApplicableReviewDraft = ReviewDraft & {
+  selectedType: ItemKind;
+};
 
 function cloneDate(candidate: DateCandidate): DateCandidate {
   return {
     ...candidate,
     ambiguityReasons: candidate.ambiguityReasons ? [...candidate.ambiguityReasons] : undefined,
   };
-}
-
-export function isValidIsoDate(value: string | null): value is string {
-  if (!value) return false;
-  const match = ISO_DATE.exec(value);
-  if (!match) return false;
-
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day
-  );
 }
 
 export function isValidDue(due: DateCandidate | null): boolean {
@@ -55,12 +50,7 @@ export function isValidDue(due: DateCandidate | null): boolean {
     return !due.timeSpecified && isValidIsoDate(due.value);
   }
   if (due.precision === 'EXACT_TIME' || due.precision === 'RELATIVE_EXACT') {
-    return Boolean(
-      due.timeSpecified &&
-        due.value &&
-        OFFSET_DATE_TIME.test(due.value) &&
-        !Number.isNaN(Date.parse(due.value)),
-    );
+    return due.timeSpecified && isValidOffsetDateTime(due.value);
   }
   return !due.timeSpecified && (!due.value || !due.value.trim());
 }
@@ -89,7 +79,9 @@ export function createCustomDateOnly(): DateCandidate {
 export function createReviewDraft(proposalId: string, proposal: Proposal): ReviewDraft {
   const preferredDue = usableDateCandidates(proposal)[0] ?? null;
   let assignedPreferredDue = false;
-  const selectedType = proposal.typeCandidates[0]?.value ?? 'RECORD';
+  const suggestedType = proposal.typeCandidates[0]?.value;
+  const selectedType = isItemKind(suggestedType) ? suggestedType : null;
+  const validItems = proposal.itemCandidates.filter((item) => isItemKind(item.kind));
 
   const draft: ReviewDraft = {
     proposalId,
@@ -97,7 +89,7 @@ export function createReviewDraft(proposalId: string, proposal: Proposal): Revie
     title: proposal.suggestedTitle.value,
     selectedType,
     tags: proposal.tagCandidates.map((tag) => ({ ...tag })),
-    items: proposal.itemCandidates.map((item, index) => {
+    items: validItems.map((item, index) => {
       const shouldAssignDue = item.kind === 'TASK' && preferredDue && !assignedPreferredDue;
       if (shouldAssignDue) assignedPreferredDue = true;
       return {
@@ -108,7 +100,7 @@ export function createReviewDraft(proposalId: string, proposal: Proposal): Revie
       };
     }),
   };
-  return changeSelectedType(draft, selectedType);
+  return selectedType ? changeSelectedType(draft, selectedType) : draft;
 }
 
 export function changeSelectedType(review: ReviewDraft, selectedType: ItemKind): ReviewDraft {
@@ -155,10 +147,46 @@ export function changeItemKind(
   const items = review.items.map((item, index) =>
     index === itemIndex ? { ...item, kind, due: kind === 'TASK' ? item.due : null } : item,
   );
-  const selectedType = items.some((item) => item.kind === review.selectedType)
+  const selectedType = review.selectedType && items.some((item) => item.kind === review.selectedType)
     ? review.selectedType
     : kind;
   return { ...review, selectedType, items };
+}
+
+export function addManualItem(review: ReviewDraft): ReviewDraft {
+  if (!review.selectedType || review.items.length >= 3) return review;
+
+  let suffix = 1;
+  while (review.items.some((item) => item.candidateId === `manual-${suffix}`)) {
+    suffix += 1;
+  }
+  const isFirstItem = review.items.length === 0;
+  const item: ReviewItemDraft = {
+    candidateId: `manual-${suffix}`,
+    kind: review.selectedType,
+    title: isFirstItem ? review.title : '',
+    sourceSpan: null,
+    action: null,
+    object: null,
+    due: null,
+  };
+  return { ...review, items: [...review.items, item] };
+}
+
+export function removeReviewItem(review: ReviewDraft, itemIndex: number): ReviewDraft {
+  if (itemIndex < 0 || itemIndex >= review.items.length) return review;
+
+  const items = review.items.filter((_, index) => index !== itemIndex);
+  const selectedType =
+    review.selectedType && items.some((item) => item.kind === review.selectedType)
+      ? review.selectedType
+      : (items[0]?.kind ?? review.selectedType);
+  return {
+    ...review,
+    selectedType,
+    title: itemIndex === 0 && items[0] ? items[0].title : review.title,
+    items,
+  };
 }
 
 export function changeItemDue(
@@ -188,10 +216,12 @@ export function changeItemDueValue(
   };
 }
 
-export function isValidReviewDraft(review: ReviewDraft): boolean {
+export function isValidReviewDraft(review: ReviewDraft): review is ApplicableReviewDraft {
   return (
+    review.selectedType !== null &&
     review.title.trim().length > 0 &&
     review.items.length > 0 &&
+    review.items.length <= 3 &&
     review.items[0].title.trim() === review.title.trim() &&
     review.items.some((item) => item.kind === review.selectedType) &&
     review.items.every(
@@ -203,6 +233,9 @@ export function isValidReviewDraft(review: ReviewDraft): boolean {
 }
 
 export function buildApplyRequest(review: ReviewDraft, timeZone: string): ApplyProposalRequest {
+  if (!isValidReviewDraft(review)) {
+    throw new Error('검토 제안은 적용 전에 유형, 제목, 항목을 확인해야 합니다.');
+  }
   return {
     expectedMemoRevision: review.proposal.memoRevision,
     selectedType: review.selectedType,

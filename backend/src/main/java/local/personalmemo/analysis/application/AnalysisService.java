@@ -11,7 +11,14 @@ import local.personalmemo.analysis.api.AnalysisDtos.ProposalRecoveryView;
 import local.personalmemo.analysis.api.AnalysisDtos.ReviewDispositionView;
 import local.personalmemo.analysis.api.AnalysisDtos.RunView;
 import local.personalmemo.analysis.api.AnalysisDtos.Start;
+import local.personalmemo.analysis.domain.AmbiguityReason;
+import local.personalmemo.analysis.domain.AnalysisRoute;
+import local.personalmemo.analysis.domain.AnalysisProvenance;
+import local.personalmemo.analysis.domain.AnalysisProposalSchemaValidator;
 import local.personalmemo.analysis.domain.AnalysisProposalValidator;
+import local.personalmemo.analysis.domain.CloudAnalysisGateway;
+import local.personalmemo.analysis.domain.CloudAnalysisRequest;
+import local.personalmemo.analysis.domain.DeterministicAmbiguityGate;
 import local.personalmemo.analysis.domain.LocalAnalyzer;
 import local.personalmemo.common.DevIdentity;
 import local.personalmemo.common.error.DomainException;
@@ -37,6 +44,9 @@ public class AnalysisService {
   private final DevIdentity identity;
   private final MemoService memos;
   private final LocalAnalyzer analyzer;
+  private final CloudAnalysisGateway cloudGateway;
+  private final DeterministicAmbiguityGate ambiguityGate;
+  private final AnalysisProposalSchemaValidator proposalSchemaValidator;
   private final AnalysisProposalValidator proposalValidator;
   private final IdempotencyService idempotency;
   private final ObjectMapper json;
@@ -46,6 +56,9 @@ public class AnalysisService {
       DevIdentity identity,
       MemoService memos,
       LocalAnalyzer analyzer,
+      CloudAnalysisGateway cloudGateway,
+      DeterministicAmbiguityGate ambiguityGate,
+      AnalysisProposalSchemaValidator proposalSchemaValidator,
       AnalysisProposalValidator proposalValidator,
       IdempotencyService idempotency,
       ObjectMapper json) {
@@ -53,6 +66,9 @@ public class AnalysisService {
     this.identity = identity;
     this.memos = memos;
     this.analyzer = analyzer;
+    this.cloudGateway = cloudGateway;
+    this.ambiguityGate = ambiguityGate;
+    this.proposalSchemaValidator = proposalSchemaValidator;
     this.proposalValidator = proposalValidator;
     this.idempotency = idempotency;
     this.json = json;
@@ -73,15 +89,27 @@ public class AnalysisService {
     UUID runId = UUID.randomUUID();
     UUID proposalId = UUID.randomUUID();
     Instant now = Instant.now();
-    ObjectNode proposal =
+    AnalysisProvenance provenance = requireAnalysisProvenance();
+    String routingPolicyVersion = requireRoutingPolicyVersion();
+    ObjectNode localProposal =
         analyzer.analyze(
             memoId,
             request.memoRevision(),
             memo.content(),
             memo.clientRecordedAt(),
             memo.sourceTimeZone());
-    proposalValidator.validate(proposal, memoId, request.memoRevision(), memo.content().length());
-    validateProposalReferences(proposal);
+    validateProposal(localProposal, memo, provenance, routingPolicyVersion);
+    List<AmbiguityReason> routingReasons = ambiguityGate.routingSignals(localProposal);
+    AnalysisRoute route = ambiguityGate.route(routingReasons);
+    ObjectNode proposal =
+        route == AnalysisRoute.LOCAL_REVIEW
+            ? localProposal
+            : enrichWithCloud(
+                new CloudAnalysisRequest(localProposal, routingReasons, routingPolicyVersion),
+                memo,
+                provenance,
+                routingPolicyVersion);
+    String persistedRoute = route == AnalysisRoute.LOCAL_REVIEW ? "LOCAL" : "HYBRID";
 
     Timestamp timestamp = Timestamp.from(now);
     db.sql(
@@ -95,6 +123,10 @@ public class AnalysisService {
               status,
               schema_version,
               analyzer_version,
+              prompt_version,
+              local_model_version,
+              embedding_model_version,
+              routing_policy_version,
               ambiguity_reasons,
               created_at,
               completed_at
@@ -103,10 +135,14 @@ public class AnalysisService {
               :ownerId,
               :memoId,
               :memoRevision,
-              'MOCK',
+              :route,
               'REVIEW_REQUIRED',
               '1',
-              'fake-v1',
+              :analyzerVersion,
+              :promptVersion,
+              :localModelVersion,
+              :embeddingModelVersion,
+              :routingPolicyVersion,
               cast(:ambiguityReasons as jsonb),
               :now,
               :now
@@ -116,7 +152,13 @@ public class AnalysisService {
         .param("ownerId", identity.ownerId())
         .param("memoId", memoId)
         .param("memoRevision", request.memoRevision())
-        .param("ambiguityReasons", proposal.path("ambiguityReasons").toString())
+        .param("route", persistedRoute)
+        .param("analyzerVersion", provenance.analyzerVersion())
+        .param("promptVersion", provenance.promptVersion())
+        .param("localModelVersion", provenance.localModelVersion())
+        .param("embeddingModelVersion", provenance.embeddingModelVersion())
+        .param("routingPolicyVersion", routingPolicyVersion)
+        .param("ambiguityReasons", serializeAmbiguityReasons(routingReasons))
         .param("now", timestamp)
         .update();
     db.sql(
@@ -353,6 +395,71 @@ public class AnalysisService {
         }
       }
     }
+  }
+
+  private void validateProposal(
+      ObjectNode proposal,
+      MemoSnapshot memo,
+      AnalysisProvenance expectedProvenance,
+      String expectedRoutingPolicyVersion) {
+    if (proposal == null) {
+      throw DomainException.invalid(
+          "INVALID_ANALYSIS_PROPOSAL", "The analyzer returned no proposal.");
+    }
+    proposalSchemaValidator.validate(proposal);
+    proposalValidator.validate(
+        proposal,
+        memo.id(),
+        memo.currentRevision(),
+        memo.content().length(),
+        expectedProvenance,
+        expectedRoutingPolicyVersion);
+    validateProposalReferences(proposal);
+  }
+
+  private AnalysisProvenance requireAnalysisProvenance() {
+    AnalysisProvenance provenance = analyzer.provenance();
+    if (provenance == null) {
+      throw new IllegalStateException("Local analyzer must expose analysis provenance.");
+    }
+    return provenance;
+  }
+
+  private String requireRoutingPolicyVersion() {
+    String version = ambiguityGate.version();
+    if (version == null
+        || version.isBlank()
+        || version.codePointCount(0, version.length())
+            > AnalysisProvenance.MAX_VERSION_LENGTH) {
+      throw new IllegalStateException(
+          "The ambiguity gate must expose a version of 1 to 64 characters.");
+    }
+    return version;
+  }
+
+  private ObjectNode enrichWithCloud(
+      CloudAnalysisRequest request,
+      MemoSnapshot memo,
+      AnalysisProvenance expectedProvenance,
+      String expectedRoutingPolicyVersion) {
+    ObjectNode enriched;
+    try {
+      enriched = cloudGateway.enrich(request);
+    } catch (RuntimeException exception) {
+      throw DomainException.invalid(
+          "CLOUD_ANALYSIS_FAILED",
+          "Cloud analysis could not produce a review proposal; no analysis was stored.");
+    }
+    validateProposal(enriched, memo, expectedProvenance, expectedRoutingPolicyVersion);
+    return enriched;
+  }
+
+  private String serializeAmbiguityReasons(List<AmbiguityReason> reasons) {
+    var values = json.createArrayNode();
+    for (AmbiguityReason reason : reasons) {
+      values.add(reason.name());
+    }
+    return values.toString();
   }
 
   private void requireOwnedActiveTag(UUID tagId) {

@@ -1,4 +1,8 @@
 import { MemoCapture } from '../features/capture/MemoCapture';
+import {
+  canSubmitMemo,
+  OFFLINE_CAPTURE_PROMPT,
+} from '../features/capture/captureAvailability';
 import { MemoTagGraph } from '../features/graph/MemoTagGraph';
 import { ConnectionStatus } from '../features/health/ConnectionStatus';
 import { MemoLibrary } from '../features/memos/MemoLibrary';
@@ -11,10 +15,12 @@ import { useMemoWorkspace } from './useMemoWorkspace';
 export function App() {
   const workspace = useMemoWorkspace();
 
-  const capturePrompt = workspace.recoveryLoading
+  const capturePrompt = workspace.connection === 'offline'
+    ? OFFLINE_CAPTURE_PROMPT
+    : workspace.recoveryLoading
     ? '서버에 저장된 검토 상태를 복원하고 있습니다.'
     : workspace.recoveryError
-      ? '원문은 지금 저장할 수 있습니다. Fake 분석은 검토 상태를 복구한 뒤 시작합니다.'
+      ? '원문은 지금 저장할 수 있습니다. 제안 분석은 검토 상태를 복구한 뒤 시작합니다.'
       : workspace.review
         ? '현재 제안을 먼저 승인·보류·거절해 주세요.'
         : workspace.postponedReview
@@ -27,7 +33,7 @@ export function App() {
         <div>
           <span className="eyebrow">PERSONAL MEMO</span>
           <h1>생각을 먼저 적으세요.</h1>
-          <p>Fake 분석은 제안만 만듭니다. 수정하고 승인한 내용만 실제 항목이 됩니다.</p>
+          <p>분석은 제안만 만듭니다. 수정하고 승인한 내용만 실제 항목이 됩니다.</p>
         </div>
         <ConnectionStatus status={workspace.connection} onRetry={workspace.checkConnection} />
       </header>
@@ -47,7 +53,7 @@ export function App() {
 
       {workspace.recoveryError && (
         <aside className="recovery-state recovery-state--error" role="alert">
-          <p>저장된 검토 상태를 불러오지 못했습니다. 원문 저장은 가능하지만 Fake 분석은 잠시 보류됩니다.</p>
+          <p>저장된 검토 상태를 불러오지 못했습니다. 원문 저장은 가능하지만 제안 분석은 잠시 보류됩니다.</p>
           <button type="button" className="secondary-button" onClick={workspace.refreshRecovery}>
             검토 상태 다시 불러오기
           </button>
@@ -128,6 +134,7 @@ export function App() {
       <MemoCapture
         content={workspace.content}
         disabled={workspace.captureLocked}
+        submissionDisabled={!canSubmitMemo(workspace.connection)}
         submitting={workspace.captureSubmitting}
         rawOnly={workspace.recoveryError !== null}
         prompt={capturePrompt}

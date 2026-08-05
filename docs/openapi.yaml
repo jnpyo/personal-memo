@@ -2,10 +2,11 @@ openapi: 3.1.0
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 info:
   title: Personal Memo API
-  version: 0.1.0
+  version: 0.2.0
   description: >-
-    Milestone 1의 AI-free vertical slice 계약입니다. 분석 결과는 제안이며,
-    canonical 태그와 할 일은 사용자 승인 endpoint를 통해서만 생성됩니다.
+    Milestone 1의 AI-free vertical slice와 외부 모델 없는 결정론적 분석 계약입니다.
+    분석 결과는 제안이며, canonical 태그와 할 일은 사용자 승인 endpoint를
+    통해서만 생성됩니다.
 servers:
   - url: /api/v1
 security: []
@@ -188,12 +189,22 @@ paths:
       - $ref: "#/components/parameters/MemoId"
     post:
       tags: [Analysis]
-      operationId: startFakeAnalysis
-      summary: Create a reviewable Fake analysis proposal
+      operationId: startAnalysis
+      summary: Create a deterministically routed, reviewable analysis proposal
       description: >-
         This operation never creates canonical tags, tasks, or graph relations. Date
         interpretation uses client_recorded_at and source_time_zone from the referenced
-        immutable memo revision, rather than request time or mutable user settings.
+        immutable memo revision, rather than request time or mutable user settings. A
+        Draft 2020-12 and domain-validated local proposal is assessed by a versioned,
+        field-level server policy. A clear proposal is persisted with route LOCAL;
+        critical ambiguity signals and their policy version are passed to the no-network
+        Fake cloud adapter once, then the enriched proposal is validated again and persisted
+        with route HYBRID. The run keeps the original routing reasons for auditability. Every
+        accepted proposal carries server-matching analyzer, prompt, local-model,
+        embedding-model, and routing-policy versions (1–64 characters each) plus a required
+        tool-call count from 0 through 100. Compact
+        proposal JSON is limited to 65,536 UTF-8 bytes and providerMetadata to 8,192 UTF-8
+        bytes.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -204,7 +215,7 @@ paths:
               $ref: "#/components/schemas/StartAnalysisRequest"
       responses:
         "200":
-          description: Synchronous Fake analysis completed and requires review.
+          description: Synchronous deterministic analysis completed and requires review.
           content:
             application/json:
               schema:

@@ -1,8 +1,8 @@
-# API contract — Milestone 1
+# API contract — Milestone 1 + deterministic analysis slice
 
 Base path: `/api/v1`
 
-이 문서는 현재 AI-free vertical slice에서 구현한 HTTP 계약을 설명한다. 후속 마일스톤의 search, reminder, sync API는 구현 전이므로 포함하지 않는다.
+이 문서는 AI-free vertical slice와 외부 모델 없는 결정론적 분석 slice에서 구현한 HTTP 계약을 설명한다. 후속 마일스톤의 search, reminder, sync API는 구현 전이므로 포함하지 않는다.
 
 기계 판독 가능한 동일 범위의 명세는 [`openapi.yaml`](openapi.yaml)에 있다.
 
@@ -38,7 +38,7 @@ Bean Validation 오류는 `fieldErrors`에 `{ "field", "message" }`를 담는다
 | memo 생성 | `POST /memos` |
 | memo 수정 | `PATCH /memos/{memoId}` |
 | memo 휴지통 이동/복원 | `DELETE /memos/{memoId}`, `POST /memos/{memoId}/restore` |
-| Fake 분석 시작 | `POST /memos/{memoId}/analysis-runs` |
+| 결정론적 분석 시작 | `POST /memos/{memoId}/analysis-runs` |
 | 제안 적용 | `POST /analysis-proposals/{proposalId}/apply` |
 | 제안 거절/보류 | `POST /analysis-proposals/{proposalId}/reject`, `/postpone` |
 | application 되돌리기 | `POST /analysis-applications/{applicationId}/undo` |
@@ -136,7 +136,7 @@ Idempotency-Key: memo-restore-018f...
 
 ## Analysis proposal
 
-### Start Fake analysis
+### Start deterministic analysis
 
 ```http
 POST /api/v1/memos/{memoId}/analysis-runs
@@ -151,7 +151,9 @@ Content-Type: application/json
 }
 ```
 
-현재 구현은 동기 Fake 분석을 실행한다. 분석 기준 시각과 시간대는 전역 설정이나 요청 시점이 아니라 지정한 immutable memo revision의 `client_recorded_at`과 `source_time_zone`을 사용한다. 따라서 수정 후 재분석과 네트워크 지연 뒤 재시도에서도 원문을 기록한 맥락이 유지된다. `200 OK`:
+현재 구현은 동기 `FakeAnalyzer`로 한국어 날짜·유형·태그·항목 후보와 명시적인 ambiguity signal을 만든다. 분석 기준 시각과 시간대는 전역 설정이나 요청 시점이 아니라 지정한 immutable memo revision의 `client_recorded_at`과 `source_time_zone`을 사용한다. 따라서 수정 후 재분석과 네트워크 지연 뒤 재시도에서도 원문을 기록한 맥락이 유지된다.
+
+서버는 local proposal을 루트 `contracts/analysis-proposal.schema.json`의 Draft 2020-12 계약, domain 규칙, owner reference 순서로 검증한다. 직렬화된 proposal JSON은 최대 65,536 UTF-8 byte(64 KiB), 그 안의 `providerMetadata`는 최대 8,192 UTF-8 byte(8 KiB)다. `providerMetadata`에는 1–64자의 `analyzerVersion`, `promptVersion`, `localModelVersion`, `embeddingModelVersion`, `routingPolicyVersion`과 0–100 범위의 정수 `toolCalls`가 필수다. 다섯 version은 provider 주장이 아니라 서버가 소유하고 `analysis_runs`에 저장하는 provenance와 일치해야 한다. 그 뒤 최상위 요약만 신뢰하지 않고 날짜·유형·태그·항목 구조에서 field-level 신호를 재계산한다. gate 결과가 `LOCAL_REVIEW`이면 cloud gateway를 호출하지 않고 run route를 `LOCAL`로 저장한다. 중요한 모호성 신호가 있으면 외부 통신 없는 `FakeCloudAnalysisGateway`를 정확히 한 번 호출하고, 복사된 결과를 다시 검증한 뒤 route를 `HYBRID`로 저장한다. run의 `ambiguity_reasons`에는 cloud 처리 전 서버 라우팅 원인을 보존하고, 최종 proposal JSON에는 처리 후 제안 이유를 둔다. 어느 경로도 canonical tag·task·relation을 만들지 않으며 상태는 사용자 검토가 필요한 `REVIEW_REQUIRED`다. 잘못된 local/cloud 결과나 gateway 실패는 run과 proposal을 저장하지 않고 raw revision을 그대로 둔다. `200 OK`:
 
 ```json
 {
@@ -171,7 +173,7 @@ Content-Type: application/json
 GET /api/v1/analysis-proposals/{proposalId}
 ```
 
-`schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`, `tagCandidates`, `itemCandidates`, `ambiguityReasons`, `providerMetadata`를 포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag나 task를 생성하지 않는다.
+`schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`, `tagCandidates`, `itemCandidates`, `relationCandidates`, `ambiguityReasons`, `providerMetadata`를 포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag나 task를 생성하지 않는다. 현재 Fake analyzer의 필수 provenance 값은 `fake-v2`, `none`, `none`, `none`, `field-policy-v1`이며 `toolCalls`는 `0`이다.
 
 ### Recover proposals awaiting review
 
@@ -199,10 +201,27 @@ Recovery query는 `REVIEW_REQUIRED`와 `POSTPONED`를 지원한다. `limit` 기�
     "typeCandidates": [{ "value": "TASK", "score": 0.9 }],
     "dateCandidates": [],
     "tagCandidates": [],
-    "itemCandidates": [],
+    "itemCandidates": [
+      {
+        "candidateId": "item-1",
+        "kind": "TASK",
+        "title": "나중에 검토할 메모",
+        "sourceSpan": null,
+        "action": "검토",
+        "object": "메모",
+        "confidence": 0.9
+      }
+    ],
     "relationCandidates": [],
     "ambiguityReasons": [],
-    "providerMetadata": {}
+    "providerMetadata": {
+      "analyzerVersion": "fake-v2",
+      "promptVersion": "none",
+      "localModelVersion": "none",
+      "embeddingModelVersion": "none",
+      "routingPolicyVersion": "field-policy-v1",
+      "toolCalls": 0
+    }
   }
 }
 ```

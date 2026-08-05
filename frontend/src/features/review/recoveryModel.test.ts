@@ -3,13 +3,27 @@ import type { Proposal, ProposalSummary } from '../../shared/api/types';
 import { deriveCapturePolicy, deriveRecoveryState } from './recoveryModel';
 
 const proposal: Proposal = {
+  schemaVersion: '1',
   memoId: 'memo-1',
   memoRevision: 1,
-  suggestedTitle: { value: '보류한 메모' },
-  typeCandidates: [{ value: 'RECORD' }],
+  suggestedTitle: { value: '보류한 메모', confidence: 0.9, needsConfirmation: true },
+  typeCandidates: [{ value: 'RECORD', score: 0.9 }],
   dateCandidates: [],
   tagCandidates: [],
-  itemCandidates: [{ kind: 'RECORD', title: '보류한 메모' }],
+  itemCandidates: [
+    {
+      candidateId: 'item-1',
+      kind: 'RECORD',
+      title: '보류한 메모',
+      sourceSpan: null,
+      action: null,
+      object: null,
+      confidence: 0.9,
+    },
+  ],
+  relationCandidates: [],
+  ambiguityReasons: [],
+  providerMetadata: {},
 };
 
 const postponed: ProposalSummary = {

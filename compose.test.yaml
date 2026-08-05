@@ -30,6 +30,7 @@ services:
     volumes:
       - ./backend/pom.xml:/workspace/backend/pom.xml:ro
       - ./backend/src:/workspace/backend/src:ro
+      - ./contracts:/workspace/contracts:ro
       - ./fixtures:/workspace/fixtures:ro
       - backend-test-target:/workspace/backend/target
       - maven-test-cache:/root/.m2

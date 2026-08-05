@@ -209,3 +209,13 @@ Codex는 바로 실제 모델을 연결하지 말고 다음 세로 흐름부터 
 - 문서와 API 스키마를 변경하면 관련 테스트와 예제도 갱신한다.
 - 사용자 데이터가 있는 마이그레이션은 파괴적으로 작성하지 않는다.
 - 실제 모델 선택은 샘플 한국어 메모 평가 결과로 결정한다.
+
+## 12. 현재 구현 체크포인트
+
+- Phase 0과 Phase 1의 AI-free 수직 흐름은 구현되어 있다.
+- Flyway `V1`–`V7`이 memo/revision, proposal/application, canonical item/tag/task, owner integrity, revision capture context와 analyzer·prompt·local model·embedding model·routing policy provenance를 관리한다.
+- 12개 한국어 fixture, revision 기준 날짜 파서, `field-policy-v1` ambiguity gate, Draft 2020-12 runtime contract와 strict domain validation이 구현되어 있다. `providerMetadata`의 다섯 version은 각각 1–64자, 필수 `toolCalls`는 0–100이며 proposal은 64 KiB, metadata는 8 KiB로 제한된다.
+- 명확한 결과는 `LOCAL`, 모호한 결과는 authoritative routing 사유를 받는 no-tool Fake cloud를 거쳐 `HYBRID` route로 저장되며 항상 사용자 검토가 필요하다.
+- `UNKNOWN` 유형은 UI가 자동 확정하지 않으며 사용자가 유형을 선택하고 항목을 추가해야 적용할 수 있다.
+- 실제 로컬 모델·클라우드 LLM, Web Push, 완전한 오프라인 동기화, 자동 taxonomy migration, 노드 압축은 아직 연결하지 않는다.
+- 다음 안전한 순서는 owner-scoped tag/alias 후보 조회, field-level Fake cloud 계약과 실패 상태, async 분석 수명주기·관측성이다.

@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 type Props = {
   content: string;
   disabled: boolean;
+  submissionDisabled: boolean;
   submitting: boolean;
   rawOnly: boolean;
   prompt: string;
@@ -13,6 +14,7 @@ type Props = {
 export function MemoCapture({
   content,
   disabled,
+  submissionDisabled,
   submitting,
   rawOnly,
   prompt,
@@ -21,7 +23,7 @@ export function MemoCapture({
 }: Props) {
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    if (content.trim() && !disabled) onSubmit(content);
+    if (content.trim() && !disabled && !submissionDisabled) onSubmit(content);
   };
 
   return (
@@ -38,14 +40,14 @@ export function MemoCapture({
       />
       <div className="capture-actions">
         <span>{content.length.toLocaleString()} / 20,000</span>
-        <button type="submit" disabled={disabled || !content.trim()}>
+        <button type="submit" disabled={disabled || submissionDisabled || !content.trim()}>
           {submitting
             ? rawOnly
               ? '원문 저장 중…'
               : '저장하고 분석 중…'
             : rawOnly
               ? '원문만 저장'
-              : '원문 저장 후 Fake 분석'}
+              : '원문 저장 후 제안 분석'}
         </button>
       </div>
     </form>

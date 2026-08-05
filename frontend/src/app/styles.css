@@ -576,6 +576,16 @@ main {
   box-shadow: 0 20px 50px #17221c12;
 }
 
+.review-card h2 {
+  scroll-margin-block: 18px;
+}
+
+.review-card h2:focus-visible {
+  border-radius: 6px;
+  outline: 3px solid #e4b657;
+  outline-offset: 4px;
+}
+
 .review-note {
   border-left: 3px solid #e4b657;
   color: #57635b;
@@ -639,6 +649,43 @@ main {
   margin-left: 2px;
   padding: 0 5px;
   color: #34473c;
+}
+
+.review-items__empty {
+  margin: 0;
+  border-radius: 10px;
+  background: #f5f2e9;
+  color: #626d66;
+  padding: 12px;
+  line-height: 1.5;
+}
+
+.item-editor__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.item-remove-button {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid #dfbbb6;
+  border-radius: 9px;
+  background: #fff5f3;
+  color: #9c4339;
+  padding: 8px 10px;
+  font-weight: 700;
+}
+
+.review-items__actions {
+  display: grid;
+  gap: 7px;
+}
+
+.review-items__actions > span {
+  color: #68746c;
+  font-size: 0.72rem;
+  line-height: 1.45;
 }
 
 .item-editor__fields,
@@ -839,6 +886,15 @@ main {
   .task-date-editor {
     grid-template-columns: minmax(130px, 0.8fr) minmax(0, 2fr);
     align-items: end;
+  }
+
+  .item-remove-button {
+    width: auto;
+  }
+
+  .review-items__actions {
+    grid-template-columns: auto 1fr;
+    align-items: center;
   }
 
   .task-date-editor .field-help,

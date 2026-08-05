@@ -2,15 +2,19 @@ package local.personalmemo.analysis.infrastructure;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
-import org.junit.jupiter.api.Assumptions;
+import local.personalmemo.analysis.domain.AnalysisProposalValidator;
+import local.personalmemo.analysis.domain.DeterministicAmbiguityGate;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
@@ -18,16 +22,20 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 class KoreanMemoFixtureTest {
+  private static final Instant BASE_INSTANT = Instant.parse("2026-08-05T02:00:00Z");
+  private static final String TIME_ZONE = "Asia/Seoul";
 
-  private static final Set<String> FAKE_ANALYZER_CASES =
-      Set.of("clear-explicit-task", "clear-date-only-task");
   private final ObjectMapper json = new ObjectMapper();
+  private final FakeAnalyzer analyzer = new FakeAnalyzer(json);
+  private final DeterministicAmbiguityGate ambiguityGate = new DeterministicAmbiguityGate();
+  private final AnalysisProposalValidator validator = new AnalysisProposalValidator();
 
   @Test
   void fixtureIdsAreUniqueAndEveryCaseDeclaresItsExpectedRoute() throws Exception {
     JsonNode fixtures = fixtures();
     Set<String> ids = new HashSet<>();
 
+    assertThat(fixtures).hasSize(12);
     for (JsonNode fixture : fixtures) {
       assertThat(fixture.path("id").asText()).isNotBlank();
       assertThat(ids.add(fixture.path("id").asText())).isTrue();
@@ -40,37 +48,125 @@ class KoreanMemoFixtureTest {
   }
 
   @TestFactory
-  Stream<DynamicTest> clearCasesStayCompatibleWithFakeAnalyzer() throws Exception {
-    FakeAnalyzer analyzer = new FakeAnalyzer(json);
+  Stream<DynamicTest> everyKoreanMemoFixtureProducesAValidDeterministicProposal()
+      throws Exception {
     return StreamSupport.stream(fixtures().spliterator(), false)
-        .filter(fixture -> FAKE_ANALYZER_CASES.contains(fixture.path("id").asText()))
         .map(
             fixture ->
                 DynamicTest.dynamicTest(
-                    fixture.path("id").asText(),
-                    () -> {
-                      var proposal =
-                          analyzer.analyze(
-                              UUID.randomUUID(),
-                              1,
-                              fixture.path("content").asText(),
-                              Instant.parse("2026-08-05T02:00:00Z"),
-                              "Asia/Seoul");
-                      assertThat(proposal.path("schemaVersion").asText()).isEqualTo("1");
-                      assertThat(proposal.at("/typeCandidates/0/value").asText())
-                          .isEqualTo(fixture.at("/expectedTypes/0").asText());
-                      for (JsonNode signal : fixture.path("expectedSignals")) {
-                        assertThat(proposal.path("ambiguityReasons").toString())
-                            .contains(signal.asText());
-                      }
-                    }));
+                    fixture.path("id").asText(), () -> verifyFixture(fixture)));
+  }
+
+  private void verifyFixture(JsonNode fixture) {
+    UUID memoId = UUID.randomUUID();
+    String content = fixture.path("content").asText();
+    JsonNode proposal = analyzer.analyze(memoId, 3, content, BASE_INSTANT, TIME_ZONE);
+
+    validator.validate(proposal, memoId, 3, content.length());
+    assertThat(proposal.at("/providerMetadata/route").asText())
+        .isEqualTo(fixture.path("expectedRoute").asText());
+    assertThat(ambiguityGate.route(ambiguityGate.routingSignals(proposal)).name())
+        .isEqualTo(fixture.path("expectedRoute").asText());
+    assertThat(textValues(proposal.path("typeCandidates"), "value"))
+        .containsExactlyElementsOf(textValues(fixture.path("expectedTypes"), null));
+
+    List<String> actualSignals = textValues(proposal.path("ambiguityReasons"), null);
+    List<String> expectedSignals = textValues(fixture.path("expectedSignals"), null);
+    assertThat(actualSignals).containsExactlyInAnyOrderElementsOf(expectedSignals);
+    assertThat(proposal.path("itemCandidates")).hasSizeLessThanOrEqualTo(3);
+
+    verifyCaseSpecificContract(fixture.path("id").asText(), proposal);
+  }
+
+  private void verifyCaseSpecificContract(String id, JsonNode proposal) {
+    switch (id) {
+      case "clear-explicit-task" -> {
+        assertThat(proposal.at("/dateCandidates/0/value").asText())
+            .isEqualTo("2026-11-25T18:00:00+09:00");
+        assertThat(proposal.at("/dateCandidates/0/precision").asText())
+            .isEqualTo("EXACT_TIME");
+        assertExistingOsAlias(proposal);
+      }
+      case "clear-date-only-task" -> {
+        assertThat(proposal.at("/dateCandidates/0/value").asText()).isEqualTo("2026-11-25");
+        assertThat(proposal.at("/dateCandidates/0/surfaceText").asText()).isEqualTo("11.25");
+        assertExistingOsAlias(proposal);
+      }
+      case "relative-exact-task" ->
+          assertThat(proposal.at("/dateCandidates/0/value").asText())
+              .isEqualTo("2026-08-11");
+      case "imprecise-reference-task" -> {
+        assertThat(proposal.at("/dateCandidates/0/value").isNull()).isTrue();
+        assertThat(proposal.at("/dateCandidates/0/precision").asText())
+            .isEqualTo("APPROXIMATE");
+      }
+      case "information-only" -> assertNoTaskItems(proposal);
+      case "mixed-information-task" ->
+          assertThat(textValues(proposal.path("itemCandidates"), "kind"))
+              .containsExactly("INFORMATION", "TASK");
+      case "missing-action" -> {
+        assertThat(proposal.path("itemCandidates")).isEmpty();
+        assertThat(proposal.at("/typeCandidates/0/value").asText()).isEqualTo("UNKNOWN");
+      }
+      case "conflicting-dates" -> {
+        assertThat(proposal.path("dateCandidates")).hasSize(2);
+        assertThat(textValues(proposal.path("itemCandidates"), "kind"))
+            .containsExactly("TASK", "TASK");
+      }
+      case "new-topic" -> {
+        JsonNode tag = proposal.path("tagCandidates").get(0);
+        assertThat(tag.path("canonicalName").asText()).isEqualTo("유리패드");
+        assertThat(tag.path("existingTagId").isNull()).isTrue();
+        assertThat(tag.path("isNewProposal").asBoolean()).isTrue();
+      }
+      case "past-event" -> assertNoTaskItems(proposal);
+      case "prompt-injection" -> {
+        assertNoTaskItems(proposal);
+        assertThat(proposal.at("/providerMetadata/toolCalls").asInt()).isZero();
+      }
+      case "long-ambiguous-note" -> assertThat(proposal.path("itemCandidates")).hasSize(3);
+      default -> throw new AssertionError("Uncovered fixture: " + id);
+    }
+  }
+
+  private void assertExistingOsAlias(JsonNode proposal) {
+    JsonNode tag = proposal.path("tagCandidates").get(0);
+    assertThat(tag.path("existingTagId").asText())
+        .isEqualTo("10000000-0000-0000-0000-000000000001");
+    assertThat(tag.path("canonicalName").asText()).isEqualTo("운영체제");
+    assertThat(tag.path("matchedAlias").asText()).isEqualTo("OS");
+    assertThat(tag.path("isNewProposal").asBoolean()).isFalse();
+  }
+
+  private void assertNoTaskItems(JsonNode proposal) {
+    assertThat(textValues(proposal.path("itemCandidates"), "kind")).doesNotContain("TASK");
+  }
+
+  private List<String> textValues(JsonNode array, String field) {
+    List<String> values = new ArrayList<>();
+    for (JsonNode value : array) {
+      values.add(field == null ? value.asText() : value.path(field).asText());
+    }
+    return values;
   }
 
   private JsonNode fixtures() throws Exception {
-    Path path = Path.of("..", "fixtures", "korean-memo-cases.json");
-    Assumptions.assumeTrue(
-        Files.exists(path),
-        "Root fixtures are unavailable when only the backend Docker build context is mounted");
-    return json.readTree(Files.readString(path));
+    JsonNode bundled;
+    try (InputStream stream =
+        KoreanMemoFixtureTest.class.getResourceAsStream("/fixtures/korean-memo-cases.json")) {
+      if (stream == null) {
+        throw new IllegalStateException("Bundled Korean memo fixtures are missing.");
+      }
+      bundled = json.readTree(stream);
+    }
+
+    Path rootFixture = Path.of("..", "fixtures", "korean-memo-cases.json");
+    if (Files.exists(rootFixture)) {
+      JsonNode root = json.readTree(Files.readString(rootFixture));
+      assertThat(bundled)
+          .as("backend test fixture copy must stay identical to the root evaluation fixture")
+          .isEqualTo(root);
+    }
+    return bundled;
   }
 }

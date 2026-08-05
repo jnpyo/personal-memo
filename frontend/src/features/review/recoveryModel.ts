@@ -19,7 +19,7 @@ export function deriveRecoveryState(
   proposals: ProposalSummary[],
 ): RecoveryState {
   const pending = [...proposals].sort((left, right) => {
-    const byCreatedAt = right.createdAt.localeCompare(left.createdAt);
+    const byCreatedAt = Date.parse(right.createdAt) - Date.parse(left.createdAt);
     return byCreatedAt || right.proposalId.localeCompare(left.proposalId);
   })[0];
   const draft = pending ? createReviewDraft(pending.proposalId, pending.proposal) : null;

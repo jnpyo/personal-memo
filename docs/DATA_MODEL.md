@@ -1,6 +1,6 @@
-# Data model — implemented Milestone 1
+# Data model — implemented Milestone 1 + deterministic analysis slice
 
-이 문서는 현재 Flyway `V1`–`V6`가 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다.
+이 문서는 현재 Flyway `V1`–`V7`이 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다.
 
 ## Invariants
 
@@ -104,6 +104,10 @@ route MOCK | LOCAL | CLOUD | HYBRID
 status QUEUED | RUNNING | REVIEW_REQUIRED | POSTPONED | FAILED | STALE | APPLIED | REJECTED
 schema_version VARCHAR(16)
 analyzer_version VARCHAR(64)
+prompt_version VARCHAR(64)
+local_model_version VARCHAR(64)
+embedding_model_version VARCHAR(64)
+routing_policy_version VARCHAR(64)
 ambiguity_reasons JSONB
 created_at TIMESTAMPTZ
 completed_at TIMESTAMPTZ NULL
@@ -111,7 +115,7 @@ FK (memo_id, owner_id) -> memos(id, owner_id)
 FK (memo_id, memo_revision, owner_id) -> memo_revisions(memo_id, revision, owner_id)
 ```
 
-Milestone 1은 `MOCK` route를 사용한다. analyzer는 run이 참조하는 revision의 `client_recorded_at`과 `source_time_zone`을 입력으로 사용한다. memo가 수정되면 현재 revision보다 오래된 미적용 run을 `STALE`로 표시하며 application 단계에서도 revision을 다시 검사한다.
+현재 결정론적 analyzer는 run이 참조하는 revision의 `client_recorded_at`과 `source_time_zone`을 입력으로 사용한다. 서버가 소유하는 `analyzer_version`, `prompt_version`, `local_model_version`, `embedding_model_version`, `routing_policy_version`은 각각 비어 있지 않은 1–64자 값으로 run마다 저장된다. 현재 Fake 경로는 `fake-v2`, `none`, `none`, `none`, `field-policy-v1`을 사용한다. `routing_policy_version`은 점수 임계값과 구조적 신호 규칙의 버전을 보존하고, `ambiguity_reasons`는 cloud 처리 전 서버가 재구성한 최초 라우팅 원인을 보존한다. 모호성 gate가 local proposal로 충분하다고 판정하면 `LOCAL`, Fake cloud enrichment가 필요하면 `HYBRID`를 저장한다. `MOCK`·`CLOUD` 값은 후속 adapter와 이전 단계 호환을 위해 표현 가능하지만 현재 실행 경로에서는 사용하지 않는다. memo가 수정되면 현재 revision보다 오래된 미적용 run을 `STALE`로 표시하며 application 단계에서도 revision을 다시 검사한다.
 
 ### `analysis_proposals`
 
@@ -125,7 +129,7 @@ created_at TIMESTAMPTZ
 FK (analysis_run_id, owner_id) -> analysis_runs(id, owner_id)
 ```
 
-proposal은 review input일 뿐 canonical domain data가 아니다.
+proposal은 review input일 뿐 canonical domain data가 아니다. 직렬화한 proposal JSON은 최대 65,536 UTF-8 byte(64 KiB), 그 안의 `providerMetadata`는 최대 8,192 UTF-8 byte(8 KiB)다. `providerMetadata`에는 위 다섯 version과 0–100 범위의 정수 `toolCalls`가 필수이며, proposal이 주장하는 version은 서버가 해당 run에 저장하는 provenance와 정확히 일치해야 한다.
 
 ### `analysis_applications`
 

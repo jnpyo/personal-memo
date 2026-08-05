@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { DateCandidate, ItemKind, TagCandidate } from '../../shared/api/types';
 import {
+  addManualItem,
   changeItemDue,
   changeItemDueValue,
   changeItemKind,
@@ -11,6 +12,7 @@ import {
   isValidDue,
   isValidReviewDraft,
   ITEM_KINDS,
+  removeReviewItem,
   usableDateCandidates,
   type ReviewDraft,
 } from './reviewModel';
@@ -55,7 +57,35 @@ export function ProposalReview({
   onReject,
 }: Props) {
   const [newTag, setNewTag] = useState('');
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const representativeTypeRef = useRef<HTMLSelectElement>(null);
+  const itemTitleRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const addItemButtonRef = useRef<HTMLButtonElement>(null);
+  const pendingItemFocus = useRef<number | 'ADD_OR_TYPE' | null>(null);
   const dateCandidates = usableDateCandidates(review.proposal);
+
+  useEffect(() => {
+    const heading = headingRef.current;
+    if (!heading) return;
+    heading.focus({ preventScroll: true });
+    heading.scrollIntoView({ block: 'start', behavior: 'auto' });
+  }, [review.proposalId]);
+
+  useEffect(() => {
+    const pending = pendingItemFocus.current;
+    if (pending === null) return;
+
+    const addButton = addItemButtonRef.current;
+    const target =
+      pending === 'ADD_OR_TYPE'
+        ? review.selectedType !== null && addButton && !addButton.disabled
+          ? addButton
+          : representativeTypeRef.current
+        : itemTitleRefs.current[pending];
+    pendingItemFocus.current = null;
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView({ block: 'center', behavior: 'auto' });
+  }, [review.items, review.selectedType]);
 
   const removeTag = (index: number) => {
     onChange({ ...review, tags: review.tags.filter((_, candidateIndex) => candidateIndex !== index) });
@@ -80,7 +110,9 @@ export function ProposalReview({
   return (
     <section className="review-card" aria-labelledby="review-title">
       <span className="eyebrow">REVIEW REQUIRED</span>
-      <h2 id="review-title">AI 제안을 확인해 주세요</h2>
+      <h2 id="review-title" ref={headingRef} tabIndex={-1}>
+        AI 제안을 확인해 주세요
+      </h2>
       <p className="review-note">
         아래 내용은 아직 제안입니다. 승인하기 전에는 태그, 할 일, 관계가 생성되지 않습니다.
       </p>
@@ -99,23 +131,44 @@ export function ProposalReview({
         <label>
           대표 유형
           <select
-            value={review.selectedType}
+            ref={representativeTypeRef}
+            value={review.selectedType ?? ''}
             disabled={busy}
-            onChange={(event) =>
-              onChange(changeSelectedType(review, event.target.value as ItemKind))
-            }
+            aria-describedby={review.selectedType === null ? 'representative-type-help' : undefined}
+            onChange={(event) => {
+              if (event.target.value) {
+                onChange(changeSelectedType(review, event.target.value as ItemKind));
+              }
+            }}
           >
+            <option value="" disabled>
+              유형을 선택하세요
+            </option>
             {ITEM_KINDS.map((kind) => (
               <option key={kind} value={kind}>
                 {TYPE_LABEL[kind]}
               </option>
             ))}
           </select>
+          {review.selectedType === null && (
+            <span id="representative-type-help" className="field-help">
+              분석 결과가 유형을 확정하지 못했습니다. 승인할 유형을 직접 선택해 주세요.
+            </span>
+          )}
         </label>
       </div>
 
-      <fieldset className="review-items" disabled={busy}>
+      <fieldset
+        className="review-items"
+        disabled={busy}
+        aria-describedby="review-items-help"
+      >
         <legend>생성할 항목</legend>
+        {review.items.length === 0 && (
+          <p className="review-items__empty">
+            아직 생성할 항목이 없습니다. 대표 유형을 선택한 뒤 필요한 항목을 직접 추가해 주세요.
+          </p>
+        )}
         {review.items.map((item, index) => {
           const matchedCandidate = item.due
             ? dateCandidates.findIndex((candidate) => sameDate(candidate, item.due!))
@@ -131,6 +184,24 @@ export function ProposalReview({
           return (
             <fieldset className="item-editor" key={item.candidateId ?? `${item.kind}-${index}`}>
               <legend>항목 {index + 1}</legend>
+              <div className="item-editor__toolbar">
+                <button
+                  type="button"
+                  className="item-remove-button"
+                  aria-label={`항목 ${index + 1} 제거`}
+                  onClick={() => {
+                    const nextReview = removeReviewItem(review, index);
+                    if (nextReview === review) return;
+                    pendingItemFocus.current =
+                      nextReview.items.length === 0
+                        ? 'ADD_OR_TYPE'
+                        : Math.min(index, nextReview.items.length - 1);
+                    onChange(nextReview);
+                  }}
+                >
+                  항목 제거
+                </button>
+              </div>
               <div className="item-editor__fields">
                 <label>
                   유형
@@ -151,6 +222,9 @@ export function ProposalReview({
                 <label>
                   제목
                   <input
+                    ref={(element) => {
+                      itemTitleRefs.current[index] = element;
+                    }}
                     aria-label={`항목 ${index + 1} 제목`}
                     value={item.title}
                     maxLength={200}
@@ -235,6 +309,28 @@ export function ProposalReview({
             </fieldset>
           );
         })}
+        <div className="review-items__actions">
+          <button
+            ref={addItemButtonRef}
+            type="button"
+            className="secondary-button"
+            disabled={review.selectedType === null || review.items.length >= 3}
+            aria-describedby="review-items-help"
+            onClick={() => {
+              const nextReview = addManualItem(review);
+              if (nextReview === review) return;
+              pendingItemFocus.current = nextReview.items.length - 1;
+              onChange(nextReview);
+            }}
+          >
+            항목 직접 추가
+          </button>
+          <span id="review-items-help" aria-live="polite">
+            {review.selectedType === null
+              ? '대표 유형을 먼저 선택해 주세요.'
+              : `${review.items.length}/3개 항목`}
+          </span>
+        </div>
       </fieldset>
 
       <fieldset disabled={busy}>

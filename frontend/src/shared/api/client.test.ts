@@ -18,6 +18,22 @@ function okResponse(body: unknown = memo): Response {
   });
 }
 
+function validProposal() {
+  return {
+    schemaVersion: '1',
+    memoId: '8dd29246-4ec2-4e7f-bbf9-a3ff316acdd4',
+    memoRevision: 1,
+    suggestedTitle: { value: '운영체제 과제', confidence: 0.9, needsConfirmation: true },
+    typeCandidates: [{ value: 'TASK', score: 0.9 }],
+    dateCandidates: [],
+    tagCandidates: [],
+    itemCandidates: [],
+    relationCandidates: [],
+    ambiguityReasons: [],
+    providerMetadata: {},
+  };
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -112,5 +128,32 @@ describe('memo API client', () => {
       '/api/v1/analysis-proposals?status=POSTPONED&limit=1',
       { headers: { 'Content-Type': 'application/json' } },
     );
+  });
+
+  it('rejects unsupported proposal versions before they reach review state', async () => {
+    const fetchMock = vi.fn(async () =>
+      okResponse({ ...validProposal(), schemaVersion: '2' }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.proposal('proposal-1')).rejects.toMatchObject({
+      name: 'ProposalContractError',
+      field: 'schemaVersion',
+    });
+  });
+
+  it('rejects a proposal whose memo identity differs from the analysis run', async () => {
+    const fetchMock = vi.fn(async () => okResponse(validProposal()));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      api.proposal('proposal-1', {
+        memoId: '5a35efeb-bcf7-4f53-ab71-0fcaad547cf1',
+        memoRevision: 1,
+      }),
+    ).rejects.toMatchObject({
+      name: 'ProposalContractError',
+      field: 'memoId',
+    });
   });
 });

@@ -6,16 +6,33 @@ Turn unstructured memo text into a reviewable proposal while minimizing latency,
 
 The first implementation must support a mock analyzer. Real model selection comes after the domain flow and evaluation harness exist.
 
+## Current implementation status
+
+The repository now implements the model-free portion of Milestone 2:
+
+- a revision-context Korean date parser with explicit `UNKNOWN` fallback;
+- a versioned 12-case Korean memo fixture suite;
+- an enum-based ambiguity gate that routes to `LOCAL_REVIEW` or `CLOUD_ENRICH`;
+- `FakeAnalyzer` and a no-network, no-tool, mutation-free `FakeCloudAnalysisGateway`;
+- Draft 2020-12 contract, domain, and owner-reference validation before routing and again after enrichment;
+- server-side reconstruction of field-level routing signals instead of trusting only an analyzer summary;
+- server-owned analyzer, prompt, local-model, embedding-model, and routing-policy provenance for both `LOCAL` and `HYBRID` runs while every result remains `REVIEW_REQUIRED`;
+- required, bounded proposal metadata and UTF-8 payload limits before anything is persisted;
+- explicit user resolution of `UNKNOWN` types and partial item application.
+
+No real local model or cloud provider is connected. The roadmap's real-provider adapter remains deferred by the project decision until explicitly authorized.
+
 ## Pipeline boundaries
 
 ```text
 Raw memo
   → deterministic extraction
   → local classification and embedding
-  → ambiguity gate
+  → schema, domain, and owner-reference validation
+  → deterministic field-level ambiguity assessment
       → local proposal, or
       → cloud Agent enrichment
-  → schema and domain validation
+  → enriched proposal validation
   → user review
   → transactional application
 ```
@@ -102,16 +119,18 @@ Do not reduce all uncertainty to one LLM-provided confidence number. Evaluate fi
 
 ### Type ambiguity
 
-- low top-1 probability
-- small margin between top-1 and top-2
+- top-1 score below `0.70`
+- top-1/top-2 margin below `0.10`
 - conflict between type and extracted action/date signals
 
 ### Tag ambiguity
 
-- low best similarity
-- small gap between the first and second tag
+- best similarity below `0.75`
 - equally plausible tags with different meanings
 - no match, indicating a possible new topic
+
+Tags in one proposal are independently applicable, so two strong tags are not treated as a
+top-1/top-2 conflict merely because their scores are close.
 
 ### Date ambiguity
 
@@ -131,6 +150,23 @@ Do not reduce all uncertainty to one LLM-provided confidence number. Evaluate fi
 - object/date with no clear action
 - several actions mixed in one memo
 
+The current deterministic thresholds belong to routing policy `field-policy-v1`; changing a
+threshold or structural rule requires a new policy version. Runtime configuration and
+user-specific thresholds remain a later milestone.
+
+The server unions these derivable signals with the analyzer-declared `ambiguityReasons`. Nested
+date reasons must also appear in the proposal summary, and structural omissions such as a new tag,
+an unknown type, or an incomplete task cannot be hidden by clearing that summary. A proposal may
+show at most five date candidates; detecting more adds `CANDIDATE_LIMIT_EXCEEDED` before display
+truncation so the overflow never silently takes the local route.
+
+`analysis_runs.ambiguity_reasons` stores the immutable server assessment that caused routing.
+`analysis_proposals.proposal_json.ambiguityReasons` stores the final proposal reasons, which a
+future provider may resolve or refine. This separation preserves why a `HYBRID` run occurred.
+The provider-independent `CloudAnalysisRequest` also carries those authoritative reasons and the
+policy version alongside a defensive copy of the validated local proposal. It never grants a
+provider a canonical write tool or includes hidden raw memo text.
+
 ### Routing result
 
 ```text
@@ -148,7 +184,7 @@ Send only the context needed to resolve the flagged fields.
 
 ```json
 {
-  "memoId": "uuid",
+  "memoId": "61c6c3e8-846a-4472-a58a-321920001868",
   "memoRevision": 4,
   "content": "전에 교수님이 말한 거 다음 주쯤 올리기",
   "baseInstant": "2026-08-05T02:00:00Z",
@@ -210,12 +246,13 @@ The version-1 result should contain fields conceptually equivalent to:
       "value": "2026-08-11",
       "precision": "DATE_ONLY",
       "timeSpecified": false,
+      "confidence": 0.86,
       "ambiguityReasons": []
     }
   ],
   "tagCandidates": [
     {
-      "existingTagId": "uuid-or-null",
+      "existingTagId": "10000000-0000-0000-0000-000000000001",
       "canonicalName": "운영체제",
       "matchedAlias": "OS",
       "score": 0.92,
@@ -224,20 +261,29 @@ The version-1 result should contain fields conceptually equivalent to:
   ],
   "itemCandidates": [
     {
+      "candidateId": "item-1",
       "kind": "TASK",
       "title": "xv6 과제 제출",
       "sourceSpan": { "start": 0, "end": 18 },
       "action": "제출",
-      "object": "xv6 과제"
+      "object": "xv6 과제",
+      "confidence": 0.9
     }
   ],
   "relationCandidates": [],
   "ambiguityReasons": [],
-  "providerMetadata": {}
+  "providerMetadata": {
+    "analyzerVersion": "fake-v2",
+    "promptVersion": "none",
+    "localModelVersion": "none",
+    "embeddingModelVersion": "none",
+    "routingPolicyVersion": "field-policy-v1",
+    "toolCalls": 0
+  }
 }
 ```
 
-The server must validate this against both JSON Schema and domain rules. Unknown enum values and stale revisions are rejected.
+The server must validate this against both JSON Schema and domain rules. Unknown enum values and stale revisions are rejected. The five required version strings in `providerMetadata` contain 1–64 characters and must exactly match the server-owned analyzer and routing provenance; `toolCalls` is a required integer from 0 through 100. Provider-specific extra metadata is allowed only inside the metadata object. Before schema validation, the compact serialized proposal is capped at 65,536 UTF-8 bytes (64 KiB) and `providerMetadata` at 8,192 UTF-8 bytes (8 KiB).
 
 ## Application
 
@@ -291,4 +337,3 @@ Create a versioned dataset of rough Korean notes with expected:
 - escalation decision
 
 Track precision of high-confidence local routing separately from overall accuracy. The primary safety metric is the rate of wrong local decisions that were presented as unambiguous.
-

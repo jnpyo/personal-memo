@@ -36,7 +36,7 @@ export type AnalysisRun = {
 
 export type ScoredValue<T extends string = string> = {
   value: T;
-  score?: number;
+  score: number;
 };
 
 export type DatePrecision =
@@ -64,6 +64,7 @@ export type TagCandidate = {
 };
 
 export type ItemKind = 'TASK' | 'EVENT' | 'INFORMATION' | 'IDEA' | 'RECORD';
+export type SemanticType = ItemKind | 'UNKNOWN';
 
 export type ItemCandidate = {
   candidateId?: string;
@@ -75,22 +76,48 @@ export type ItemCandidate = {
   confidence?: number;
 };
 
+export type ProposalDateCandidate = DateCandidate & {
+  confidence: number;
+  ambiguityReasons: string[];
+};
+
+export type ProposalTagCandidate = TagCandidate & {
+  score: number;
+  isNewProposal: boolean;
+};
+
+export type ProposalItemCandidate = ItemCandidate & {
+  candidateId: string;
+  sourceSpan: { start: number; end: number } | null;
+  action: string | null;
+  object: string | null;
+  confidence: number;
+};
+
+export type RelationCandidate = {
+  sourceCandidateId: string;
+  targetType: 'MEMO' | 'TAG';
+  targetId: string;
+  relationType: 'RELATED_TO' | 'CONTINUES' | 'DEPENDS_ON' | 'REFERENCES';
+  score: number;
+};
+
 export type Proposal = {
-  schemaVersion?: string;
+  schemaVersion: '1';
   memoId: string;
   memoRevision: number;
   suggestedTitle: {
     value: string;
-    confidence?: number;
-    needsConfirmation?: boolean;
+    confidence: number;
+    needsConfirmation: boolean;
   };
-  typeCandidates: ScoredValue<ItemKind>[];
-  dateCandidates: DateCandidate[];
-  tagCandidates: TagCandidate[];
-  itemCandidates: ItemCandidate[];
-  relationCandidates?: unknown[];
-  ambiguityReasons?: string[];
-  providerMetadata?: Record<string, unknown>;
+  typeCandidates: ScoredValue<SemanticType>[];
+  dateCandidates: ProposalDateCandidate[];
+  tagCandidates: ProposalTagCandidate[];
+  itemCandidates: ProposalItemCandidate[];
+  relationCandidates: RelationCandidate[];
+  ambiguityReasons: string[];
+  providerMetadata: Record<string, unknown>;
 };
 
 export type SelectedTag = {

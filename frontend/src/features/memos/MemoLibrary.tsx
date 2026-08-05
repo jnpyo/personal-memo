@@ -200,7 +200,7 @@ export function MemoLibrary({
                       title={analysisBlocked ? '열려 있는 제안을 먼저 처리해 주세요.' : undefined}
                       onClick={() => onAnalyze(memo)}
                     >
-                      {pendingScope === `analyze:${memo.id}` ? '분석 중…' : '최신 revision Fake 분석'}
+                      {pendingScope === `analyze:${memo.id}` ? '분석 중…' : '최신 revision 제안 분석'}
                     </button>
                     <button
                       type="button"

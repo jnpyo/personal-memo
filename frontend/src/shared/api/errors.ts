@@ -1,3 +1,5 @@
+import { ProposalContractError } from './proposalDecoder';
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -17,6 +19,10 @@ type ErrorPayload = {
 };
 
 export function errorMessage(error: unknown): string {
+  if (error instanceof ProposalContractError) {
+    return '서버가 지원하지 않는 형식의 분석 제안을 반환했습니다. 원본 메모는 그대로 보존됩니다.';
+  }
+
   if (error instanceof ApiError) {
     if (error.code === 'STALE_MEMO_REVISION' || error.status === 409) {
       return '메모 상태가 다른 곳에서 변경되었습니다. 최신 목록을 불러온 뒤 다시 시도해 주세요.';
