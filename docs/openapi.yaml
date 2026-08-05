@@ -1,0 +1,730 @@
+openapi: 3.1.0
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+info:
+  title: Personal Memo API
+  version: 0.1.0
+  description: >-
+    Milestone 1의 AI-free vertical slice 계약입니다. 분석 결과는 제안이며,
+    canonical 태그와 할 일은 사용자 승인 endpoint를 통해서만 생성됩니다.
+servers:
+  - url: /api/v1
+tags:
+  - name: Health
+  - name: Memos
+  - name: Analysis
+  - name: Tasks
+  - name: Graph
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getApiHealth
+      summary: Check frontend-to-backend connectivity
+      responses:
+        "200":
+          description: API is reachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /memos:
+    post:
+      tags: [Memos]
+      operationId: createMemo
+      summary: Save the first immutable raw memo revision
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMemoRequest"
+      responses:
+        "201":
+          description: Memo and revision 1 were created.
+          headers:
+            Location:
+              description: URI of the created memo.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoView"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /memos/{memoId}:
+    parameters:
+      - $ref: "#/components/parameters/MemoId"
+    get:
+      tags: [Memos]
+      operationId: getMemo
+      summary: Read the current raw memo revision
+      responses:
+        "200":
+          description: Current memo view.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoView"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Memos]
+      operationId: updateMemo
+      summary: Append a new immutable raw memo revision
+      description: >-
+        expectedRevision provides optimistic concurrency. A successful content edit
+        increments currentRevision and marks older unapplied analysis runs STALE.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMemoRequest"
+      responses:
+        "200":
+          description: Updated current memo view.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoView"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /memos/{memoId}/analysis-runs:
+    parameters:
+      - $ref: "#/components/parameters/MemoId"
+    post:
+      tags: [Analysis]
+      operationId: startFakeAnalysis
+      summary: Create a reviewable Fake analysis proposal
+      description: This operation never creates canonical tags, tasks, or graph relations.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartAnalysisRequest"
+      responses:
+        "200":
+          description: Synchronous Fake analysis completed and requires review.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisRunView"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /analysis-proposals/{proposalId}:
+    parameters:
+      - $ref: "#/components/parameters/ProposalId"
+    get:
+      tags: [Analysis]
+      operationId: getAnalysisProposal
+      summary: Read an untrusted, non-canonical analysis proposal
+      responses:
+        "200":
+          description: Version 1 structured proposal.
+          content:
+            application/json:
+              schema:
+                $ref: ../contracts/analysis-proposal.schema.json
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /analysis-proposals/{proposalId}/apply:
+    parameters:
+      - $ref: "#/components/parameters/ProposalId"
+    post:
+      tags: [Analysis]
+      operationId: applyAnalysisProposal
+      summary: Apply only the user's reviewed selection
+      description: >-
+        Validates owner, current memo revision, tags, items, and due values, then
+        creates the application and all derived records in one transaction.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplyProposalRequest"
+      responses:
+        "200":
+          description: Reviewed selection was applied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationView"
+              examples:
+                applied:
+                  value:
+                    applicationId: 1b49505a-7615-4250-a82e-254525465baf
+                    status: APPLIED
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /analysis-proposals/{proposalId}/reject:
+    parameters:
+      - $ref: "#/components/parameters/ProposalId"
+    post:
+      tags: [Analysis]
+      operationId: rejectAnalysisProposal
+      summary: Reject a proposal without creating canonical data
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Proposal was rejected; raw memo remains unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewDispositionView"
+              examples:
+                rejected:
+                  value:
+                    proposalId: 6b41133d-e81a-4751-b4b0-623b8c794bf3
+                    status: REJECTED
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /analysis-proposals/{proposalId}/postpone:
+    parameters:
+      - $ref: "#/components/parameters/ProposalId"
+    post:
+      tags: [Analysis]
+      operationId: postponeAnalysisProposal
+      summary: Postpone a proposal without creating canonical data
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Proposal is marked POSTPONED and can be reviewed later.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewDispositionView"
+              examples:
+                postponed:
+                  value:
+                    proposalId: 6b41133d-e81a-4751-b4b0-623b8c794bf3
+                    status: POSTPONED
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /analysis-applications/{applicationId}/undo:
+    parameters:
+      - $ref: "#/components/parameters/ApplicationId"
+    post:
+      tags: [Analysis]
+      operationId: undoAnalysisApplication
+      summary: Remove derived records while preserving raw memo revisions
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Application is now UNDONE.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationView"
+              examples:
+                undone:
+                  value:
+                    applicationId: 1b49505a-7615-4250-a82e-254525465baf
+                    status: UNDONE
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /tasks:
+    get:
+      tags: [Tasks]
+      operationId: listTasks
+      summary: List confirmed task facets for the development owner
+      responses:
+        "200":
+          description: Tasks with derived overdue state.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TaskView"
+
+  /tasks/{taskId}:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    patch:
+      tags: [Tasks]
+      operationId: updateTaskStatus
+      summary: Change a task's persisted source status
+      description: OVERDUE is derived and cannot be written as a source status.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTaskRequest"
+      responses:
+        "200":
+          description: Task status result. updated is false when no source-state change was needed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskUpdateView"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /graph/home:
+    get:
+      tags: [Graph]
+      operationId: getGraphHome
+      summary: Project a bounded memo-tag graph from canonical data
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Requested node bound; the server clamps it to 1–100.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 100
+      responses:
+        "200":
+          description: Canonical memo/tag projection. System type remains node metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphProjection"
+
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        1–128 character retry identity. Replaying the same operation and request returns
+        the stored response; reusing the key for a different request returns 409.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    MemoId:
+      name: memoId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ProposalId:
+      name: proposalId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ApplicationId:
+      name: applicationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    NotFound:
+      description: The resource is absent or outside the current owner scope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Revision, proposal state, resource identity, or idempotency conflict.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    UnprocessableEntity:
+      description: JSON, header, bean, schema, or domain validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          const: UP
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [code, message, fieldErrors, correlationId]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        fieldErrors:
+          type: array
+          items:
+            $ref: "#/components/schemas/FieldError"
+        correlationId:
+          type: string
+          format: uuid
+    FieldError:
+      type: object
+      additionalProperties: false
+      required: [field, message]
+      properties:
+        field:
+          type: string
+        message:
+          type: string
+
+    CreateMemoRequest:
+      type: object
+      additionalProperties: false
+      required: [id, content, clientCreatedAt, timeZone]
+      properties:
+        id:
+          type: string
+          format: uuid
+        content:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        clientCreatedAt:
+          type: string
+          format: date-time
+        timeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          examples: [Asia/Seoul]
+    UpdateMemoRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, content]
+      properties:
+        expectedRevision:
+          type: integer
+          minimum: 1
+        content:
+          type: string
+          minLength: 1
+          maxLength: 20000
+    MemoView:
+      type: object
+      additionalProperties: false
+      required: [id, currentRevision, content, status, analysisState, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        currentRevision:
+          type: integer
+          minimum: 1
+        content:
+          type: string
+        status:
+          enum: [ACTIVE, TRASHED]
+        analysisState:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    StartAnalysisRequest:
+      type: object
+      additionalProperties: false
+      required: [memoRevision, policy]
+      properties:
+        memoRevision:
+          type: integer
+          minimum: 1
+        policy:
+          const: AUTO
+    AnalysisRunView:
+      type: object
+      additionalProperties: false
+      required: [id, memoId, memoRevision, status, proposalId]
+      properties:
+        id:
+          type: string
+          format: uuid
+        memoId:
+          type: string
+          format: uuid
+        memoRevision:
+          type: integer
+          minimum: 1
+        status:
+          const: REVIEW_REQUIRED
+        proposalId:
+          type: string
+          format: uuid
+
+    ItemKind:
+      enum: [TASK, EVENT, INFORMATION, IDEA, RECORD]
+    DatePrecision:
+      enum: [EXACT_TIME, DATE_ONLY, RELATIVE_EXACT, APPROXIMATE, UNKNOWN]
+    SelectedTag:
+      type: object
+      additionalProperties: false
+      properties:
+        existingTagId:
+          type: [string, "null"]
+          format: uuid
+        newCanonicalName:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 100
+      oneOf:
+        - required: [existingTagId]
+          properties:
+            existingTagId:
+              type: string
+              format: uuid
+            newCanonicalName:
+              type: "null"
+        - required: [newCanonicalName]
+          properties:
+            existingTagId:
+              type: "null"
+            newCanonicalName:
+              type: string
+              minLength: 1
+              maxLength: 100
+    DueSelection:
+      type: object
+      additionalProperties: false
+      required: [surfaceText, value, precision, timeZone, timeSpecified]
+      description: >-
+        DATE_ONLY uses an ISO date with timeSpecified=false. EXACT_TIME and
+        RELATIVE_EXACT use an offset timestamp with timeSpecified=true.
+        APPROXIMATE and UNKNOWN require a null value and are never coerced to an instant.
+      properties:
+        surfaceText:
+          type: string
+          minLength: 1
+          maxLength: 100
+        value:
+          type: [string, "null"]
+          maxLength: 100
+        precision:
+          $ref: "#/components/schemas/DatePrecision"
+        timeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+        timeSpecified:
+          type: boolean
+    ApplyItem:
+      type: object
+      additionalProperties: false
+      required: [kind, title]
+      properties:
+        kind:
+          $ref: "#/components/schemas/ItemKind"
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        due:
+          oneOf:
+            - $ref: "#/components/schemas/DueSelection"
+            - type: "null"
+    ApplyProposalRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedMemoRevision, selectedType, title, selectedTags, items]
+      properties:
+        expectedMemoRevision:
+          type: integer
+          minimum: 1
+        selectedType:
+          $ref: "#/components/schemas/ItemKind"
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        selectedTags:
+          type: array
+          maxItems: 10
+          items:
+            $ref: "#/components/schemas/SelectedTag"
+        items:
+          type: array
+          minItems: 1
+          maxItems: 3
+          items:
+            $ref: "#/components/schemas/ApplyItem"
+    ApplicationView:
+      type: object
+      additionalProperties: false
+      required: [applicationId, status]
+      properties:
+        applicationId:
+          type: string
+          format: uuid
+        status:
+          enum: [APPLIED, UNDONE]
+    ReviewDispositionView:
+      type: object
+      additionalProperties: false
+      required: [proposalId, status]
+      properties:
+        proposalId:
+          type: string
+          format: uuid
+        status:
+          enum: [REJECTED, POSTPONED]
+
+    TaskStatus:
+      enum: [TODO, DONE, CANCELLED]
+    TaskView:
+      type: object
+      additionalProperties: false
+      required: [id, title, status, dueAt, dueDate, overdue]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+        dueAt:
+          type: [string, "null"]
+          format: date-time
+        dueDate:
+          type: [string, "null"]
+          format: date
+        overdue:
+          type: boolean
+          readOnly: true
+          description: Derived from TODO, the relevant due representation, now, and source time zone.
+    UpdateTaskRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+    TaskUpdateView:
+      type: object
+      additionalProperties: false
+      required: [id, status, updated]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+        updated:
+          type: boolean
+
+    GraphNode:
+      type: object
+      additionalProperties: false
+      required: [id, kind, label]
+      properties:
+        id:
+          type: string
+        kind:
+          enum: [MEMO, TAG]
+        label:
+          type: string
+        memoType:
+          $ref: "#/components/schemas/ItemKind"
+        taskState:
+          enum: [NONE, TODO, DONE, CANCELLED]
+        overdue:
+          type: boolean
+          readOnly: true
+    GraphEdge:
+      type: object
+      additionalProperties: false
+      required: [id, source, target, kind]
+      properties:
+        id:
+          type: string
+        source:
+          type: string
+        target:
+          type: string
+        kind:
+          const: MEMO_TAG
+    GraphProjection:
+      type: object
+      additionalProperties: false
+      required: [nodes, edges, truncated, projectionVersion]
+      properties:
+        nodes:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/GraphNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphEdge"
+        truncated:
+          type: boolean
+        projectionVersion:
+          type: string
+          format: uuid

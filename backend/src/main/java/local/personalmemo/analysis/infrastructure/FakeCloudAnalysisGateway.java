@@ -1,3 +1,13 @@
 package local.personalmemo.analysis.infrastructure;
-import tools.jackson.databind.node.ObjectNode; import local.personalmemo.analysis.domain.CloudAnalysisGateway; import org.springframework.stereotype.Component;
-@Component public class FakeCloudAnalysisGateway implements CloudAnalysisGateway { public ObjectNode enrich(ObjectNode p){return p.deepCopy();} }
+
+import local.personalmemo.analysis.domain.CloudAnalysisGateway;
+import org.springframework.stereotype.Component;
+import tools.jackson.databind.node.ObjectNode;
+
+@Component
+public class FakeCloudAnalysisGateway implements CloudAnalysisGateway {
+  @Override
+  public ObjectNode enrich(ObjectNode validatedLocalProposal) {
+    return validatedLocalProposal.deepCopy();
+  }
+}

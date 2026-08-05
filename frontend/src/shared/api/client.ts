@@ -1,3 +1,98 @@
-export type Proposal={memoId:string;memoRevision:number;suggestedTitle:{value:string};typeCandidates:{value:string}[];dateCandidates:{surfaceText:string;value:string;precision:string;timeSpecified:boolean}[];tagCandidates:{existingTagId:string|null;canonicalName:string;matchedAlias:string|null}[];itemCandidates:{kind:string;title:string}[]};
-const json=async<T>(url:string,init?:RequestInit):Promise<T>=>{const r=await fetch(url,{...init,headers:{'Content-Type':'application/json',...(init?.headers??{})}});if(!r.ok)throw await r.json();return r.json()};
-export const api={createMemo:(content:string)=>json<any>('/api/v1/memos',{method:'POST',headers:{'Idempotency-Key':crypto.randomUUID()},body:JSON.stringify({id:crypto.randomUUID(),content,clientCreatedAt:new Date().toISOString(),timeZone:'Asia/Seoul'})}),analyze:(id:string,revision:number)=>json<any>(`/api/v1/memos/${id}/analysis-runs`,{method:'POST',headers:{'Idempotency-Key':crypto.randomUUID()},body:JSON.stringify({memoRevision:revision,policy:'AUTO'})}),proposal:(id:string)=>json<Proposal>(`/api/v1/analysis-proposals/${id}`),apply:(id:string,p:Proposal,title:string,tags:Proposal['tagCandidates'])=>json<any>(`/api/v1/analysis-proposals/${id}/apply`,{method:'POST',headers:{'Idempotency-Key':crypto.randomUUID()},body:JSON.stringify({expectedMemoRevision:p.memoRevision,selectedType:'TASK',title,selectedTags:tags.map(t=>({existingTagId:t.existingTagId,newCanonicalName:t.existingTagId?null:t.canonicalName})),items:p.itemCandidates.map(i=>({kind:i.kind,title,due:p.dateCandidates[0]?{...p.dateCandidates[0],timeZone:'Asia/Seoul'}:null}))})}),undo:(id:string)=>json<any>(`/api/v1/analysis-applications/${id}/undo`,{method:'POST',headers:{'Idempotency-Key':crypto.randomUUID()}}),tasks:()=>json<any[]>('/api/v1/tasks'),graph:()=>json<any>('/api/v1/graph/home?limit=100')};
+import { toApiError } from './errors';
+import type {
+  AnalysisRun,
+  ApplicationResult,
+  ApplyProposalRequest,
+  GraphProjection,
+  MemoView,
+  Proposal,
+  ReviewDispositionResult,
+  Task,
+  TaskStatus,
+} from './types';
+
+const JSON_HEADERS = { 'Content-Type': 'application/json' };
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    ...init,
+    headers: { ...JSON_HEADERS, ...init?.headers },
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+export const api = {
+  health: () => request<{ status: string }>('/api/v1/health'),
+
+  createMemo: (input: {
+    id: string;
+    content: string;
+    clientCreatedAt: string;
+    timeZone: string;
+    idempotencyKey: string;
+  }) =>
+    request<MemoView>('/api/v1/memos', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': input.idempotencyKey },
+      body: JSON.stringify({
+        id: input.id,
+        content: input.content,
+        clientCreatedAt: input.clientCreatedAt,
+        timeZone: input.timeZone,
+      }),
+    }),
+
+  analyze: (memoId: string, memoRevision: number, idempotencyKey: string) =>
+    request<AnalysisRun>(`/api/v1/memos/${memoId}/analysis-runs`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ memoRevision, policy: 'AUTO' }),
+    }),
+
+  proposal: (proposalId: string) =>
+    request<Proposal>(`/api/v1/analysis-proposals/${proposalId}`),
+
+  apply: (proposalId: string, body: ApplyProposalRequest, idempotencyKey: string) =>
+    request<ApplicationResult>(`/api/v1/analysis-proposals/${proposalId}/apply`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify(body),
+    }),
+
+  rejectProposal: (proposalId: string, idempotencyKey: string) =>
+    request<ReviewDispositionResult>(`/api/v1/analysis-proposals/${proposalId}/reject`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+
+  postponeProposal: (proposalId: string, idempotencyKey: string) =>
+    request<ReviewDispositionResult>(`/api/v1/analysis-proposals/${proposalId}/postpone`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+
+  undo: (applicationId: string, idempotencyKey: string) =>
+    request<ApplicationResult>(`/api/v1/analysis-applications/${applicationId}/undo`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+
+  tasks: () => request<Task[]>('/api/v1/tasks'),
+
+  updateTask: (taskId: string, status: TaskStatus, idempotencyKey: string) =>
+    request<{ id: string; status: TaskStatus; updated: boolean }>(`/api/v1/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ status }),
+    }),
+
+  graph: (limit = 100) =>
+    request<GraphProjection>(`/api/v1/graph/home?limit=${Math.min(Math.max(limit, 1), 100)}`),
+};
+
+export type { Proposal } from './types';

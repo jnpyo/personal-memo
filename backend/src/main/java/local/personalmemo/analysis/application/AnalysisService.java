@@ -1,16 +1,370 @@
 package local.personalmemo.analysis.application;
-import tools.jackson.databind.*; import tools.jackson.databind.node.ObjectNode; import java.nio.charset.StandardCharsets; import java.security.*; import java.sql.Timestamp; import java.time.*; import java.util.*;
-import local.personalmemo.analysis.api.AnalysisDtos.*; import local.personalmemo.analysis.domain.LocalAnalyzer; import local.personalmemo.common.DevIdentity; import local.personalmemo.memo.application.MemoService;
-import org.springframework.jdbc.core.simple.JdbcClient; import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
-@Service public class AnalysisService {
- private final JdbcClient db; private final DevIdentity identity; private final MemoService memos; private final LocalAnalyzer analyzer; private final ObjectMapper json;
- public AnalysisService(JdbcClient d,DevIdentity i,MemoService m,LocalAnalyzer a,ObjectMapper j){db=d;identity=i;memos=m;analyzer=a;json=j;}
- @Transactional public RunView start(UUID memoId,String key,Start req){var memo=memos.get(memoId);if(memo.currentRevision()!=req.memoRevision())throw new IllegalArgumentException("STALE_MEMO_REVISION");var run=UUID.randomUUID();var proposal=UUID.randomUUID();var instant=Instant.now();var now=Timestamp.from(instant);ObjectNode p=analyzer.analyze(memoId,req.memoRevision(),memo.content(),instant,"Asia/Seoul");db.sql("insert into analysis_runs(id,owner_id,memo_id,memo_revision,route,status,schema_version,analyzer_version,ambiguity_reasons,created_at,completed_at) values(:id,:o,:m,:r,'MOCK','REVIEW_REQUIRED','1','fake-v1',cast(:a as jsonb),:n,:n)").param("id",run).param("o",identity.ownerId()).param("m",memoId).param("r",req.memoRevision()).param("a",p.get("ambiguityReasons").toString()).param("n",now).update();db.sql("insert into analysis_proposals values(:id,:r,cast(:p as jsonb),:h,:n)").param("id",proposal).param("r",run).param("p",p.toString()).param("h",hash(p.toString())).param("n",now).update();return new RunView(run,memoId,req.memoRevision(),"REVIEW_REQUIRED",proposal);}
- public JsonNode proposal(UUID id){return db.sql("select p.proposal_json::text from analysis_proposals p join analysis_runs r on r.id=p.analysis_run_id where p.id=:id and r.owner_id=:o").param("id",id).param("o",identity.ownerId()).query(String.class).optional().map(this::tree).orElseThrow();}
- @Transactional public Map<String,Object> apply(UUID proposalId,String key,Apply req){var existing=db.sql("select id from analysis_applications where owner_id=:o and idempotency_key=:k").param("o",identity.ownerId()).param("k",key).query(UUID.class).optional();if(existing.isPresent())return result(existing.get());var row=db.sql("select r.memo_id,r.memo_revision,r.status from analysis_proposals p join analysis_runs r on r.id=p.analysis_run_id where p.id=:p and r.owner_id=:o for update").param("p",proposalId).param("o",identity.ownerId()).query((rs,n)->new Object[]{UUID.fromString(rs.getString(1)),rs.getInt(2),rs.getString(3)}).single();UUID memoId=(UUID)row[0];int rev=(int)row[1];if(rev!=req.expectedMemoRevision()||memos.get(memoId).currentRevision()!=rev||"STALE".equals(row[2]))throw new IllegalArgumentException("STALE_MEMO_REVISION");UUID app=UUID.randomUUID();var now=Timestamp.from(Instant.now());db.sql("insert into analysis_applications values(:id,:o,:p,:m,:r,:k,'APPLIED',cast(:s as jsonb),:n,null)").param("id",app).param("o",identity.ownerId()).param("p",proposalId).param("m",memoId).param("r",rev).param("k",key).param("s",write(req)).param("n",now).update();for(Item it:req.items()){UUID item=UUID.randomUUID();db.sql("insert into memo_items(id,owner_id,memo_id,memo_revision,application_id,kind,title,created_at) values(:id,:o,:m,:r,:a,:k,:t,:n)").param("id",item).param("o",identity.ownerId()).param("m",memoId).param("r",rev).param("a",app).param("k",it.kind()).param("t",it.title()).param("n",now).update();if("TASK".equals(it.kind())){Timestamp due=null;if(it.due()!=null&&it.due().value()!=null){var date=LocalDate.parse(it.due().value());due=Timestamp.from(date.plusDays(1).atStartOfDay(ZoneId.of(it.due().timeZone())).toInstant());}db.sql("insert into task_details(memo_item_id,status,due_at_utc,date_surface_text,date_precision,source_time_zone,time_was_explicit) values(:i,'TODO',:d,:s,:p,:z,:e)").param("i",item).param("d",due).param("s",it.due()==null?null:it.due().surfaceText()).param("p",it.due()==null?null:it.due().precision()).param("z",it.due()==null?null:it.due().timeZone()).param("e",it.due()!=null&&it.due().timeSpecified()).update();}for(Tag t:req.selectedTags()){UUID tag=t.existingTagId();if(tag==null){tag=UUID.randomUUID();String norm=t.newCanonicalName().strip().toLowerCase(Locale.ROOT);db.sql("insert into tags values(:id,:o,:n,:x,'ACTIVE',:at,:at,0)").param("id",tag).param("o",identity.ownerId()).param("n",t.newCanonicalName().strip()).param("x",norm).param("at",now).update();}db.sql("insert into item_tags values(:i,:t,:a,'USER',null,:n)").param("i",item).param("t",tag).param("a",app).param("n",now).update();}}
- db.sql("update analysis_runs set status='APPLIED' where id=(select analysis_run_id from analysis_proposals where id=:p)").param("p",proposalId).update();return result(app);}
- @Transactional public Map<String,Object> undo(UUID app,String key){int changed=db.sql("update analysis_applications set status='UNDONE',undone_at=:n where id=:a and owner_id=:o and status='APPLIED'").param("n",Timestamp.from(Instant.now())).param("a",app).param("o",identity.ownerId()).update();if(changed>0){db.sql("delete from item_tags where application_id=:a").param("a",app).update();db.sql("delete from task_details where memo_item_id in(select id from memo_items where application_id=:a)").param("a",app).update();db.sql("delete from memo_items where application_id=:a").param("a",app).update();}return Map.of("applicationId",app,"status","UNDONE");}
- private Map<String,Object> result(UUID app){return Map.of("applicationId",app,"status",db.sql("select status from analysis_applications where id=:a and owner_id=:o").param("a",app).param("o",identity.ownerId()).query(String.class).single());}
- private JsonNode tree(String s){try{return json.readTree(s);}catch(Exception e){throw new IllegalStateException(e);}} private String write(Object o){try{return json.writeValueAsString(o);}catch(Exception e){throw new IllegalStateException(e);}} private static String hash(String s){try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8)));}catch(Exception e){throw new IllegalStateException(e);}}
-}
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.Optional;
+import java.util.UUID;
+import local.personalmemo.analysis.api.AnalysisDtos.ReviewDispositionView;
+import local.personalmemo.analysis.api.AnalysisDtos.RunView;
+import local.personalmemo.analysis.api.AnalysisDtos.Start;
+import local.personalmemo.analysis.domain.AnalysisProposalValidator;
+import local.personalmemo.analysis.domain.LocalAnalyzer;
+import local.personalmemo.common.DevIdentity;
+import local.personalmemo.common.error.DomainException;
+import local.personalmemo.common.idempotency.IdempotencyService;
+import local.personalmemo.common.security.Hashing;
+import local.personalmemo.memo.application.MemoService;
+import local.personalmemo.memo.domain.MemoSnapshot;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
+
+@Service
+public class AnalysisService {
+  private static final String START_OPERATION = "ANALYSIS_START";
+  private static final String REJECT_OPERATION = "ANALYSIS_REJECT";
+  private static final String POSTPONE_OPERATION = "ANALYSIS_POSTPONE";
+
+  private final JdbcClient db;
+  private final DevIdentity identity;
+  private final MemoService memos;
+  private final LocalAnalyzer analyzer;
+  private final AnalysisProposalValidator proposalValidator;
+  private final IdempotencyService idempotency;
+  private final ObjectMapper json;
+
+  public AnalysisService(
+      JdbcClient db,
+      DevIdentity identity,
+      MemoService memos,
+      LocalAnalyzer analyzer,
+      AnalysisProposalValidator proposalValidator,
+      IdempotencyService idempotency,
+      ObjectMapper json) {
+    this.db = db;
+    this.identity = identity;
+    this.memos = memos;
+    this.analyzer = analyzer;
+    this.proposalValidator = proposalValidator;
+    this.idempotency = idempotency;
+    this.json = json;
+  }
+
+  @Transactional
+  public RunView start(UUID memoId, String key, Start request) {
+    String requestHash = idempotency.hashRequest(new StartRequest(memoId, request));
+    Optional<IdempotencyService.StoredResult> replay =
+        idempotency.find(START_OPERATION, key, requestHash);
+    if (replay.isPresent()) {
+      return idempotency.convert(replay.get().response(), RunView.class);
+    }
+
+    MemoSnapshot memo = memos.getCurrentForUpdate(memoId);
+    requireActiveCurrentRevision(memo, request.memoRevision());
+
+    UUID runId = UUID.randomUUID();
+    UUID proposalId = UUID.randomUUID();
+    Instant now = Instant.now();
+    String timeZone = ownerTimeZone();
+    ObjectNode proposal =
+        analyzer.analyze(memoId, request.memoRevision(), memo.content(), now, timeZone);
+    proposalValidator.validate(proposal, memoId, request.memoRevision(), memo.content().length());
+    validateProposalReferences(proposal);
+
+    Timestamp timestamp = Timestamp.from(now);
+    db.sql(
+            """
+            insert into analysis_runs(
+              id,
+              owner_id,
+              memo_id,
+              memo_revision,
+              route,
+              status,
+              schema_version,
+              analyzer_version,
+              ambiguity_reasons,
+              created_at,
+              completed_at
+            ) values (
+              :runId,
+              :ownerId,
+              :memoId,
+              :memoRevision,
+              'MOCK',
+              'REVIEW_REQUIRED',
+              '1',
+              'fake-v1',
+              cast(:ambiguityReasons as jsonb),
+              :now,
+              :now
+            )
+            """)
+        .param("runId", runId)
+        .param("ownerId", identity.ownerId())
+        .param("memoId", memoId)
+        .param("memoRevision", request.memoRevision())
+        .param("ambiguityReasons", proposal.path("ambiguityReasons").toString())
+        .param("now", timestamp)
+        .update();
+    db.sql(
+            """
+            insert into analysis_proposals(
+              id, analysis_run_id, proposal_json, proposal_hash, created_at
+            ) values (
+              :proposalId,
+              :runId,
+              cast(:proposalJson as jsonb),
+              :proposalHash,
+              :now
+            )
+            """)
+        .param("proposalId", proposalId)
+        .param("runId", runId)
+        .param("proposalJson", proposal.toString())
+        .param("proposalHash", Hashing.sha256(proposal.toString()))
+        .param("now", timestamp)
+        .update();
+
+    RunView response =
+        new RunView(runId, memoId, request.memoRevision(), "REVIEW_REQUIRED", proposalId);
+    idempotency.store(START_OPERATION, key, requestHash, runId, response);
+    return response;
+  }
+
+  @Transactional(readOnly = true)
+  public JsonNode proposal(UUID proposalId) {
+    String proposalJson =
+        db.sql(
+                """
+                select p.proposal_json::text
+                  from analysis_proposals p
+                  join analysis_runs r on r.id = p.analysis_run_id
+                 where p.id = :proposalId
+                   and r.owner_id = :ownerId
+                """)
+            .param("proposalId", proposalId)
+            .param("ownerId", identity.ownerId())
+            .query(String.class)
+            .optional()
+            .orElseThrow(() -> DomainException.notFound("Analysis proposal"));
+    return parse(proposalJson);
+  }
+
+  @Transactional
+  public ReviewDispositionView reject(UUID proposalId, String key) {
+    return reviewDisposition(proposalId, key, REJECT_OPERATION, true);
+  }
+
+  @Transactional
+  public ReviewDispositionView postpone(UUID proposalId, String key) {
+    return reviewDisposition(proposalId, key, POSTPONE_OPERATION, false);
+  }
+
+  private ReviewDispositionView reviewDisposition(
+      UUID proposalId, String key, String operation, boolean reject) {
+    String requestHash = idempotency.hashRequest(new ProposalRequest(proposalId));
+    Optional<IdempotencyService.StoredResult> replay =
+        idempotency.find(operation, key, requestHash);
+    if (replay.isPresent()) {
+      return idempotency.convert(replay.get().response(), ReviewDispositionView.class);
+    }
+
+    ProposalRun observedRun = findProposalRun(proposalId, false);
+    MemoSnapshot memo = memos.getCurrentForUpdate(observedRun.memoId());
+    ProposalRun run = findProposalRun(proposalId, true);
+    requireSameProposalIdentity(observedRun, run);
+    requireActiveCurrentRevision(memo, run.memoRevision());
+    if ("STALE".equals(run.status())) {
+      throw staleRevision();
+    }
+
+    String status;
+    if (reject) {
+      if (!SetLike.REJECTABLE.contains(run.status())) {
+        throw DomainException.conflict(
+            "PROPOSAL_NOT_REVIEWABLE", "The analysis proposal can no longer be rejected.");
+      }
+      status = "REJECTED";
+      if (!"REJECTED".equals(run.status())) {
+        db.sql(
+                """
+                update analysis_runs
+                   set status = 'REJECTED'
+                 where id = :runId
+                   and owner_id = :ownerId
+                """)
+            .param("runId", run.runId())
+            .param("ownerId", identity.ownerId())
+            .update();
+      }
+    } else {
+      if (!SetLike.POSTPONABLE.contains(run.status())) {
+        throw DomainException.conflict(
+            "PROPOSAL_NOT_REVIEWABLE", "Only a review-required proposal can be postponed.");
+      }
+      status = "POSTPONED";
+      if (!"POSTPONED".equals(run.status())) {
+        db.sql(
+                """
+                update analysis_runs
+                   set status = 'POSTPONED'
+                 where id = :runId
+                   and owner_id = :ownerId
+                """)
+            .param("runId", run.runId())
+            .param("ownerId", identity.ownerId())
+            .update();
+      }
+    }
+
+    ReviewDispositionView response = new ReviewDispositionView(proposalId, status);
+    idempotency.store(operation, key, requestHash, proposalId, response);
+    return response;
+  }
+
+  private ProposalRun findProposalRun(UUID proposalId, boolean forUpdate) {
+    String lockingClause = forUpdate ? " for update of p, r" : "";
+    return db.sql(
+            """
+            select r.id as run_id,
+                   r.memo_id,
+                   r.memo_revision,
+                   r.status
+              from analysis_proposals p
+              join analysis_runs r on r.id = p.analysis_run_id
+             where p.id = :proposalId
+               and r.owner_id = :ownerId
+            """
+                + lockingClause)
+        .param("proposalId", proposalId)
+        .param("ownerId", identity.ownerId())
+        .query(this::mapProposalRun)
+        .optional()
+        .orElseThrow(() -> DomainException.notFound("Analysis proposal"));
+  }
+
+  private void requireSameProposalIdentity(ProposalRun observed, ProposalRun locked) {
+    if (!observed.runId().equals(locked.runId())
+        || !observed.memoId().equals(locked.memoId())
+        || observed.memoRevision() != locked.memoRevision()) {
+      throw DomainException.conflict(
+          "PROPOSAL_CHANGED", "The analysis proposal changed while it was being reviewed.");
+    }
+  }
+
+  private ProposalRun mapProposalRun(ResultSet resultSet, int rowNumber) throws SQLException {
+    return new ProposalRun(
+        resultSet.getObject("run_id", UUID.class),
+        resultSet.getObject("memo_id", UUID.class),
+        resultSet.getInt("memo_revision"),
+        resultSet.getString("status"));
+  }
+
+  private void validateProposalReferences(JsonNode proposal) {
+    for (JsonNode tag : proposal.path("tagCandidates")) {
+      if (tag.path("existingTagId").isTextual()) {
+        requireOwnedActiveTag(UUID.fromString(tag.path("existingTagId").asText()));
+      }
+    }
+    for (JsonNode relation : proposal.path("relationCandidates")) {
+      UUID targetId = UUID.fromString(relation.path("targetId").asText());
+      if ("TAG".equals(relation.path("targetType").asText())) {
+        requireOwnedActiveTag(targetId);
+      } else {
+        boolean exists =
+            db.sql(
+                    """
+                    select exists(
+                      select 1
+                        from memos
+                       where id = :memoId
+                         and owner_id = :ownerId
+                         and status = 'ACTIVE'
+                    )
+                    """)
+                .param("memoId", targetId)
+                .param("ownerId", identity.ownerId())
+                .query(Boolean.class)
+                .single();
+        if (!exists) {
+          throw DomainException.invalid(
+              "INVALID_ANALYSIS_PROPOSAL",
+              "A proposed relation references an unavailable memo.");
+        }
+      }
+    }
+  }
+
+  private void requireOwnedActiveTag(UUID tagId) {
+    boolean exists =
+        db.sql(
+                """
+                select exists(
+                  select 1
+                    from tags
+                   where id = :tagId
+                     and owner_id = :ownerId
+                     and state = 'ACTIVE'
+                )
+                """)
+            .param("tagId", tagId)
+            .param("ownerId", identity.ownerId())
+            .query(Boolean.class)
+            .single();
+    if (!exists) {
+      throw DomainException.invalid(
+          "INVALID_ANALYSIS_PROPOSAL", "A proposed tag is not available to this owner.");
+    }
+  }
+
+  private String ownerTimeZone() {
+    return db.sql("select time_zone from user_settings where user_id = :ownerId")
+        .param("ownerId", identity.ownerId())
+        .query(String.class)
+        .optional()
+        .orElseThrow(() -> DomainException.notFound("User settings"));
+  }
+
+  private void requireActiveCurrentRevision(MemoSnapshot memo, int expectedRevision) {
+    if (!memo.isActive()) {
+      throw DomainException.conflict("MEMO_NOT_ACTIVE", "The memo is not active.");
+    }
+    if (memo.currentRevision() != expectedRevision) {
+      throw staleRevision();
+    }
+  }
+
+  private DomainException staleRevision() {
+    return DomainException.conflict(
+        "STALE_MEMO_REVISION", "The memo changed after this analysis was requested.");
+  }
+
+  private JsonNode parse(String value) {
+    try {
+      return json.readTree(value);
+    } catch (Exception exception) {
+      throw new IllegalStateException("Could not parse a validated analysis proposal.", exception);
+    }
+  }
+
+  private record StartRequest(UUID memoId, Start request) {}
+
+  private record ProposalRequest(UUID proposalId) {}
+
+  private record ProposalRun(UUID runId, UUID memoId, int memoRevision, String status) {}
+
+  private static final class SetLike {
+    private static final java.util.Set<String> REJECTABLE =
+        java.util.Set.of("REVIEW_REQUIRED", "POSTPONED", "REJECTED");
+    private static final java.util.Set<String> POSTPONABLE =
+        java.util.Set.of("REVIEW_REQUIRED", "POSTPONED");
+
+    private SetLike() {}
+  }
+}

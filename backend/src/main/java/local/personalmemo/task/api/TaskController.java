@@ -1,6 +1,36 @@
 package local.personalmemo.task.api;
-import java.sql.Timestamp; import java.time.Instant; import java.util.*; import local.personalmemo.common.DevIdentity; import org.springframework.jdbc.core.simple.JdbcClient; import org.springframework.web.bind.annotation.*;
-@RestController @RequestMapping("/api/v1/tasks") public class TaskController {private final JdbcClient db;private final DevIdentity identity;public TaskController(JdbcClient d,DevIdentity i){db=d;identity=i;}
- @GetMapping public List<Map<String,Object>> list(){return db.sql("select i.id,i.title,t.status,t.due_at_utc,(t.status='TODO' and t.due_at_utc is not null and t.due_at_utc<now()) overdue from memo_items i join task_details t on t.memo_item_id=i.id where i.owner_id=:o order by t.due_at_utc nulls last,i.created_at desc").param("o",identity.ownerId()).query((r,n)->{Map<String,Object> m=new LinkedHashMap<>();m.put("id",r.getObject(1));m.put("title",r.getString(2));m.put("status",r.getString(3));m.put("dueAt",r.getTimestamp(4)==null?null:r.getTimestamp(4).toInstant());m.put("overdue",r.getBoolean(5));return m;}).list();}
- @PatchMapping("/{id}") Map<String,Object> update(@PathVariable UUID id,@RequestBody Map<String,String> body){String state=body.get("status");if(!Set.of("TODO","DONE","CANCELLED").contains(state))throw new IllegalArgumentException("INVALID_TASK_STATE");int n=db.sql("update task_details t set status=:s,completed_at=case when :s='DONE' then :n else null end where memo_item_id=:id and exists(select 1 from memo_items i where i.id=t.memo_item_id and i.owner_id=:o)").param("s",state).param("n",Timestamp.from(Instant.now())).param("id",id).param("o",identity.ownerId()).update();return Map.of("id",id,"status",state,"updated",n==1);}
+
+import jakarta.validation.Valid;
+import java.util.List;
+import java.util.UUID;
+import local.personalmemo.task.application.TaskService;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/api/v1/tasks")
+public class TaskController {
+  private final TaskService service;
+
+  public TaskController(TaskService service) {
+    this.service = service;
+  }
+
+  @GetMapping
+  List<TaskDtos.View> list() {
+    return service.list();
+  }
+
+  @PatchMapping("/{id}")
+  TaskDtos.UpdateView update(
+      @PathVariable UUID id,
+      @RequestHeader("Idempotency-Key") String key,
+      @Valid @RequestBody TaskDtos.Update body) {
+    return service.update(id, key, body);
+  }
 }
