@@ -66,23 +66,25 @@ class GraphProjectionIntegrationTest extends PostgresIntegrationTestSupport {
     createMemo(memoId, keyPrefix + "-create", keyPrefix + " 작업");
     UUID proposalId =
         UUID.fromString(
-            response(startAnalysis(memoId, keyPrefix + "-start", 1))
-                .path("proposalId")
-                .asText());
+            response(startAnalysis(memoId, keyPrefix + "-start", 1)).path("proposalId").asText());
     Map<String, Object> item = new LinkedHashMap<>();
     item.put("kind", "TASK");
     item.put("title", keyPrefix + " 작업");
     item.put("due", null);
     Map<String, Object> selection =
         Map.of(
-            "expectedMemoRevision", 1,
-            "selectedType", "TASK",
-            "title", keyPrefix + " 작업",
+            "expectedMemoRevision",
+            1,
+            "selectedType",
+            "TASK",
+            "title",
+            keyPrefix + " 작업",
             "selectedTags",
-                List.of(
-                    Map.of("existingTagId", OPERATING_SYSTEMS_TAG_ID),
-                    Map.of("existingTagId", ASSIGNMENT_TAG_ID)),
-            "items", List.of(item));
+            List.of(
+                Map.of("existingTagId", OPERATING_SYSTEMS_TAG_ID),
+                Map.of("existingTagId", ASSIGNMENT_TAG_ID)),
+            "items",
+            List.of(item));
     var applied = applyProposal(proposalId, keyPrefix + "-apply", selection);
     assertThat(applied.getResponse().getStatus()).isEqualTo(200);
     return memoId;
@@ -90,8 +92,7 @@ class GraphProjectionIntegrationTest extends PostgresIntegrationTestSupport {
 
   private JsonNode graph(int limit) throws Exception {
     var result =
-        mvc.perform(get("/api/v1/graph/home").param("limit", Integer.toString(limit)))
-            .andReturn();
+        mvc.perform(get("/api/v1/graph/home").param("limit", Integer.toString(limit))).andReturn();
     assertThat(result.getResponse().getStatus()).isEqualTo(200);
     return response(result);
   }

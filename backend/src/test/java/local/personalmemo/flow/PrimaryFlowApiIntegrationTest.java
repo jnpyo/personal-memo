@@ -35,10 +35,8 @@ class PrimaryFlowApiIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(response(proposal).path("memoId").asText()).isEqualTo(memoId.toString());
     assertThat(response(proposal).path("memoRevision").asInt()).isEqualTo(1);
     assertThat(response(proposal).at("/typeCandidates/0/value").asText()).isEqualTo("TASK");
-    assertThat(response(proposal).at("/dateCandidates/0/surfaceText").asText())
-        .isEqualTo("11.25");
-    assertThat(response(proposal).at("/tagCandidates/0/canonicalName").asText())
-        .isEqualTo("운영체제");
+    assertThat(response(proposal).at("/dateCandidates/0/surfaceText").asText()).isEqualTo("11.25");
+    assertThat(response(proposal).at("/tagCandidates/0/canonicalName").asText()).isEqualTo("운영체제");
     assertThat(db.sql("select count(*) from memo_items").query(Long.class).single()).isZero();
 
     Map<String, Object> due =
@@ -48,8 +46,7 @@ class PrimaryFlowApiIntegrationTest extends PostgresIntegrationTestSupport {
             "precision", "DATE_ONLY",
             "timeZone", "Asia/Seoul",
             "timeSpecified", false);
-    var applied =
-        applyProposal(proposalId, "analysis-apply-primary", 1, "OS과제 제출", due);
+    var applied = applyProposal(proposalId, "analysis-apply-primary", 1, "OS과제 제출", due);
     assertThat(applied.getResponse().getStatus()).isEqualTo(200);
     UUID applicationId = UUID.fromString(response(applied).path("applicationId").asText());
     assertThat(response(applied).path("status").asText()).isEqualTo("APPLIED");
@@ -57,8 +54,7 @@ class PrimaryFlowApiIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(db.sql("select count(*) from memo_items").query(Long.class).single()).isEqualTo(1);
     assertThat(db.sql("select due_local_date from task_details").query(LocalDate.class).single())
         .isEqualTo(LocalDate.of(2026, 11, 25));
-    assertThat(
-            db.sql("select due_at_utc is null from task_details").query(Boolean.class).single())
+    assertThat(db.sql("select due_at_utc is null from task_details").query(Boolean.class).single())
         .isTrue();
 
     var tasks = mvc.perform(get("/api/v1/tasks")).andExpect(status().isOk()).andReturn();
@@ -70,7 +66,8 @@ class PrimaryFlowApiIntegrationTest extends PostgresIntegrationTestSupport {
             .andExpect(status().isOk())
             .andReturn();
     assertThat(response(graph).path("nodes").toString()).contains("memo:" + memoId);
-    assertThat(response(graph).path("nodes").toString()).contains("tag:" + OPERATING_SYSTEMS_TAG_ID);
+    assertThat(response(graph).path("nodes").toString())
+        .contains("tag:" + OPERATING_SYSTEMS_TAG_ID);
     assertThat(response(graph).path("nodes"))
         .allSatisfy(node -> assertThat(node.path("kind").asText()).isIn("MEMO", "TAG"));
 
@@ -80,9 +77,7 @@ class PrimaryFlowApiIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(db.sql("select count(*) from memo_items").query(Long.class).single()).isZero();
 
     var rawAfterUndo =
-        mvc.perform(get("/api/v1/memos/{id}", memoId))
-            .andExpect(status().isOk())
-            .andReturn();
+        mvc.perform(get("/api/v1/memos/{id}", memoId)).andExpect(status().isOk()).andReturn();
     assertThat(response(rawAfterUndo).path("content").asText()).isEqualTo(rawMemo);
     assertThat(response(rawAfterUndo).path("currentRevision").asInt()).isEqualTo(1);
     assertThat(

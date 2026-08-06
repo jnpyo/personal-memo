@@ -1,8 +1,8 @@
-# API contract — Milestone 1 + deterministic analysis slice
+# API contract — authenticated deterministic-analysis MVP
 
 Base path: `/api/v1`
 
-이 문서는 AI-free vertical slice와 외부 모델 없는 결정론적 분석 slice에서 구현한 HTTP 계약을 설명한다. 후속 마일스톤의 search, reminder, sync API는 구현 전이므로 포함하지 않는다.
+이 문서는 local/Google 이중 로그인, AI-free vertical slice와 외부 모델 없는 결정론적 분석 slice에서 구현한 HTTP 계약을 설명한다. 후속 마일스톤의 search, reminder, sync API는 구현 전이므로 포함하지 않는다.
 
 기계 판독 가능한 동일 범위의 명세는 [`openapi.yaml`](openapi.yaml)에 있다.
 
@@ -12,7 +12,10 @@ Base path: `/api/v1`
 - resource identifier: UUID
 - timestamp: ISO 8601 UTC
 - 사용자 시간대: IANA identifier(예: `Asia/Seoul`)
-- 현재 인증 모드: 서버가 고정한 개발용 owner. client가 `ownerId`를 제출하지 않는다.
+- 인증: PostgreSQL-backed server session cookie. client가 `ownerId`를 제출하지 않으며 서버가 인증 principal에서 owner를 결정한다.
+- 인증되지 않은 protected request: `401 Unauthorized`. 단, `POST /auth/logout`은 이미 만료·폐기된 session에서도 안전하게 반복할 수 있도록 유효한 CSRF token이 있으면 `204 No Content`를 반환한다.
+- 비활성화된 계정의 protected request: session을 폐기하고 `401 ACCOUNT_DISABLED`
+- cookie-authenticated mutation의 CSRF token 누락·불일치: `403 CSRF_TOKEN_INVALID`
 - 검증 실패: `422 Unprocessable Entity`
 - owner 범위 밖의 resource: 존재 여부를 노출하지 않는 `404 Not Found`
 
@@ -28,6 +31,157 @@ Base path: `/api/v1`
 ```
 
 Bean Validation 오류는 `fieldErrors`에 `{ "field", "message" }`를 담는다. malformed JSON은 `MALFORMED_JSON`, 유효하지 않은 필드는 `VALIDATION_FAILED`를 사용한다.
+
+### Authenticated-owner snapshot race guard
+
+owner-scoped API는 선택적인 `X-Expected-Owner-Id` header를 지원한다. 이 값은 client가 request를 시작할 때 보고 있던 authenticated `userId`의 snapshot이며, 여러 탭에서 같은 cookie를 공유할 때 “A의 늦은 요청이 B로 전환된 session에서 실행되는” 경쟁만 차단한다.
+
+이 header는 권한의 근거도, 요청 owner를 선택하는 입력도 아니다. 실제 owner와 authorization은 항상 server session의 authenticated principal에서 결정된다. header를 생략해도 기존 client는 동작하며 owner 검사는 그대로 적용된다. header가 UUID 형식이 아니거나 현재 principal의 user ID와 다르면 server는 controller, idempotency 처리, domain mutation보다 먼저 다음 `409 Conflict`를 반환한다. 이 응답은 현재 server session을 로그아웃시키지 않는다.
+
+```json
+{
+  "code": "SESSION_OWNER_CHANGED",
+  "message": "The authenticated account changed before this request was sent.",
+  "fieldErrors": [],
+  "correlationId": "8cda55ca-a46e-49ea-8e43-b14d1591ce69"
+}
+```
+
+적용 범위는 다음과 같다.
+
+| 영역 | 경로 |
+| --- | --- |
+| memo와 분석 시작 | `/memos/**` |
+| 분석 제안과 application | `/analysis-proposals/**`, `/analysis-applications/**` |
+| task와 graph | `/tasks/**`, `/graph/**` |
+| 계정 및 session 작업 | `POST /auth/logout`, `POST /auth/google/link-intent`, `DELETE /auth/identities/google` |
+
+PWA는 authenticated bootstrap 뒤 owner ID를 API client에 설정하고, 각 guard 대상 request 시작 시 그 값을 고정한다. 응답을 기다리는 동안 탭이나 session owner가 바뀌어도 header를 새 owner로 다시 쓰지 않는다. `SESSION_OWNER_CHANGED`를 받으면 이전 owner의 in-flight scope를 폐기하고 현재 session을 다시 bootstrap한다. 특히 실패 후 남아 있던 A의 logout intent가 B session에서 이 오류를 받으면 그 stale intent와 재시도 marker를 제거한 뒤 B session을 유지한다.
+
+`POST /auth/logout`을 제외한 protected endpoint는 유효한 session이 없을 때 `401 AUTHENTICATION_REQUIRED`를 반환한다. 모든 cookie/session mutation은 현재 CSRF token이 없거나 틀리면 domain 처리 전에 `403 CSRF_TOKEN_INVALID`를 반환한다. 위 guard 대상에 authenticated principal이 있으면 정상 domain conflict와 별도로 malformed/mismatched owner snapshot에 `409 SESSION_OWNER_CHANGED`를 반환한다.
+
+## Authentication and CSRF
+
+인증 방식이 달라도 성공 응답은 같은 internal user session을 표현한다. session identifier, 비밀번호, Google authorization code/access token/refresh token은 JSON에 포함하지 않는다.
+
+```json
+{
+  "userId": "018f4fad-e9a9-7a01-a4d1-936938a8a1e8",
+  "email": "student@example.com",
+  "displayName": "메모 사용자",
+  "loginMethods": ["LOCAL", "GOOGLE"]
+}
+```
+
+### Bootstrap capabilities and CSRF
+
+```http
+GET /api/v1/auth/capabilities
+GET /api/v1/auth/csrf
+```
+
+두 endpoint는 로그인 전에도 호출할 수 있다. capability 응답은 다음과 같다.
+
+```json
+{
+  "registrationEnabled": true,
+  "googleEnabled": true,
+  "googleRegistrationEnabled": false
+}
+```
+
+`googleEnabled`는 server가 Google 로그인·연결 기능을 명시적으로 켜고 필수 client credential 설정 값이 비어 있지 않은 상태로 기동한 경우에만 `true`다. 이 값은 Google이 credential을 실제로 승인했다는 사전 검증 결과는 아니다. `googleRegistrationEnabled`는 `googleEnabled`와 별도 server policy `GOOGLE_REGISTRATION_ENABLED`가 모두 켜져, 처음 보는 Google identity가 신규 internal user를 만들 수 있을 때만 `true`다. 기본값과 운영값은 `false`이며 SPA는 OAuth를 시작하기 전에 이 값을 이용해 신규 가입 가능 여부를 안내한다. 이 값이 `false`여도 이미 연결된 Google identity 로그인과 인증된 사용자의 명시적 Google 연결은 가능하다. Google credential 없이도 local 가입·로그인은 동작하고, Google 기능을 켠 채 필수 credential을 비워 두면 server는 잘못된 설정으로 fail fast한다.
+
+CSRF 응답은 server가 선택한 이름을 그대로 제공한다.
+
+```json
+{
+  "headerName": "X-XSRF-TOKEN",
+  "parameterName": "_csrf",
+  "token": "opaque-csrf-token"
+}
+```
+
+SPA는 모든 mutation 전에 이 token을 `headerName` header로 전송한다. CSRF-specific `403` 뒤에는 token을 한 번만 갱신해 같은 request body와 idempotency key로 재시도한다.
+
+### Register and local sign-in
+
+```http
+POST /api/v1/auth/register
+Content-Type: application/json
+X-XSRF-TOKEN: ...
+
+{
+  "email": "student@example.com",
+  "password": "at-least-12-characters",
+  "displayName": "메모 사용자",
+  "timeZone": "Asia/Seoul"
+}
+```
+
+성공하면 `201 Created`와 `AuthSession`을 반환하고 session id를 회전한다. 정규화한 email이 이미 사용 중이면 `409 EMAIL_ALREADY_REGISTERED`, 가입이 닫혀 있으면 `403 REGISTRATION_DISABLED`다. 비밀번호는 최소 12자이며 encoder의 안전한 입력 상한도 검증한다.
+
+```http
+POST /api/v1/auth/login
+Content-Type: application/json
+X-XSRF-TOKEN: ...
+
+{
+  "email": "student@example.com",
+  "password": "at-least-12-characters"
+}
+```
+
+성공하면 `200 OK`와 같은 `AuthSession`을 반환한다. 계정 존재 여부를 구분하지 않고 잘못된 email/password는 모두 `401 INVALID_CREDENTIALS`다.
+
+### Current session and sign-out
+
+```http
+GET /api/v1/auth/me
+
+POST /api/v1/auth/logout
+X-XSRF-TOKEN: ...
+```
+
+`GET /auth/me`는 로그인 중이면 `AuthSession`, 아니면 `401`이다. sign-out은 session과 authentication을 무효화하고 `204 No Content`를 반환한다. 이미 session이 만료되었거나 이전 logout으로 폐기된 뒤에도 새로 발급받은 유효한 CSRF token을 함께 보내면 반복 logout은 `204`다. CSRF가 누락되거나 틀리면 session 유무와 관계없이 `403 CSRF_TOKEN_INVALID`이며, authenticated principal이 남아 있는 요청의 `X-Expected-Owner-Id`가 현재 owner와 다르면 logout 전에 `409 SESSION_OWNER_CHANGED`로 차단한다.
+
+PWA에서 logout POST와 재시도 권한은 시작 탭의 `sessionStorage` intent에만 남는다. 다른 탭에는 owner UUID·무작위 attempt ID·5분 만료 시각만 담은 `localStorage` 관찰 마커와 교차 탭 신호를 전달한다. 새로 열거나 다시 로드한 수신 탭은 즉시 workspace를 잠그고 `GET /auth/me`로 logout 또는 owner 변경만 확인하며, logout POST를 대신 보내지 않는다. 이미 열린 수신 탭의 workspace는 미확정 동안 DOM에서 숨기고 모든 operation을 잠근 채 mounted 상태로 유지한다. 따라서 logout 실패가 in-memory 편집을 먼저 버리지 않으며, server가 logout/owner 변경을 확인한 때만 terminal 전환한다. marker가 사라지거나 만료된 경우에도 GET이 같은 owner를 확인해야 잠금을 풀고 기존 workspace로 돌아가며, 확인이 실패하거나 offline이면 잠금을 유지한다. 이 marker는 session identifier나 인증 credential이 아니며 owner를 선택하거나 권한을 부여하지 않는다.
+
+### Google sign-in and explicit linking
+
+Google capability가 켜진 경우에만 browser를 다음 server endpoint로 이동한다.
+
+```http
+GET /oauth2/authorization/google
+```
+
+callback은 `/login/oauth2/code/google`이며 authorization code와 provider token은 backend에서만 처리한다. 일반 Google 로그인의 `(GOOGLE, sub)`가 이미 연결되어 있으면 해당 internal user session을 만든다. 정규화 email이 이미 존재하면 자동 병합하거나 중복 사용자를 만들지 않고 SPA로 `ACCOUNT_LINK_REQUIRED` 오류를 돌려보낸다. subject와 email이 모두 처음인 경우에만 `GOOGLE_REGISTRATION_ENABLED=true`일 때 새 internal user를 만든다. 기본값 또는 운영 강제값인 `false`에서는 `/login?error=GOOGLE_REGISTRATION_DISABLED`로 안정적으로 거절한다. 이 gate는 기존 Google identity 로그인이나 인증된 local 사용자의 명시적 Google 연결을 막지 않는다.
+
+기존 계정에 연결할 때는 먼저 그 계정으로 로그인한 뒤 다음 mutation으로 짧은 수명의 link intent를 session에 기록한다.
+
+```http
+POST /api/v1/auth/google/link-intent
+X-XSRF-TOKEN: ...
+```
+
+```json
+{ "authorizationUrl": "/oauth2/authorization/google" }
+```
+
+Google callback은 로그인한 internal owner를 기록한 session-bound intent와 그 intent에 처음 발급된 OAuth `state`가 함께 검증될 때만 identity를 연결한다. 이미 다른 사용자에게 연결된 subject, 누락·만료·state 불일치 intent, 검증되지 않은 Google email은 거절한다. 실패한 link flow는 유효한 session-indexed principal이 있을 때 그 현재 principal만 복원한다.
+
+link callback은 intent를 한 번만 소비한다. stale·만료·재사용 callback 또는 provider가 거절한 link flow에서도 server는 유효한 현재 session-indexed owner가 있으면 그 owner만 복원하고 `/account?error=...`로 보낸다. intent 자체의 owner만으로 principal을 복원하지 않으며, owner가 바뀐 session에 stale intent의 owner를 되살리지 않는다. 일반 Google 로그인의 provider 단계가 실패하면 session-indexed owner가 있을 때 그 owner를 유지하고 `/account?error=OAUTH_FAILED`로 보낸다. OIDC 성공 뒤 domain 검증이 실패한 일반 로그인은 기존 owner를 복원할 수 있더라도 `/login?error=<safe-code>`로 돌아가며, 복원할 session-indexed owner가 없으면 session을 비운다.
+
+local register/login 성공은 기존 session ID만 회전하지 않고 이전 session 자체를 폐기해 새 account boundary를 만든다. 따라서 이전 owner가 시작한 Google authorization request와 link intent도 함께 폐기되며, 늦게 돌아온 old link callback은 새로 local reauthentication한 owner에 identity를 연결할 수 없다.
+
+```http
+DELETE /api/v1/auth/identities/google
+X-XSRF-TOKEN: ...
+```
+
+다른 usable login method가 남을 때만 연결을 해제한다. 마지막 수단을 제거하려 하면 `409 LOGIN_METHOD_REQUIRED`다. 성공 응답은 갱신된 `AuthSession`이다.
+
+현재 인증 계약에는 local email verification, password-reset/recovery endpoint, IP·edge 단위 rate limiting과 abuse 방어, MFA/passkey, account deletion endpoint가 없다. 이 항목은 공개 배포 전 후속 account-hardening 범위다. local 로그인은 같은 계정의 잘못된 비밀번호를 `failed_attempts`에 집계하고 연속 5회 실패하면 `locked_until`을 15분 뒤로 설정한다. 잠금 중 추가 시도는 잠금 만료를 연장하지 않으며, 만료 뒤 정상 로그인하면 `failed_attempts=0`, `locked_until=null`로 초기화한다. 존재하지 않는 계정·잘못된 비밀번호·잠긴 계정은 모두 같은 public credential 오류를 사용한다. 이 계정 단위 잠금은 IP·edge rate limiting을 대체하지 않는다.
 
 ## Idempotency
 
@@ -173,7 +327,7 @@ Content-Type: application/json
 GET /api/v1/analysis-proposals/{proposalId}
 ```
 
-`schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`, `tagCandidates`, `itemCandidates`, `relationCandidates`, `ambiguityReasons`, `providerMetadata`를 포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag나 task를 생성하지 않는다. 현재 Fake analyzer의 필수 provenance 값은 `fake-v2`, `none`, `none`, `none`, `field-policy-v1`이며 `toolCalls`는 `0`이다.
+`schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`, `tagCandidates`, `itemCandidates`, `relationCandidates`, `ambiguityReasons`, `providerMetadata`를 포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag나 task를 생성하지 않는다. 현재 Fake analyzer의 필수 provenance 값은 `fake-v3`, `none`, `none`, `none`, `field-policy-v1`이며 `toolCalls`는 `0`이다.
 
 ### Recover proposals awaiting review
 
@@ -215,7 +369,7 @@ Recovery query는 `REVIEW_REQUIRED`와 `POSTPONED`를 지원한다. `limit` 기�
     "relationCandidates": [],
     "ambiguityReasons": [],
     "providerMetadata": {
-      "analyzerVersion": "fake-v2",
+      "analyzerVersion": "fake-v3",
       "promptVersion": "none",
       "localModelVersion": "none",
       "embeddingModelVersion": "none",

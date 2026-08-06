@@ -39,8 +39,7 @@ class RevisionAndRollbackIntegrationTest extends PostgresIntegrationTestSupport 
                 .list())
         .containsExactly("11.25 OS과제 제출", "11.26 OS과제 수정 제출");
 
-    var staleApply =
-        applyProposal(proposalId, "apply-stale-proposal", 1, "적용되면 안 되는 항목", null);
+    var staleApply = applyProposal(proposalId, "apply-stale-proposal", 1, "적용되면 안 되는 항목", null);
     assertThat(staleApply.getResponse().getStatus()).isEqualTo(409);
     assertThat(response(staleApply).path("code").asText()).isEqualTo("STALE_MEMO_REVISION");
     assertThat(db.sql("select count(*) from analysis_applications").query(Long.class).single())
@@ -95,11 +94,16 @@ class RevisionAndRollbackIntegrationTest extends PostgresIntegrationTestSupport 
         Map.of("kind", "TASK", "title", "날짜가 잘못된 작업", "due", invalidDue);
     Map<String, Object> selection =
         Map.of(
-            "expectedMemoRevision", 1,
-            "selectedType", "TASK",
-            "title", "두 작업 후보",
-            "selectedTags", List.of(),
-            "items", List.of(validItem, invalidItem));
+            "expectedMemoRevision",
+            1,
+            "selectedType",
+            "TASK",
+            "title",
+            "두 작업 후보",
+            "selectedTags",
+            List.of(),
+            "items",
+            List.of(validItem, invalidItem));
 
     var failed = applyProposal(proposalId, "apply-that-must-roll-back", selection);
 

@@ -24,6 +24,7 @@ type Props = {
   onApply: () => void;
   onPostpone: () => void;
   onReject: () => void;
+  onTransientDirtyChange: (dirty: boolean) => void;
 };
 
 const TYPE_LABEL: Record<ItemKind, string> = {
@@ -55,6 +56,7 @@ export function ProposalReview({
   onApply,
   onPostpone,
   onReject,
+  onTransientDirtyChange,
 }: Props) {
   const [newTag, setNewTag] = useState('');
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -70,6 +72,11 @@ export function ProposalReview({
     heading.focus({ preventScroll: true });
     heading.scrollIntoView({ block: 'start', behavior: 'auto' });
   }, [review.proposalId]);
+
+  useEffect(
+    () => () => onTransientDirtyChange(false),
+    [onTransientDirtyChange],
+  );
 
   useEffect(() => {
     const pending = pendingItemFocus.current;
@@ -103,6 +110,7 @@ export function ProposalReview({
     };
     onChange({ ...review, tags: [...review.tags, candidate] });
     setNewTag('');
+    onTransientDirtyChange(false);
   };
 
   const isValid = isValidReviewDraft(review);
@@ -353,7 +361,11 @@ export function ProposalReview({
             maxLength={100}
             placeholder="태그 직접 추가"
             aria-label="새 태그"
-            onChange={(event) => setNewTag(event.target.value)}
+            onChange={(event) => {
+              const value = event.target.value;
+              setNewTag(value);
+              onTransientDirtyChange(value.trim().length > 0);
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault();

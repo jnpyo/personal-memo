@@ -4,6 +4,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -12,25 +13,27 @@ import local.personalmemo.analysis.api.AnalysisDtos.ReviewDispositionView;
 import local.personalmemo.analysis.api.AnalysisDtos.RunView;
 import local.personalmemo.analysis.api.AnalysisDtos.Start;
 import local.personalmemo.analysis.domain.AmbiguityReason;
-import local.personalmemo.analysis.domain.AnalysisRoute;
-import local.personalmemo.analysis.domain.AnalysisProvenance;
 import local.personalmemo.analysis.domain.AnalysisProposalSchemaValidator;
 import local.personalmemo.analysis.domain.AnalysisProposalValidator;
+import local.personalmemo.analysis.domain.AnalysisProvenance;
+import local.personalmemo.analysis.domain.AnalysisRoute;
 import local.personalmemo.analysis.domain.CloudAnalysisGateway;
 import local.personalmemo.analysis.domain.CloudAnalysisRequest;
 import local.personalmemo.analysis.domain.DeterministicAmbiguityGate;
 import local.personalmemo.analysis.domain.LocalAnalyzer;
-import local.personalmemo.common.DevIdentity;
+import local.personalmemo.common.auth.CurrentIdentity;
 import local.personalmemo.common.error.DomainException;
 import local.personalmemo.common.idempotency.IdempotencyService;
 import local.personalmemo.common.security.Hashing;
 import local.personalmemo.memo.application.MemoService;
 import local.personalmemo.memo.domain.MemoSnapshot;
+import local.personalmemo.taxonomy.domain.TagNormalizer;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 @Service
@@ -41,7 +44,7 @@ public class AnalysisService {
   private static final int MAX_RECOVERY_PROPOSALS = 100;
 
   private final JdbcClient db;
-  private final DevIdentity identity;
+  private final CurrentIdentity identity;
   private final MemoService memos;
   private final LocalAnalyzer analyzer;
   private final CloudAnalysisGateway cloudGateway;
@@ -49,11 +52,12 @@ public class AnalysisService {
   private final AnalysisProposalSchemaValidator proposalSchemaValidator;
   private final AnalysisProposalValidator proposalValidator;
   private final IdempotencyService idempotency;
+  private final TagNormalizer tagNormalizer;
   private final ObjectMapper json;
 
   public AnalysisService(
       JdbcClient db,
-      DevIdentity identity,
+      CurrentIdentity identity,
       MemoService memos,
       LocalAnalyzer analyzer,
       CloudAnalysisGateway cloudGateway,
@@ -61,6 +65,7 @@ public class AnalysisService {
       AnalysisProposalSchemaValidator proposalSchemaValidator,
       AnalysisProposalValidator proposalValidator,
       IdempotencyService idempotency,
+      TagNormalizer tagNormalizer,
       ObjectMapper json) {
     this.db = db;
     this.identity = identity;
@@ -71,6 +76,7 @@ public class AnalysisService {
     this.proposalSchemaValidator = proposalSchemaValidator;
     this.proposalValidator = proposalValidator;
     this.idempotency = idempotency;
+    this.tagNormalizer = tagNormalizer;
     this.json = json;
   }
 
@@ -390,8 +396,7 @@ public class AnalysisService {
                 .single();
         if (!exists) {
           throw DomainException.invalid(
-              "INVALID_ANALYSIS_PROPOSAL",
-              "A proposed relation references an unavailable memo.");
+              "INVALID_ANALYSIS_PROPOSAL", "A proposed relation references an unavailable memo.");
         }
       }
     }
@@ -407,6 +412,10 @@ public class AnalysisService {
           "INVALID_ANALYSIS_PROPOSAL", "The analyzer returned no proposal.");
     }
     proposalSchemaValidator.validate(proposal);
+    resolveOwnerScopedTagCandidates(proposal);
+    synchronizeNewTopicSignal(proposal);
+    synchronizeResolvedRouteMetadata(proposal);
+    proposalSchemaValidator.validate(proposal);
     proposalValidator.validate(
         proposal,
         memo.id(),
@@ -415,6 +424,121 @@ public class AnalysisService {
         expectedProvenance,
         expectedRoutingPolicyVersion);
     validateProposalReferences(proposal);
+  }
+
+  /**
+   * Converts only structurally valid, explicitly new tag candidates into canonical references. The
+   * analyzer has no owner context, so it must never invent persistence identifiers. A candidate is
+   * resolved only when its normalized canonical/alias values identify exactly one active tag owned
+   * by the authenticated user.
+   */
+  private void resolveOwnerScopedTagCandidates(ObjectNode proposal) {
+    for (JsonNode candidateNode : proposal.path("tagCandidates")) {
+      if (!candidateNode.path("isNewProposal").isBoolean()
+          || !candidateNode.path("isNewProposal").asBoolean()
+          || !candidateNode.path("existingTagId").isNull()) {
+        continue;
+      }
+
+      Optional<String> normalizedCanonical =
+          normalizeForResolution(candidateNode.path("canonicalName"));
+      if (normalizedCanonical.isEmpty()) {
+        continue;
+      }
+      Optional<String> normalizedAlias = normalizeForResolution(candidateNode.path("matchedAlias"));
+      String aliasLookup = normalizedAlias.orElse(normalizedCanonical.get());
+
+      List<TagResolution> matches =
+          db.sql(
+                  """
+                  select t.id, t.canonical_name, cast(null as varchar) as matched_alias
+                    from tags t
+                   where t.owner_id = :ownerId
+                     and t.state = 'ACTIVE'
+                     and (t.normalized_name = :canonical or t.normalized_name = :alias)
+                  union all
+                  select t.id, t.canonical_name, ta.alias as matched_alias
+                    from tag_aliases ta
+                    join tags t
+                      on t.id = ta.tag_id
+                     and t.owner_id = ta.owner_id
+                   where ta.owner_id = :ownerId
+                     and t.state = 'ACTIVE'
+                     and (ta.normalized_alias = :canonical or ta.normalized_alias = :alias)
+                  """)
+              .param("ownerId", identity.ownerId())
+              .param("canonical", normalizedCanonical.get())
+              .param("alias", aliasLookup)
+              .query(
+                  (resultSet, rowNumber) ->
+                      new TagResolution(
+                          resultSet.getObject("id", UUID.class),
+                          resultSet.getString("canonical_name"),
+                          resultSet.getString("matched_alias")))
+              .list();
+
+      LinkedHashMap<UUID, TagResolution> uniqueMatches = new LinkedHashMap<>();
+      for (TagResolution match : matches) {
+        uniqueMatches.merge(
+            match.id(), match, (first, second) -> second.matchedAlias() == null ? first : second);
+      }
+      if (uniqueMatches.size() != 1) {
+        continue;
+      }
+
+      TagResolution resolved = uniqueMatches.values().iterator().next();
+      ObjectNode candidate = (ObjectNode) candidateNode;
+      candidate
+          .put("existingTagId", resolved.id().toString())
+          .put("canonicalName", resolved.canonicalName())
+          .put("isNewProposal", false);
+      if (resolved.matchedAlias() == null) {
+        candidate.putNull("matchedAlias");
+      } else {
+        candidate.put("matchedAlias", resolved.matchedAlias());
+      }
+    }
+  }
+
+  private Optional<String> normalizeForResolution(JsonNode value) {
+    if (!value.isTextual()) {
+      return Optional.empty();
+    }
+    try {
+      return Optional.of(tagNormalizer.normalize(value.asText()).normalizedName());
+    } catch (DomainException exception) {
+      return Optional.empty();
+    }
+  }
+
+  private void synchronizeNewTopicSignal(ObjectNode proposal) {
+    boolean hasNewTag = false;
+    for (JsonNode candidate : proposal.path("tagCandidates")) {
+      if (candidate.path("isNewProposal").isBoolean()
+          && candidate.path("isNewProposal").asBoolean()
+          && candidate.path("existingTagId").isNull()) {
+        hasNewTag = true;
+        break;
+      }
+    }
+
+    ArrayNode reasons = (ArrayNode) proposal.path("ambiguityReasons");
+    for (int index = reasons.size() - 1; index >= 0; index--) {
+      if (AmbiguityReason.NEW_TOPIC.name().equals(reasons.get(index).asText())) {
+        reasons.remove(index);
+      }
+    }
+    if (hasNewTag) {
+      reasons.add(AmbiguityReason.NEW_TOPIC.name());
+    }
+  }
+
+  private void synchronizeResolvedRouteMetadata(ObjectNode proposal) {
+    JsonNode metadata = proposal.path("providerMetadata");
+    if (metadata instanceof ObjectNode objectMetadata) {
+      objectMetadata.put(
+          "route", ambiguityGate.route(ambiguityGate.routingSignals(proposal)).name());
+    }
   }
 
   private AnalysisProvenance requireAnalysisProvenance() {
@@ -429,8 +553,7 @@ public class AnalysisService {
     String version = ambiguityGate.version();
     if (version == null
         || version.isBlank()
-        || version.codePointCount(0, version.length())
-            > AnalysisProvenance.MAX_VERSION_LENGTH) {
+        || version.codePointCount(0, version.length()) > AnalysisProvenance.MAX_VERSION_LENGTH) {
       throw new IllegalStateException(
           "The ambiguity gate must expose a version of 1 to 64 characters.");
     }
@@ -511,6 +634,8 @@ public class AnalysisService {
   private record ProposalRequest(UUID proposalId) {}
 
   private record ProposalRun(UUID runId, UUID memoId, int memoRevision, String status) {}
+
+  private record TagResolution(UUID id, String canonicalName, String matchedAlias) {}
 
   private static final class SetLike {
     private static final java.util.Set<String> RECOVERABLE =

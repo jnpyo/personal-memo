@@ -9,17 +9,35 @@ Do not introduce Neo4j, Kafka, Redis, a separate AI microservice, or a second se
 ```mermaid
 flowchart TD
     PWA["React PWA"] --> API["Spring Boot modular monolith"]
-    PWA --> IDB["IndexedDB capture cache"]
-    PWA --> Worker["Web Worker local analyzer"]
+    PWA --> Draft["Owner-scoped local capture draft"]
+    PWA -. future .-> Worker["Web Worker local analyzer"]
     API --> DB["PostgreSQL"]
-    API --> Cloud["Cloud model provider"]
-    API --> Push["Web Push service"]
+    API --> Google["Google OpenID Connect"]
+    API -. future .-> Cloud["Cloud model provider"]
+    API -. future .-> Push["Web Push service"]
 ```
+
+The PWA and API are exposed through one public origin. The backend owns authentication redirects, provider secrets, session state, CSRF validation, and authorization. Google login is capability-gated so the application still starts and local accounts still work when Google credentials are absent.
 
 ## Data authority
 
 - The server database is canonical in the MVP.
-- The client creates a UUID/client mutation id and writes a pending capture record locally before sending, so a transient network failure does not erase typed text.
+- The client attempts to preserve an owner-scoped raw capture draft in browser `localStorage`, so
+  navigation or a transient network failure need not erase typed text. Automatic cleanup happens
+  only after the server confirms memo creation; explicitly clearing the textarea also removes its
+  draft. If storage is blocked or full, the UI explicitly warns that the text remains only in the
+  current page and activates the unsaved-change guards.
+- Local draft storage is not canonical data and is not an offline mutation outbox.
+- Raw drafts are scoped by internal owner UUID but are not encrypted at rest. They remain in the
+  same browser profile until successful memo creation or explicit text clearing, including after
+  logout, so a shared-device policy must account for browser-profile access.
+- In-memory proposal edits, pending tag input, and memo revision edits participate in one dirty
+  state. OAuth navigation, logout, browser unload, and prompt-based service-worker activation must
+  not silently discard that state; navigation is confirmed and update activation is blocked until
+  edits are resolved.
+- A logout observed from another tab hides and locks, but does not unmount, an already-open dirty
+  workspace while the server result is unconfirmed. Receiving tabs probe only with `GET`; marker
+  expiry can restore the same mounted owner only after that owner is confirmed.
 - Full bidirectional offline editing and conflict resolution are P1.
 - Analysis is always bound to an immutable memo revision.
 
@@ -50,6 +68,8 @@ frontend/src/
 
 ### Client responsibilities
 
+- bootstrap authentication capability, CSRF, and current-session state before loading owner data
+- render local registration/sign-in and the optional Google sign-in/link actions
 - fast raw capture and local pending state
 - analysis review and selection
 - graph visualization and bounded expansion
@@ -61,6 +81,7 @@ frontend/src/
 ### Client non-responsibilities
 
 - authoritative permission decisions
+- storing passwords, session identifiers, OAuth authorization codes, or provider tokens
 - direct cloud-provider calls
 - canonical tag merge/split
 - reminder scheduling authority
@@ -81,7 +102,7 @@ Organize by feature rather than a repository-wide controller/service/repository 
 
 ```text
 backend/.../
-├─ identity/
+├─ auth/
 ├─ memo/
 ├─ analysis/
 ├─ taxonomy/
@@ -98,7 +119,7 @@ Each module may contain `api`, `application`, `domain`, and `infrastructure` pac
 
 ### Module responsibilities
 
-- `identity`: authentication, settings, ownership and consent
+- `auth`: authentication, identity linking, settings, ownership and consent
 - `memo`: source revisions, soft delete, restore and idempotent capture
 - `analysis`: local validation, ambiguity routing, cloud orchestration and stale-result handling
 - `taxonomy`: tags, aliases, provisional topics, centroids and taxonomy proposals
@@ -179,15 +200,22 @@ The home query is bounded and ranks nodes using recency, pin, unfinished status,
 ## Security boundary
 
 - Deployed traffic uses HTTPS.
-- Prefer secure HttpOnly/SameSite cookies for web authentication unless an ADR selects another scheme.
-- Apply CSRF protection to cookie-authenticated mutations.
-- Every query includes owner scope.
+- Spring Security authenticates local credentials and Google OpenID Connect, then establishes the same server-side session shape for both methods.
+- PostgreSQL-backed Spring Session records are authoritative and revocable. The browser receives only a Secure, HttpOnly, explicitly SameSite session cookie in deployed environments.
+- Apply CSRF protection to every cookie-authenticated mutation. The SPA fetches the current token from the backend and sends it in the declared request header.
+- Successful authentication rotates the session; sign-out invalidates it.
+- Google identities are keyed by `(provider, subject)`. Linking requires an authenticated session and explicit link intent; reported-email equality never performs an implicit merge.
+- Passwords use Spring Security's delegating adaptive encoder and are never logged or returned.
+- Every domain query and mutation obtains the owner UUID from `SecurityContext`; request DTOs cannot choose an owner.
+- Auth and API responses are not cached by the service worker, and no authentication material is persisted in browser storage.
 - Cloud secrets remain server-side.
 - Memo content is untrusted input.
 - Agent tools are allow-listed and read-only before confirmation.
 - Model output undergoes JSON Schema and domain validation.
 - Logs omit raw memo bodies by default.
 - Cloud context is top-k and purpose-limited.
+
+The current authentication slice is not yet a public-account hardening release. Same-account failures receive a bounded lock, but local email verification, password-reset delivery, IP/edge rate limiting and abuse protection, MFA/passkeys, and complete account deletion remain follow-up work.
 
 ## Observability
 
@@ -210,10 +238,10 @@ Each analysis trace includes memo id, revision, schema version, analyzer/provide
 MVP deployment can run as:
 
 ```text
-static PWA hosting
-Spring Boot container
+one HTTPS origin / reverse proxy
+React PWA static assets + Spring Boot API
 PostgreSQL
+Google OpenID Connect (optional external identity provider)
 ```
 
-One backend process may host API and bounded workers initially. Separate them only when measured load or failure isolation requires it.
-
+One backend process may host the API, authentication endpoints, and bounded workers initially. Separate them only when measured load or failure isolation requires it. Redis is not needed: session state remains in PostgreSQL for this stage.

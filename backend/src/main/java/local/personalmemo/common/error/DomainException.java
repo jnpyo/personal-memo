@@ -16,6 +16,14 @@ public final class DomainException extends RuntimeException {
     return new DomainException(code, HttpStatus.CONFLICT, message);
   }
 
+  public static DomainException unauthorized(String code, String message) {
+    return new DomainException(code, HttpStatus.UNAUTHORIZED, message);
+  }
+
+  public static DomainException forbidden(String code, String message) {
+    return new DomainException(code, HttpStatus.FORBIDDEN, message);
+  }
+
   public static DomainException invalid(String code, String message) {
     return new DomainException(code, HttpStatus.UNPROCESSABLE_ENTITY, message);
   }

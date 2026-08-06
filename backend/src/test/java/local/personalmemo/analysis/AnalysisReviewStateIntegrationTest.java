@@ -45,11 +45,9 @@ class AnalysisReviewStateIntegrationTest extends PostgresIntegrationTestSupport 
                 .single())
         .isEqualTo("REJECTED");
 
-    var applyRejected =
-        applyProposal(proposalId, "apply-rejected-proposal", 1, "적용 불가", null);
+    var applyRejected = applyProposal(proposalId, "apply-rejected-proposal", 1, "적용 불가", null);
     assertThat(applyRejected.getResponse().getStatus()).isEqualTo(409);
-    assertThat(response(applyRejected).path("code").asText())
-        .isEqualTo("PROPOSAL_NOT_APPLICABLE");
+    assertThat(response(applyRejected).path("code").asText()).isEqualTo("PROPOSAL_NOT_APPLICABLE");
     assertThat(db.sql("select count(*) from analysis_applications").query(Long.class).single())
         .isZero();
   }

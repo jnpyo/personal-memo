@@ -10,19 +10,10 @@ public final class TaskDtos {
   private TaskDtos() {}
 
   public record View(
-      UUID id,
-      String title,
-      String status,
-      Instant dueAt,
-      LocalDate dueDate,
-      boolean overdue) {}
+      UUID id, String title, String status, Instant dueAt, LocalDate dueDate, boolean overdue) {}
 
   public record Update(
-      @NotBlank
-          @Pattern(
-              regexp = "TODO|DONE|CANCELLED",
-              message = "must be TODO, DONE, or CANCELLED")
-          String status) {}
+      @NotBlank @Pattern(regexp = "TODO|DONE|CANCELLED", message = "must be TODO, DONE, or CANCELLED") String status) {}
 
   public record UpdateView(UUID id, String status, boolean updated) {}
 }

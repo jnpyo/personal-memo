@@ -60,8 +60,7 @@ public final class Draft202012AnalysisProposalSchemaValidator
         SchemaRegistryConfig.builder().formatAssertionsEnabled(true).failFast(true).build();
     SchemaRegistry registry =
         SchemaRegistry.withDefaultDialect(
-            SpecificationVersion.DRAFT_2020_12,
-            builder -> builder.schemaRegistryConfig(config));
+            SpecificationVersion.DRAFT_2020_12, builder -> builder.schemaRegistryConfig(config));
 
     try (InputStream input =
         Draft202012AnalysisProposalSchemaValidator.class.getResourceAsStream(SCHEMA_RESOURCE)) {

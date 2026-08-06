@@ -4,8 +4,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import local.personalmemo.common.DevIdentity;
+import local.personalmemo.common.auth.CurrentIdentity;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -17,16 +19,16 @@ public class GraphController {
   private static final int MAX_HOME_NODES = 100;
 
   private final JdbcClient db;
-  private final DevIdentity identity;
+  private final CurrentIdentity identity;
 
-  public GraphController(JdbcClient db, DevIdentity identity) {
+  public GraphController(JdbcClient db, CurrentIdentity identity) {
     this.db = db;
     this.identity = identity;
   }
 
   @GetMapping("/home")
-  GraphDtos.Home home(
-      @RequestParam(name = "limit", defaultValue = "100") int requestedLimit) {
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+  GraphDtos.Home home(@RequestParam(name = "limit", defaultValue = "100") int requestedLimit) {
     int limit = Math.max(1, Math.min(requestedLimit, MAX_HOME_NODES));
     List<MemoCandidate> memoCandidates = findMemoCandidates(limit + 1);
     boolean memoOverflow = memoCandidates.size() > limit;
@@ -41,8 +43,7 @@ public class GraphController {
                 selectedMemos.stream().map(MemoCandidate::id).toList(), remainingTagBudget + 1);
     boolean truncated = memoOverflow || tagCandidates.size() > remainingTagBudget;
     List<TagCandidate> selectedTags =
-        List.copyOf(
-            tagCandidates.subList(0, Math.min(tagCandidates.size(), remainingTagBudget)));
+        List.copyOf(tagCandidates.subList(0, Math.min(tagCandidates.size(), remainingTagBudget)));
 
     List<GraphDtos.Node> nodes = new ArrayList<>(limit);
     selectedMemos.stream().map(this::memoNode).forEach(nodes::add);
@@ -143,8 +144,7 @@ public class GraphController {
         .query(
             (resultSet, rowNumber) ->
                 new TagCandidate(
-                    resultSet.getObject("id", UUID.class),
-                    resultSet.getString("canonical_name")))
+                    resultSet.getObject("id", UUID.class), resultSet.getString("canonical_name")))
         .list();
   }
 
@@ -177,10 +177,7 @@ public class GraphController {
               UUID memoId = resultSet.getObject("memo_id", UUID.class);
               UUID tagId = resultSet.getObject("tag_id", UUID.class);
               return new GraphDtos.Edge(
-                  "memo-tag:" + memoId + ":" + tagId,
-                  "memo:" + memoId,
-                  "tag:" + tagId,
-                  "MEMO_TAG");
+                  "memo-tag:" + memoId + ":" + tagId, "memo:" + memoId, "tag:" + tagId, "MEMO_TAG");
             })
         .list();
   }
@@ -196,8 +193,7 @@ public class GraphController {
   }
 
   private GraphDtos.Node tagNode(TagCandidate tag) {
-    return new GraphDtos.Node(
-        "tag:" + tag.id(), "TAG", tag.canonicalName(), null, null, false);
+    return new GraphDtos.Node("tag:" + tag.id(), "TAG", tag.canonicalName(), null, null, false);
   }
 
   private UUID projectionVersion(

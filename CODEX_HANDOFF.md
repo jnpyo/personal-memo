@@ -25,7 +25,7 @@
 7. **압축은 가역적이어야 한다.** 오래된 노드를 화면에서 접거나 요약하되 원본을 삭제·병합하지 않는다.
 8. **증분 처리한다.** 새 메모가 들어올 때 전체 메모를 재분석하거나 모든 쌍을 비교하지 않는다.
 9. **Agent 도구는 읽기 위주로 제한한다.** 승인 전에는 삭제·대량 수정·알림 생성 도구를 제공하지 않는다.
-10. **오프라인에서도 메모를 잃지 않는다.** 분석이 불가능하면 원본을 먼저 저장하고 대기열에 둔다.
+10. **오프라인에서도 작성 중 원문을 잃지 않는다.** owner별 로컬 draft는 보존하되, canonical memo 생성과 완전한 동기화 대기열은 구분한다.
 
 ## 3. 권장 기술 구성
 
@@ -34,7 +34,7 @@
 - React + TypeScript
 - Vite 기반 PWA
 - React Flow 기반 그래프
-- IndexedDB 기반 임시 캡처 보존; 완전한 오프라인 동기화 대기열은 P1
+- owner별 임시 캡처 draft 보존; 완전한 오프라인 동기화 대기열은 P1
 - Web Worker 안에서 로컬 분석 실행
 - 로컬 추론 런타임은 인터페이스로 추상화하고, 초기에는 mock/deterministic analyzer로 시작
 - 이후 ONNX Runtime Web 또는 동급 런타임 연결
@@ -61,7 +61,7 @@
 
 ```text
 사용자 메모 입력
-→ 원문을 로컬에 즉시 저장
+→ 작성 중 원문을 owner별 로컬 draft로 즉시 보존
 → 날짜 파서 + 유형 분류 + 임베딩 검색
 → 필드별 모호성 판별
    ├─ 명확: 로컬 후보 표시
@@ -78,9 +78,9 @@
 
 MVP는 아래의 수직 흐름 하나를 완성하는 데 집중한다.
 
-1. 사용자 인증 또는 개발용 단일 사용자 세션
+1. 자체 email/password 또는 선택적 Google OIDC 인증으로 생성한 서버 세션
 2. 자유 텍스트 메모 작성·수정·삭제
-3. 원본 메모의 즉시 로컬 저장
+3. 작성 중 원문의 owner별 로컬 draft 보존
 4. deterministic/mock 로컬 분석기
 5. 유형·날짜·기존 태그 후보와 모호성 결과
 6. 분석 후보 선택·수정·거부
@@ -213,9 +213,13 @@ Codex는 바로 실제 모델을 연결하지 말고 다음 세로 흐름부터 
 ## 12. 현재 구현 체크포인트
 
 - Phase 0과 Phase 1의 AI-free 수직 흐름은 구현되어 있다.
-- Flyway `V1`–`V7`이 memo/revision, proposal/application, canonical item/tag/task, owner integrity, revision capture context와 analyzer·prompt·local model·embedding model·routing policy provenance를 관리한다.
+- Flyway `V1`–`V9`가 memo/revision, proposal/application, canonical item/tag/task, owner integrity, revision capture context, analyzer·prompt·local model·embedding model·routing policy provenance, local/Google identity, JDBC session schema와 claimed user identity 무결성을 관리한다.
+- 각 local/Google 로그인 수단은 internal UUID에 매핑되고, 명시적으로 연결한 두 수단은 같은 UUID와 PostgreSQL-backed server session을 사용한다. Google email만으로 자동 연결하지 않고 기존 로그인 뒤 명시적 link intent를 요구하며, 마지막 login method는 해제할 수 없다. domain owner는 client 값이나 개발 상수가 아니라 Spring Security context에서 가져온다.
+- React 인증 shell은 capability·CSRF·현재 session을 먼저 확인하고, 로그인 전에는 owner domain API를 호출하지 않는다. service worker는 API와 OAuth/login 경로를 cache하지 않는다.
+- owner별 원문 capture draft는 browser localStorage에 동기식으로 보존하고 저장소 실패를 사용자에게 알린다. 제안 수정·새 태그 입력·원문 revision 편집은 통합 dirty 상태로 추적하며, OAuth·로그아웃·브라우저 이탈을 확인하고 service-worker 업데이트는 사용자가 선택하되 미저장 편집 중에는 적용하지 않는다.
+- 인증 통합 테스트는 local 가입·로그인, CSRF, session rotation, owner 격리와 mocked OIDC 연결/해제를 검증한다. 실제 Google credential과 provider network round trip은 사용하거나 검증했다고 간주하지 않는다.
 - 12개 한국어 fixture, revision 기준 날짜 파서, `field-policy-v1` ambiguity gate, Draft 2020-12 runtime contract와 strict domain validation이 구현되어 있다. `providerMetadata`의 다섯 version은 각각 1–64자, 필수 `toolCalls`는 0–100이며 proposal은 64 KiB, metadata는 8 KiB로 제한된다.
 - 명확한 결과는 `LOCAL`, 모호한 결과는 authoritative routing 사유를 받는 no-tool Fake cloud를 거쳐 `HYBRID` route로 저장되며 항상 사용자 검토가 필요하다.
 - `UNKNOWN` 유형은 UI가 자동 확정하지 않으며 사용자가 유형을 선택하고 항목을 추가해야 적용할 수 있다.
 - 실제 로컬 모델·클라우드 LLM, Web Push, 완전한 오프라인 동기화, 자동 taxonomy migration, 노드 압축은 아직 연결하지 않는다.
-- 다음 안전한 순서는 owner-scoped tag/alias 후보 조회, field-level Fake cloud 계약과 실패 상태, async 분석 수명주기·관측성이다.
+- 계정별 연속 5회 실패 시 15분 잠금은 구현되어 있다. 공개 배포 전 account hardening의 다음 순서는 local email verification, password reset delivery, IP·edge rate limit/abuse protection, MFA/passkey 검토와 account deletion이다. 제품 분석의 다음 순서는 owner-scoped tag/alias 후보 조회, field-level Fake cloud 계약과 실패 상태, async 분석 수명주기·관측성이다.

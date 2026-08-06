@@ -1,21 +1,226 @@
+import { useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
+import { AccountPanel } from '../features/auth/AccountPanel';
+import { AuthScreen } from '../features/auth/AuthScreen';
+import type { LocalAuthInput } from '../features/auth/authModel';
+import { authNoticeReducer, createAuthNotices } from '../features/auth/authNotices';
+import { useAuthSession } from '../features/auth/useAuthSession';
 import { MemoCapture } from '../features/capture/MemoCapture';
 import {
   canSubmitMemo,
+  LOCAL_DRAFT_STORAGE_FAILED_PROMPT,
   OFFLINE_CAPTURE_PROMPT,
 } from '../features/capture/captureAvailability';
 import { MemoTagGraph } from '../features/graph/MemoTagGraph';
 import { ConnectionStatus } from '../features/health/ConnectionStatus';
 import { MemoLibrary } from '../features/memos/MemoLibrary';
+import { PwaUpdateManager } from '../features/pwa/PwaUpdateManager';
 import { PostponedReview } from '../features/review/PostponedReview';
 import { ProposalReview } from '../features/review/ProposalReview';
+import {
+  confirmReviewDiscard,
+  hasUnsavedWorkspaceChanges,
+  SOURCE_CHANGE_DISCARDS_REVIEW_MESSAGE,
+  UNSAVED_REVIEW_NAVIGATION_MESSAGE,
+  UNSAVED_REVIEW_POSTPONE_MESSAGE,
+  UNSAVED_WORKSPACE_NAVIGATION_MESSAGE,
+} from '../features/review/unsavedReviewGuard';
 import { TaskList } from '../features/tasks/TaskList';
 import { FeedbackBanner } from '../shared/ui/FeedbackBanner';
 import { useMemoWorkspace } from './useMemoWorkspace';
+import { hasPendingServerOperation } from './workspaceOperationState';
 
 export function App() {
-  const workspace = useMemoWorkspace();
+  const auth = useAuthSession();
+  const [notices, dispatchNotice] = useReducer(
+    authNoticeReducer,
+    window.location.search,
+    createAuthNotices,
+  );
+  const previousUserId = useRef<string | null>(null);
 
-  const capturePrompt = workspace.connection === 'offline'
+  useEffect(() => {
+    const currentUserId = auth.session?.userId ?? null;
+    dispatchNotice({
+      type: 'SESSION_TRANSITION',
+      previousUserId: previousUserId.current,
+      currentUserId,
+    });
+    previousUserId.current = currentUserId;
+  }, [auth.session?.userId]);
+
+  useEffect(() => {
+    if (!auth.session || (!notices.googleLinked && !notices.redirectError)) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('linked');
+    url.searchParams.delete('error');
+    if (url.pathname === '/login') url.pathname = '/';
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  }, [auth.session, notices.googleLinked, notices.redirectError]);
+
+  function clearAuthNotices() {
+    auth.clearError();
+    dispatchNotice({ type: 'CLEAR' });
+    const url = new URL(window.location.href);
+    url.searchParams.delete('linked');
+    url.searchParams.delete('error');
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  async function login(input: Pick<LocalAuthInput, 'email' | 'password'>) {
+    clearAuthNotices();
+    await auth.login(input);
+  }
+
+  async function register(input: LocalAuthInput) {
+    clearAuthNotices();
+    await auth.register(input);
+  }
+
+  function logout() {
+    clearAuthNotices();
+    auth.logout();
+  }
+
+  function linkGoogle() {
+    clearAuthNotices();
+    auth.linkGoogle();
+  }
+
+  function unlinkGoogle() {
+    clearAuthNotices();
+    auth.unlinkGoogle();
+  }
+
+  const logoutPending = auth.status === 'LOGOUT_PENDING';
+  const canRetainWorkspace = auth.session !== null &&
+    (auth.status === 'AUTHENTICATED' || logoutPending);
+
+  if (!canRetainWorkspace || !auth.session) {
+    return (
+      <>
+        <PwaUpdateManager
+          hasUnsavedChanges={false}
+          operationPending={auth.pending !== null}
+        />
+        <AuthScreen
+          capabilities={auth.capabilities}
+          connection={auth.connection}
+          pending={auth.pending}
+          logoutPending={logoutPending}
+          error={auth.error}
+          redirectError={notices.redirectError}
+          onLogin={login}
+          onRegister={register}
+          onRetry={auth.retryBootstrap}
+          onClearError={clearAuthNotices}
+        />
+      </>
+    );
+  }
+
+  const workspaceAccount: WorkspaceAccountProps = {
+    session: auth.session,
+    capabilities: auth.capabilities,
+    pending: auth.pending,
+    error: auth.error ?? notices.redirectError,
+    googleLinked: notices.googleLinked,
+    onLinkGoogle: linkGoogle,
+    onUnlinkGoogle: unlinkGoogle,
+    onLogout: logout,
+    onClearError: clearAuthNotices,
+  };
+
+  return (
+    <>
+      <div hidden={logoutPending} aria-hidden={logoutPending}>
+        <WorkspaceApp key={auth.session.userId} account={workspaceAccount} />
+      </div>
+      {logoutPending && (
+        <AuthScreen
+          capabilities={auth.capabilities}
+          connection={auth.connection}
+          pending={auth.pending}
+          logoutPending
+          error={auth.error}
+          redirectError={notices.redirectError}
+          onLogin={login}
+          onRegister={register}
+          onRetry={auth.retryBootstrap}
+          onClearError={clearAuthNotices}
+        />
+      )}
+    </>
+  );
+}
+
+type WorkspaceAccountProps = ComponentProps<typeof AccountPanel>;
+
+function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
+  const workspace = useMemoWorkspace(account.session.userId);
+  const [memoEditDirty, setMemoEditDirty] = useState(false);
+  const [transientReviewDirty, setTransientReviewDirty] = useState(false);
+  const [pwaUpdating, setPwaUpdating] = useState(false);
+  const [navigationApproved, setNavigationApproved] = useState(false);
+  const hasUnsavedProposal = workspace.hasUnsavedReview || transientReviewDirty;
+  const hasUnsavedChanges = hasUnsavedWorkspaceChanges({
+    reviewEdited: workspace.hasUnsavedReview,
+    transientReviewInput: transientReviewDirty,
+    memoEdit: memoEditDirty,
+    unpersistedCapture: workspace.hasUnpersistedCapture,
+  });
+  const serverOperationPending = hasPendingServerOperation({
+    workspaceBusy: workspace.busy,
+    pendingTaskId: workspace.pendingTaskId,
+    authOperation: account.pending,
+  });
+  const interactionLocked = serverOperationPending || pwaUpdating;
+
+  useEffect(() => {
+    if (account.pending === null) setNavigationApproved(false);
+  }, [account.pending]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges || navigationApproved) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [hasUnsavedChanges, navigationApproved]);
+
+  function confirmWorkspaceDeparture(): boolean {
+    return confirmReviewDiscard(
+      hasUnsavedChanges,
+      hasUnsavedProposal && !memoEditDirty && !workspace.hasUnpersistedCapture
+        ? UNSAVED_REVIEW_NAVIGATION_MESSAGE
+        : UNSAVED_WORKSPACE_NAVIGATION_MESSAGE,
+    );
+  }
+
+  function confirmSourceChange(): boolean {
+    return confirmReviewDiscard(
+      hasUnsavedProposal,
+      SOURCE_CHANGE_DISCARDS_REVIEW_MESSAGE,
+    );
+  }
+
+  const guardedAccount: WorkspaceAccountProps = {
+    ...account,
+    interactionDisabled: pwaUpdating,
+    onLinkGoogle: () => {
+      if (!confirmWorkspaceDeparture()) return;
+      setNavigationApproved(true);
+      account.onLinkGoogle();
+    },
+    onLogout: () => {
+      if (confirmWorkspaceDeparture()) account.onLogout();
+    },
+  };
+
+  const capturePrompt = workspace.hasUnpersistedCapture
+    ? LOCAL_DRAFT_STORAGE_FAILED_PROMPT
+    : workspace.connection === 'offline'
     ? OFFLINE_CAPTURE_PROMPT
     : workspace.recoveryLoading
     ? '서버에 저장된 검토 상태를 복원하고 있습니다.'
@@ -29,19 +234,36 @@ export function App() {
 
   return (
     <main>
+      <PwaUpdateManager
+        hasUnsavedChanges={hasUnsavedChanges}
+        operationPending={serverOperationPending}
+        onUpdatingChange={setPwaUpdating}
+      />
       <header className="hero">
         <div>
           <span className="eyebrow">PERSONAL MEMO</span>
           <h1>생각을 먼저 적으세요.</h1>
           <p>분석은 제안만 만듭니다. 수정하고 승인한 내용만 실제 항목이 됩니다.</p>
         </div>
-        <ConnectionStatus status={workspace.connection} onRetry={workspace.checkConnection} />
+        <div className="hero-actions">
+          <ConnectionStatus status={workspace.connection} onRetry={workspace.checkConnection} />
+          <AccountPanel {...guardedAccount} />
+        </div>
       </header>
 
       <FeedbackBanner
         feedback={workspace.feedback}
         retryLabel={workspace.retryAction?.label}
-        onRetry={workspace.retryAction ? workspace.retry : undefined}
+        onRetry={workspace.retryAction
+          ? () => {
+              const scope = workspace.retryAction?.scope ?? '';
+              const mayDiscardReview =
+                scope.startsWith('update:') ||
+                scope.startsWith('trash:') ||
+                scope.startsWith('undo:');
+              if (!mayDiscardReview || confirmSourceChange()) workspace.retry();
+            }
+          : undefined}
         onDismiss={workspace.dismissFeedback}
       />
 
@@ -65,7 +287,7 @@ export function App() {
         trashedMemos={workspace.trashedMemos}
         loading={workspace.memosLoading}
         error={workspace.memosError}
-        busy={workspace.busy}
+        busy={interactionLocked}
         pendingScope={workspace.pendingMemoScope}
         analysisBlocked={
           workspace.recoveryLoading ||
@@ -74,10 +296,15 @@ export function App() {
           workspace.postponedReview !== null
         }
         onRetry={workspace.refreshMemos}
-        onUpdate={workspace.updateMemo}
-        onTrash={workspace.trashMemo}
+        onUpdate={(memo, content) =>
+          confirmSourceChange() ? workspace.updateMemo(memo, content) : Promise.resolve(false)
+        }
+        onTrash={(memo) => {
+          if (confirmSourceChange()) workspace.trashMemo(memo);
+        }}
         onRestore={workspace.restoreMemo}
         onAnalyze={workspace.analyzeMemo}
+        onDirtyChange={setMemoEditDirty}
       />
 
       <MemoTagGraph
@@ -91,6 +318,7 @@ export function App() {
         tasks={workspace.tasks}
         loading={workspace.workspaceLoading}
         error={workspace.workspaceError}
+        busy={interactionLocked}
         pendingTaskId={workspace.pendingTaskId}
         onRetry={workspace.refreshWorkspace}
         onStatusChange={workspace.updateTaskStatus}
@@ -105,10 +333,12 @@ export function App() {
           <button
             type="button"
             className="secondary-button"
-            disabled={workspace.busy}
-            onClick={workspace.undoApplication}
+            disabled={interactionLocked}
+            onClick={() => {
+              if (confirmSourceChange()) workspace.undoApplication();
+            }}
           >
-            {workspace.busy ? '처리 중…' : '마지막 적용 되돌리기'}
+            {interactionLocked ? '처리 중…' : '마지막 적용 되돌리기'}
           </button>
         </aside>
       )}
@@ -123,17 +353,25 @@ export function App() {
       {workspace.review && (
         <ProposalReview
           review={workspace.review}
-          busy={workspace.busy}
+          busy={interactionLocked}
           onChange={workspace.changeReview}
           onApply={workspace.applyCurrentReview}
-          onPostpone={workspace.postponeCurrentReview}
+          onPostpone={() => {
+            if (
+              confirmReviewDiscard(
+                hasUnsavedProposal,
+                UNSAVED_REVIEW_POSTPONE_MESSAGE,
+              )
+            ) workspace.postponeCurrentReview();
+          }}
           onReject={workspace.rejectCurrentReview}
+          onTransientDirtyChange={setTransientReviewDirty}
         />
       )}
 
       <MemoCapture
         content={workspace.content}
-        disabled={workspace.captureLocked}
+        disabled={workspace.captureLocked || interactionLocked}
         submissionDisabled={!canSubmitMemo(workspace.connection)}
         submitting={workspace.captureSubmitting}
         rawOnly={workspace.recoveryError !== null}

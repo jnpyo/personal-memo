@@ -28,8 +28,7 @@ public class MemoController {
 
   @PostMapping
   ResponseEntity<MemoDtos.View> create(
-      @RequestHeader("Idempotency-Key") String key,
-      @Valid @RequestBody MemoDtos.Create body) {
+      @RequestHeader("Idempotency-Key") String key, @Valid @RequestBody MemoDtos.Create body) {
     MemoDtos.View memo = service.create(key, body);
     return ResponseEntity.created(URI.create("/api/v1/memos/" + memo.id())).body(memo);
   }
@@ -55,14 +54,12 @@ public class MemoController {
   }
 
   @DeleteMapping("/{id}")
-  MemoDtos.View trash(
-      @PathVariable UUID id, @RequestHeader("Idempotency-Key") String key) {
+  MemoDtos.View trash(@PathVariable UUID id, @RequestHeader("Idempotency-Key") String key) {
     return service.trash(id, key);
   }
 
   @PostMapping("/{id}/restore")
-  MemoDtos.View restore(
-      @PathVariable UUID id, @RequestHeader("Idempotency-Key") String key) {
+  MemoDtos.View restore(@PathVariable UUID id, @RequestHeader("Idempotency-Key") String key) {
     return service.restore(id, key);
   }
 }

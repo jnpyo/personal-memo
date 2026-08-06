@@ -53,8 +53,7 @@ class Draft202012AnalysisProposalSchemaValidatorTest {
     ObjectNode blank = validProposal();
     ((ObjectNode) blank.path("providerMetadata")).put("localModelVersion", "   ");
     ObjectNode oversized = validProposal();
-    ((ObjectNode) oversized.path("providerMetadata"))
-        .put("embeddingModelVersion", "v".repeat(65));
+    ((ObjectNode) oversized.path("providerMetadata")).put("embeddingModelVersion", "v".repeat(65));
     ObjectNode excessiveTools = validProposal();
     ((ObjectNode) excessiveTools.path("providerMetadata")).put("toolCalls", 101);
 
@@ -70,15 +69,14 @@ class Draft202012AnalysisProposalSchemaValidatorTest {
     ((ObjectNode) oversizedMetadata.path("providerMetadata"))
         .put(
             "opaque",
-            "x".repeat(
-                Draft202012AnalysisProposalSchemaValidator
-                    .MAX_PROVIDER_METADATA_JSON_BYTES));
+            "x"
+                .repeat(
+                    Draft202012AnalysisProposalSchemaValidator.MAX_PROVIDER_METADATA_JSON_BYTES));
     ObjectNode oversizedProposal = validProposal();
     ((ObjectNode) oversizedProposal.path("providerMetadata"))
         .put(
             "opaque",
-            "x".repeat(
-                Draft202012AnalysisProposalSchemaValidator.MAX_PROPOSAL_JSON_BYTES));
+            "x".repeat(Draft202012AnalysisProposalSchemaValidator.MAX_PROPOSAL_JSON_BYTES));
 
     assertInvalidWithoutDataLeak(oversizedMetadata);
     assertInvalidWithoutDataLeak(oversizedProposal);
@@ -87,13 +85,9 @@ class Draft202012AnalysisProposalSchemaValidatorTest {
   @Test
   void enforcesMatchedAliasCodePointLimit() {
     ObjectNode valid = validProposal();
-    valid
-        .putArray("tagCandidates")
-        .add(tagCandidate(valid, "😀".repeat(100)));
+    valid.putArray("tagCandidates").add(tagCandidate(valid, "😀".repeat(100)));
     ObjectNode invalid = validProposal();
-    invalid
-        .putArray("tagCandidates")
-        .add(tagCandidate(invalid, "😀".repeat(101)));
+    invalid.putArray("tagCandidates").add(tagCandidate(invalid, "😀".repeat(101)));
 
     assertThatCode(() -> validator.validate(valid)).doesNotThrowAnyException();
     assertInvalidWithoutDataLeak(invalid);
@@ -105,22 +99,15 @@ class Draft202012AnalysisProposalSchemaValidatorTest {
         proposal ->
             proposal
                 .putArray("dateCandidates")
-                .add(
-                    dateCandidate(
-                        proposal, "2026-02-30", "DATE_ONLY", false)),
+                .add(dateCandidate(proposal, "2026-02-30", "DATE_ONLY", false)),
         proposal ->
             proposal
                 .putArray("dateCandidates")
-                .add(
-                    dateCandidate(
-                        proposal, "2026-08-05T10:00:00", "EXACT_TIME", true)));
+                .add(dateCandidate(proposal, "2026-08-05T10:00:00", "EXACT_TIME", true)));
   }
 
   private static ObjectNode dateCandidate(
-      ObjectNode proposal,
-      String value,
-      String precision,
-      boolean timeSpecified) {
+      ObjectNode proposal, String value, String precision, boolean timeSpecified) {
     ObjectNode candidate = proposal.objectNode();
     candidate.put("surfaceText", PRIVATE_TEXT);
     candidate.put("value", value);

@@ -1,7 +1,7 @@
 package local.personalmemo.analysis.infrastructure;
 
-import local.personalmemo.analysis.domain.CloudAnalysisRequest;
 import local.personalmemo.analysis.domain.CloudAnalysisGateway;
+import local.personalmemo.analysis.domain.CloudAnalysisRequest;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;

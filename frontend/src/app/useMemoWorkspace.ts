@@ -12,6 +12,7 @@ import {
   canSubmitMemo,
   type ConnectionState,
 } from '../features/capture/captureAvailability';
+import { rawMemoDraftStore } from '../features/capture/rawMemoDraftStore';
 import { buildUpdateMemoRequest } from '../features/memos/memoModel';
 import { buildApplyRequest, createReviewDraft, type ReviewDraft } from '../features/review/reviewModel';
 import {
@@ -37,10 +38,12 @@ function browserTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Seoul';
 }
 
-export function useMemoWorkspace() {
+export function useMemoWorkspace(ownerId: string) {
   const [connection, setConnection] = useState<ConnectionState>('checking');
-  const [content, setContent] = useState('');
+  const [content, setContent] = useState(() => rawMemoDraftStore.read(ownerId));
+  const [draftPersistenceFailed, setDraftPersistenceFailed] = useState(false);
   const [review, setReview] = useState<ReviewDraft | null>(null);
+  const [hasUnsavedReview, setHasUnsavedReview] = useState(false);
   const [postponedReview, setPostponedReview] = useState<ReviewDraft | null>(null);
   const [applicationId, setApplicationId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -109,6 +112,7 @@ export function useMemoWorkspace() {
     setRecoveryError(null);
     setApplicationId(null);
     setReview(null);
+    setHasUnsavedReview(false);
     setPostponedReview(null);
     try {
       const [latestApplication, reviewRequiredProposals, postponedProposals] = await Promise.all([
@@ -122,6 +126,7 @@ export function useMemoWorkspace() {
       ]);
       setApplicationId(recovered.applicationId);
       setReview(recovered.review);
+      setHasUnsavedReview(false);
       setPostponedReview(recovered.postponedReview);
     } catch (error) {
       setRecoveryError(errorMessage(error));
@@ -178,6 +183,8 @@ export function useMemoWorkspace() {
         timeZone: timeZone.current,
         idempotencyKey: attempt.createKey,
       });
+      rawMemoDraftStore.clear(ownerId);
+      setDraftPersistenceFailed(false);
       await refreshMemos();
       if (policy === 'RAW_ONLY') {
         setContent('');
@@ -196,6 +203,7 @@ export function useMemoWorkspace() {
       });
 
       setReview(createReviewDraft(run.proposalId, proposal));
+      setHasUnsavedReview(false);
       setPostponedReview(null);
       setFeedback({ kind: 'success', message: '원문은 보존되었습니다. 제안을 수정하거나 승인해 주세요.' });
       captureAttempt.current = null;
@@ -212,7 +220,9 @@ export function useMemoWorkspace() {
     if (!canSubmitMemo(connection)) {
       setFeedback({
         kind: 'info',
-        message: '서버에 다시 연결한 뒤 제출해 주세요. 현재 입력은 기기에 저장되지 않습니다.',
+        message: draftPersistenceFailed
+          ? '브라우저 저장소에 임시 초안을 보존하지 못했습니다. 이 화면을 닫지 말고 서버에 다시 연결한 뒤 제출해 주세요.'
+          : '입력은 이 계정 전용 임시 초안으로 보존했습니다. 서버에 다시 연결한 뒤 제출해 주세요.',
       });
       return;
     }
@@ -228,6 +238,8 @@ export function useMemoWorkspace() {
 
   function changeContent(nextContent: string) {
     setContent(nextContent);
+    const persisted = rawMemoDraftStore.save(ownerId, nextContent);
+    setDraftPersistenceFailed(nextContent.length > 0 && !persisted);
     if (captureAttempt.current && captureAttempt.current.content !== nextContent) {
       captureAttempt.current = null;
       clearRetry('capture');
@@ -236,6 +248,7 @@ export function useMemoWorkspace() {
 
   function changeReview(nextReview: ReviewDraft) {
     setReview(nextReview);
+    setHasUnsavedReview(true);
     clearRetry(`apply:${nextReview.proposalId}`);
   }
 
@@ -252,6 +265,7 @@ export function useMemoWorkspace() {
     try {
       await api.apply(snapshot.proposalId, body, idempotencyKey);
       setReview(null);
+      setHasUnsavedReview(false);
       setContent('');
       clearRetry(scope);
       setFeedback({ kind: 'success', message: '승인한 태그와 할 일을 생성했습니다.' });
@@ -279,6 +293,7 @@ export function useMemoWorkspace() {
     try {
       await api.postponeProposal(snapshot.proposalId, idempotencyKey);
       setReview(null);
+      setHasUnsavedReview(false);
       setFeedback({
         kind: 'info',
         message: '제안을 보류했습니다. 승인 전이므로 생성된 항목은 없습니다.',
@@ -303,6 +318,7 @@ export function useMemoWorkspace() {
     try {
       await api.rejectProposal(snapshot.proposalId, idempotencyKey);
       setReview(null);
+      setHasUnsavedReview(false);
       setFeedback({
         kind: 'info',
         message: '제안을 거절했습니다. 원본 메모는 그대로 보존됩니다.',
@@ -319,6 +335,7 @@ export function useMemoWorkspace() {
   function resumePostponedReview() {
     if (!postponedReview) return;
     setReview(postponedReview);
+    setHasUnsavedReview(false);
     setPostponedReview(null);
     setFeedback({ kind: 'info', message: '보류한 제안을 다시 열었습니다.' });
   }
@@ -435,6 +452,7 @@ export function useMemoWorkspace() {
         memoRevision: run.memoRevision,
       });
       setReview(createReviewDraft(run.proposalId, proposal));
+      setHasUnsavedReview(false);
       setPostponedReview(null);
       clearRetry(scope);
       setFeedback({
@@ -501,7 +519,9 @@ export function useMemoWorkspace() {
   return {
     connection,
     content,
+    hasUnpersistedCapture: content.length > 0 && draftPersistenceFailed,
     review,
+    hasUnsavedReview,
     postponedReview,
     applicationId,
     tasks,

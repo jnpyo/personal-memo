@@ -64,33 +64,41 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 
 ## Main experience
 
-### 1. Graph home
+### 1. Sign in and account
+
+- A new user can create an account with email, a 12-character-or-longer password, and a display name.
+- A returning user can use local credentials or, when configured, Google sign-in.
+- Google never silently claims an existing same-email account. The user signs in through the existing method and explicitly links Google from account settings.
+- The account panel shows usable sign-in methods and prevents removal of the final method.
+- Signing out returns to the authentication screen and makes owner data inaccessible to the browser session.
+
+### 2. Graph home
 
 - Show 50–100 active nodes by default.
 - Prioritize recent notes, unfinished tasks, upcoming events, pinned items, and important topic tags.
 - Tapping a node highlights its local neighborhood and opens a detail drawer.
 - Zooming changes detail level: clusters → tags → individual memos.
 
-### 2. Quick capture
+### 3. Quick capture
 
 - A persistent input affordance is available from the graph home.
 - Saving creates a raw memo immediately.
 - Analysis happens after save and must not block further capture.
 
-### 3. Analysis review
+### 4. Analysis review
 
 - Present compact chips for type and tag candidates.
 - Show the interpreted date alongside the original date expression.
 - Explain only uncertain fields, not the entire model reasoning.
 - Allow partial apply.
 
-### 4. Task and event handling
+### 5. Task and event handling
 
 - A memo can produce zero or more task facets.
 - MVP should cap automatic extraction to a small number, such as three, to keep review understandable.
 - `OVERDUE` is derived from `TODO && dueAt < now`; it is not a separately persisted source status.
 
-### 5. Aging and compression
+### 6. Aging and compression
 
 - Completed tasks and past events may collapse by period or topic.
 - Informational notes are not hidden solely because of age.
@@ -113,6 +121,7 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 - Autonomous life assistant
 - Automatic deletion or irreversible merge
 - Rich document editor
+- Password recovery delivery, public email verification, IP/edge rate limiting and abuse protection, and MFA/passkeys in the first authentication slice
 - Voice, image, PDF, and web-clip ingestion
 - Automatic whole-corpus ontology generation
 
@@ -134,4 +143,3 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 The intended product combines automatic knowledge organization, a graph-first interface, and action extraction. The clearest initial positioning is:
 
 > A student-focused AI second brain that turns rough class notes into connected concepts, assignments, and deadlines.
-

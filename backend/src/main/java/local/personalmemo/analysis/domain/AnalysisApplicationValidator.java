@@ -40,12 +40,10 @@ public class AnalysisApplicationValidator {
         items.stream().anyMatch(item -> item.kind().equals(selectedType));
     if (!selectedTypeIsRepresented) {
       throw invalid(
-          "SELECTED_TYPE_NOT_APPLIED",
-          "selectedType must match at least one confirmed item kind.");
+          "SELECTED_TYPE_NOT_APPLIED", "selectedType must match at least one confirmed item kind.");
     }
 
-    return new ValidatedApply(
-        request.expectedMemoRevision(), selectedType, title, tags, items);
+    return new ValidatedApply(request.expectedMemoRevision(), selectedType, title, tags, items);
   }
 
   private List<ValidatedTag> validateTags(Apply request) {
@@ -74,9 +72,7 @@ public class AnalysisApplicationValidator {
       if (!normalizedNames.add(normalized.normalizedName())) {
         throw invalid("DUPLICATE_TAG_SELECTION", "A tag can only be selected once.");
       }
-      tags.add(
-          new ValidatedTag(
-              null, normalized.canonicalName(), normalized.normalizedName()));
+      tags.add(new ValidatedTag(null, normalized.canonicalName(), normalized.normalizedName()));
     }
     return List.copyOf(tags);
   }
@@ -132,8 +128,7 @@ public class AnalysisApplicationValidator {
 
   private ValidatedDue validateExactTime(Due due, String surfaceText) {
     if (!due.timeSpecified()) {
-      throw invalid(
-          "INVALID_DATE_VALUE", "An exact due instant must explicitly include a time.");
+      throw invalid("INVALID_DATE_VALUE", "An exact due instant must explicitly include a time.");
     }
     try {
       Instant instant = OffsetDateTime.parse(requiredValue(due.value())).toInstant();
@@ -151,8 +146,7 @@ public class AnalysisApplicationValidator {
           "INVALID_DATE_VALUE",
           "An approximate or unknown due expression cannot be stored as an exact date or time.");
     }
-    return new ValidatedDue(
-        surfaceText, null, due.precision(), due.timeZone(), false, null, null);
+    return new ValidatedDue(surfaceText, null, due.precision(), due.timeZone(), false, null, null);
   }
 
   private String requireItemKind(String rawKind, String field) {
@@ -190,10 +184,14 @@ public class AnalysisApplicationValidator {
       String selectedType,
       String title,
       List<ValidatedTag> selectedTags,
-      List<ValidatedItem> items) {}
+      List<ValidatedItem> items) {
+    public ValidatedApply {
+      selectedTags = List.copyOf(selectedTags);
+      items = List.copyOf(items);
+    }
+  }
 
-  public record ValidatedTag(
-      UUID existingTagId, String newCanonicalName, String normalizedName) {}
+  public record ValidatedTag(UUID existingTagId, String newCanonicalName, String normalizedName) {}
 
   public record ValidatedItem(String kind, String title, ValidatedDue due) {}
 

@@ -26,7 +26,8 @@
 - **승인 단위를 되돌립니다.** application provenance를 따라 파생 데이터만 제거하며 원본 메모와 revision 이력은 남깁니다.
 - **기한 초과는 사실이 아니라 시점에 따른 상태입니다.** `OVERDUE`를 저장하지 않고 `TODO`와 현재 시각을 기준으로 조회할 때 계산합니다. 날짜만 지정한 기한은 UTC 자정으로 왜곡하지 않고 `due_local_date`로 보존합니다.
 - **그래프는 canonical 데이터의 투영입니다.** 메모 유형을 거대한 공통 노드로 만들지 않고 노드의 속성·필터·아이콘으로 표현합니다.
-- **소유권 경계는 서버와 데이터베이스에 있습니다.** 현재는 개발용 단일 사용자이지만 사용자 데이터는 `owner_id`를 가지며, V5의 owner-aware composite foreign key가 서로 다른 사용자의 하위 record를 데이터베이스 수준에서도 연결할 수 없게 합니다.
+- **소유권 경계는 서버와 데이터베이스에 있습니다.** 각 로그인 수단은 internal user UUID에 매핑되고, 명시적으로 연결한 local·Google 수단은 같은 UUID를 사용합니다. 서버가 Spring Security principal에서 `owner_id`를 결정하며, V5의 owner-aware composite foreign key는 서로 다른 사용자의 하위 record를 데이터베이스 수준에서도 연결할 수 없게 합니다.
+- **브라우저에 인증 token을 보관하지 않습니다.** opaque session은 PostgreSQL에 저장하고 항상 HttpOnly인 cookie(운영에서는 Secure)와 CSRF 검증을 사용합니다. Google email 일치만으로 계정을 합치지 않으며, 기존 로그인 뒤 명시적으로 연결해야 합니다.
 - **라우팅은 신호 기반으로 결정합니다.** 모델의 confidence 하나에 의존하지 않고 날짜·참조·행동·복합 의도 신호를 enum으로 검증합니다. 명확한 메모는 cloud를 호출하지 않으며, 모호한 메모도 현재는 외부 통신 없는 Fake adapter만 거칩니다.
 
 ## 구현 범위
@@ -34,7 +35,11 @@
 ### Frontend
 
 - Android Chrome을 첫 대상으로 한 React 19 + TypeScript + Vite PWA
+- 자체 가입·로그인 화면, 로그인과 신규 계정 생성을 구분해 안내하는 capability 기반 Google 로그인, Google 로그인 수단 연결·해제와 로그아웃 계정 패널
+- server-declared CSRF header를 모든 mutation에 붙이고 CSRF-specific `403`에 한 번만 안전하게 재시도하는 API client
+- owner UUID별 `localStorage` 원문 임시 초안, 저장소 차단·용량 실패 경고, 오프라인 편집과 온라인 제출 경계
 - 메모 캡처, 연결/실패/재시도 상태, 제안 제목·유형·태그 수정
+- 제안·새 태그·원문 revision 편집을 아우르는 dirty-state 보호, 미확정 교차 탭 로그아웃 중 mounted-state 보존, 사용자 선택형 PWA 업데이트
 - `UNKNOWN` 유형의 명시적 사용자 선택, 수동 항목 추가·제거와 부분 적용
 - 활성/휴지통 메모 목록, 기록 시각·시간대를 포함한 새 revision 편집, 휴지통 이동·복원, 기존 메모 재분석
 - 제안 승인·보류·거절과 마지막 application 되돌리기
@@ -47,6 +52,8 @@
 ### Backend
 
 - Java 21 + Spring Boot 모듈러 모놀리스
+- Spring Security local authentication과 선택적 Google OIDC, PostgreSQL-backed Spring Session, 명시적 Google 연결/안전한 해제
+- delegating bcrypt password hash, session fixation 방지, JSON `401`/`403`, 모든 domain API의 security-context owner scope
 - `LocalAnalyzer`와 `CloudAnalysisGateway` 경계, 실제 모델 대신 `FakeAnalyzer`와 Fake cloud adapter
 - revision의 기록 시각·IANA 시간대를 사용하는 한국어 날짜 파서와 versioned 결정론적 ambiguity gate
 - Draft 2020-12 runtime contract, domain 규칙, 날짜 의미, owner reference로 local/cloud proposal 재검증
@@ -62,11 +69,13 @@
 
 ### Verification
 
+- local 가입·로그인, CSRF, session fixation 방지, owner 격리, 명시적 Google 연결/해제를 검증하는 통합 테스트. Google 경로는 mocked OIDC claim으로 검증하며 실제 provider credential이나 Google network를 사용하지 않음
 - 날짜 처리, DST·윤일·잘못된 시각, 모호성 gate, 태그 정규화, 제안 편집, 그래프 변환, 재시도 identity 단위 테스트
 - 12개 versioned 한국어 memo fixture와 prompt-injection/no-tool 경계 테스트
 - Testcontainers PostgreSQL + MockMvc 통합 테스트
 - primary flow, 중복 요청, owner 격리, stale revision, apply rollback, memo lifecycle/recovery, task 상태/overdue, undo 원문 보존 검증
 - Playwright의 모바일 viewport에서 보류·새로고침·승인·그래프·되돌리기와 설치 가능한 오프라인 app shell 검증
+- 로컬 초안 owner 격리·저장 실패, 교차 탭 인증 전이, 미저장 편집 guard와 prompt형 service-worker 업데이트 단위 테스트
 - GitHub Actions에서 OpenAPI/JSON Schema, backend, frontend, 브라우저 E2E 검사를 실행
 
 ## 아키텍처
@@ -74,47 +83,71 @@
 ```text
 Android Chrome PWA
   React + TypeScript + React Flow
-             │ REST / JSON
+             │ session cookie + CSRF / REST JSON
              ▼
 Spring Boot modular monolith
-  memo │ analysis │ taxonomy │ task │ graph
+  auth │ memo │ analysis │ taxonomy │ task │ graph
+      │ optional Google OIDC
              │
              ▼
-PostgreSQL (source of truth) + Flyway
+PostgreSQL (source of truth + sessions) + Flyway
 ```
 
 모델 구현은 도메인 적용 코드와 분리되어 있습니다. 현재 Fake 분석기도 canonical 데이터를 직접 변경하지 않으며, 브라우저나 분석 provider가 owner를 선택하거나 서버 비밀을 전달받는 경로도 없습니다.
 
 ## 실행하기
 
-필수 도구는 Docker Desktop입니다. 저장소 루트에서 다음을 실행합니다.
+필수 도구는 Docker Desktop입니다. 기본 `compose.yaml`만으로는 개발 포트와 database 자격 증명이 구성되지 않으므로 반드시 개발 overlay를 함께 지정합니다. `yourname`은 이 작업 복제본에서 계속 재사용할 고유한 값으로 바꿉니다.
 
 ```powershell
-Copy-Item .env.example .env
-docker compose up --build
+Copy-Item .env.example .env.dev
+$devProject = "personal-memo-dev-yourname"
+
+docker compose --env-file .env.dev -p $devProject -f compose.yaml -f compose.dev.yaml config --quiet
+docker compose --env-file .env.dev -p $devProject -f compose.yaml -f compose.dev.yaml up -d --build --wait
+docker compose --env-file .env.dev -p $devProject -f compose.yaml -f compose.dev.yaml ps
 ```
 
-- PWA: <http://localhost:5173>
-- API health: <http://localhost:8080/api/v1/health>
-- Actuator health: <http://localhost:8080/actuator/health>
+- PWA: <http://127.0.0.1:5173>
+- API health: <http://127.0.0.1:8080/api/v1/health>
+- Actuator health: <http://127.0.0.1:8080/actuator/health>
 
-Compose의 frontend container는 개발 서버가 아니라 `npm run preview`로 빌드된 production preview를 5173 port에 제공합니다. 브라우저의 `/api` 요청은 Vite preview proxy가 `API_PROXY_TARGET=http://backend:8080`으로 전달하므로, host와 container에서 같은 상대 API URL을 사용합니다.
+frontend container는 unprivileged Nginx로 빌드된 PWA를 제공하고 `/api`, `/oauth2`, `/login/oauth2`를 `http://backend:8080`으로 proxy합니다. 브라우저에는 같은 origin의 상대 URL만 노출됩니다.
 
-처음 확인할 시나리오는 `11.25 OS과제 제출`입니다. 원문 저장 후 제안의 제목과 태그를 수정하거나 제외할 수 있고, 승인하면 할 일과 그래프가 갱신됩니다. 이후 **마지막 적용 되돌리기**를 누르면 파생 데이터만 제거됩니다.
+처음 열면 자체 계정을 만든 뒤 로그인합니다. 비밀번호는 12자 이상이며 bcrypt 안전 범위인 UTF-8 72바이트 이하여야 합니다. 그 다음 확인할 시나리오는 `11.25 OS과제 제출`입니다. 원문 저장 후 제안의 제목과 태그를 수정하거나 제외할 수 있고, 승인하면 할 일과 그래프가 갱신됩니다. 이후 **마지막 적용 되돌리기**를 누르면 파생 데이터만 제거됩니다.
 
-종료할 때는 아래 명령을 사용합니다. PostgreSQL volume은 보존됩니다.
+작성 중 원문은 서버 저장 전까지 internal owner UUID로 분리된 브라우저 `localStorage` 초안입니다. 저장소가 막히거나 가득 차면 화면에 데이터 손실 경고가 표시되고 이탈·업데이트 guard가 켜집니다. 이 초안은 암호화된 보관소가 아니며 로그아웃만으로 삭제되지 않으므로, 공유 기기에서는 브라우저 프로필 자체를 분리하거나 원문을 서버에 저장한 뒤 입력을 비워야 합니다. canonical memo와 완전한 오프라인 동기화 대기열로 취급해서는 안 됩니다.
+
+### 선택적 Google 로그인
+
+개발 overlay는 Google 없이 기동합니다. Google Cloud에서 OAuth Web client를 준비한 경우 `.env.dev`에서 다음 값을 설정합니다.
+
+```dotenv
+GOOGLE_AUTH_ENABLED=true
+GOOGLE_REGISTRATION_ENABLED=false
+GOOGLE_CLIENT_ID=your-web-client-id
+GOOGLE_CLIENT_SECRET=your-server-only-secret
+GOOGLE_REDIRECT_URI=http://127.0.0.1:5173/login/oauth2/code/google
+```
+
+Google Console에도 redirect URI를 정확히 등록해야 합니다. scope는 `openid profile email`만 사용합니다. `GOOGLE_AUTH_ENABLED`는 기존 Google identity의 로그인과 명시적 연결 기능을 켜고, 별도의 `GOOGLE_REGISTRATION_ENABLED`만 처음 보는 Google subject와 email로 새 internal user를 자동 생성할 수 있게 합니다. 후자의 기본값은 `false`입니다. 따라서 local 계정에 Google을 연결하거나 이미 연결된 Google 계정으로 로그인하는 데는 값을 켤 필요가 없습니다. 개발 중 Google만으로 신규 가입을 시험할 때만 `true`로 바꿉니다. 공개 capability 응답은 `googleEnabled`와 `googleRegistrationEnabled`를 분리해 제공하고, 로그인 화면도 OAuth 이동 전에 Google 신규 가입 가능 여부를 알려 줍니다. `GOOGLE_AUTH_ENABLED=true`인데 client ID나 secret이 비어 있으면 backend는 잘못된 설정으로 기동을 거부합니다. 운영에서는 신규 Google 사용자 생성이 강제로 비활성화되고 절대형 public HTTPS redirect URI만 허용됩니다. Google secret은 backend container에만 전달되며 frontend build나 browser storage에는 포함되지 않습니다.
+
+잠시 멈출 때는 정확한 project를 확인하고 `stop`을 사용합니다. PostgreSQL volume은 보존됩니다. 자신이 만든 project name을 확인하지 않은 일반 `docker compose down`이나 기존 project의 `down --volumes`는 실행하지 않습니다.
 
 ```powershell
-docker compose down
+docker compose --env-file .env.dev -p $devProject -f compose.yaml -f compose.dev.yaml ps
+docker compose --env-file .env.dev -p $devProject -f compose.yaml -f compose.dev.yaml stop
 ```
 
-## 검사 명령
+## 검증
 
 Java 21/Maven 3.9와 Node 24/npm 환경에서 저장소 루트를 기준으로:
 
 ```powershell
 Push-Location backend
-mvn test
+$env:RUN_POSTGRES_INTEGRATION_TESTS = "true"
+mvn -B verify
+Remove-Item Env:RUN_POSTGRES_INTEGRATION_TESTS
 Pop-Location
 
 Push-Location frontend
@@ -125,49 +158,78 @@ npm run build
 Pop-Location
 ```
 
-기본 `mvn test`는 빠른 단위 테스트를 실행합니다. 실제 PostgreSQL 17.6을 사용하는 MockMvc 통합 테스트는 Docker가 켜진 상태에서 저장소 루트의 격리된 test Compose로 실행할 수 있습니다.
+`mvn verify`는 backend test와 Spotless·SpotBugs 검사를 실행합니다. 실제 PostgreSQL 17.6을 사용하는 통합 테스트만 별도의 Maven container에서 실행하려면 고유한 test project를 사용합니다.
 
 ```powershell
-docker compose -f compose.test.yaml up --abort-on-container-exit --exit-code-from backend-integration
-docker compose -f compose.test.yaml down --volumes
+$integrationProject = "personal-memo-integration-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+docker compose -p $integrationProject -f compose.test.yaml up --abort-on-container-exit --exit-code-from backend-integration
+docker compose -p $integrationProject -f compose.test.yaml down --volumes
 ```
 
-이 경로는 test 전용 PostgreSQL과 Maven container를 사용하며 운영용 named volume을 건드리지 않습니다. Flyway migration은 backend 시작과 통합 test database 생성 시 자동 적용됩니다. 로컬 Java와 Testcontainers를 사용하려면 Docker를 켠 뒤 `RUN_POSTGRES_INTEGRATION_TESTS=true` 환경 변수와 함께 `backend`에서 `mvn test`를 실행할 수도 있습니다.
+이 경로는 test 전용 PostgreSQL과 Maven container를 사용하며 운영용 named volume을 건드리지 않습니다. 위 `down --volumes`는 바로 앞에서 만든 `$integrationProject`에만 사용합니다. Flyway migration은 backend 시작과 통합 test database 생성 시 자동 적용됩니다.
 
-브라우저 E2E는 일반 개발 volume과 분리된 Compose project와 전용 host port에서 production stack을 띄운 뒤 실행합니다. 기존 개발 stack을 종료할 필요가 없습니다. E2E는 재시도 격리를 위해 대상 API의 검토 중·보류 proposal을 거절하고 마지막 application을 되돌릴 수 있으므로, `E2E_ALLOW_DESTRUCTIVE_CLEANUP=true`는 아래처럼 **폐기 가능한 E2E 전용 데이터베이스에 연결한 경우에만** 설정합니다. 개인 개발·운영 데이터베이스를 가리키는 URL에는 절대 사용하지 않습니다.
+브라우저 E2E도 개발 volume과 분리된 고유 Compose project와 전용 host port를 사용합니다. 기존 개발 stack은 종료하지 않습니다.
 
 ```powershell
+$e2eProject = "personal-memo-e2e-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+$env:POSTGRES_DB = "personal_memo_e2e"
+$env:POSTGRES_USER = "personal_memo_e2e"
+$env:POSTGRES_PASSWORD = "e2e-only-password"
 $env:PERSONAL_MEMO_POSTGRES_PORT = "55432"
 $env:PERSONAL_MEMO_BACKEND_PORT = "18081"
 $env:PERSONAL_MEMO_FRONTEND_PORT = "15174"
-docker compose -p personal-memo-e2e up -d --build
+$env:AUTH_REGISTRATION_ENABLED = "true"
+$env:GOOGLE_AUTH_ENABLED = "true"
+$env:GOOGLE_REGISTRATION_ENABLED = "false"
+$env:GOOGLE_CLIENT_ID = "e2e-fake-client"
+$env:GOOGLE_CLIENT_SECRET = "e2e-fake-secret"
+$env:GOOGLE_REDIRECT_URI = "http://127.0.0.1:15174/login/oauth2/code/google"
+
+docker compose --env-file .env.example -p $e2eProject -f compose.yaml -f compose.dev.yaml up -d --build --wait
 
 Push-Location frontend
 npm ci
 npx playwright install chromium
 $env:E2E_BASE_URL = "http://127.0.0.1:15174"
-$env:E2E_ALLOW_DESTRUCTIVE_CLEANUP = "true"
+$env:E2E_GOOGLE_ENABLED = "true"
 npm run test:e2e
-Remove-Item Env:E2E_ALLOW_DESTRUCTIVE_CLEANUP
 Pop-Location
 
-docker compose -p personal-memo-e2e down --volumes
+docker compose --env-file .env.example -p $e2eProject -f compose.yaml -f compose.dev.yaml down --volumes
+Remove-Item Env:POSTGRES_DB, Env:POSTGRES_USER, Env:POSTGRES_PASSWORD
+Remove-Item Env:PERSONAL_MEMO_POSTGRES_PORT, Env:PERSONAL_MEMO_BACKEND_PORT, Env:PERSONAL_MEMO_FRONTEND_PORT
+Remove-Item Env:AUTH_REGISTRATION_ENABLED, Env:GOOGLE_AUTH_ENABLED, Env:GOOGLE_REGISTRATION_ENABLED, Env:GOOGLE_CLIENT_ID, Env:GOOGLE_CLIENT_SECRET, Env:GOOGLE_REDIRECT_URI
+Remove-Item Env:E2E_BASE_URL, Env:E2E_GOOGLE_ENABLED
 ```
 
-Playwright는 Android Chrome에 가까운 412×915 touch viewport, `ko-KR`, `Asia/Seoul`에서 primary flow를 실행합니다. 원문 저장 → 검토 focus/새로고침 복구 → 보류 → 보류 제안 복구 → 수정·승인 → task/graph 표시 → undo 뒤 원문 보존을 확인합니다. 별도 시나리오는 `UNKNOWN` 유형의 명시적 선택과 수동 항목 추가·삭제 focus를 검증하고, app-shell 시나리오는 192/512 manifest icon, service worker 등록, 오프라인 reload를 확인합니다. GitHub Actions는 PostgreSQL 통합 test와 이 브라우저 E2E를 모두 실행합니다.
+Playwright는 Android Chrome에 가까운 412×915 touch viewport, `ko-KR`, `Asia/Seoul`에서 primary flow, 계정 경계와 OAuth state, `UNKNOWN` 선택, 설치 가능한 offline app shell을 검증합니다. 실제 Google network는 호출하지 않습니다. `down --volumes`는 이 명령에서 만든 `$e2eProject`에만 사용합니다.
+
+## 운영
+
+운영은 개발 `.env`를 재사용하지 않고, 필수 PostgreSQL 비밀을 가진 별도 `.env.prod`와 안정적인 고유 project name을 사용합니다.
+
+```powershell
+$prodProject = "personal-memo-prod-host01"
+
+docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.prod.yaml config --quiet
+docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.prod.yaml up -d --build --wait
+docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.prod.yaml ps
+```
+
+운영 overlay는 frontend만 loopback에 열며 외부 HTTPS same-origin edge를 별도로 요구합니다. local 가입과 신규 Google 사용자 자동 생성은 모두 fail-closed로 비활성화되고, Google 로그인을 켤 때는 client 자격 증명과 절대형 HTTPS redirect URI가 모두 필요합니다. 이미 연결된 Google identity 로그인과 로그인한 local 계정의 명시적 Google 연결은 계속 지원합니다. 현재 형태는 공개 self-service 출시가 아니라 접근을 제한한 포트폴리오·평가용 checkpoint입니다. 환경 변수, health check, Google 설정, backup/restore, Flyway와 rollback 절차는 [배포 및 운영 가이드](docs/DEPLOYMENT.md)를 따릅니다.
 
 ## 현재 경계
 
 이 저장소는 포트폴리오용 MVP 체크포인트이며 다음 기능은 아직 연결하지 않았습니다.
 
 - 실제 로컬 AI 모델 또는 클라우드 LLM
-- 운영 인증과 다중 사용자 UI
+- local email 검증·비밀번호 재설정 delivery, IP·edge rate limit/abuse protection, MFA/passkey, 완전한 계정 삭제 자동화
 - 완전한 오프라인 동기화와 IndexedDB outbox
 - Web Push 및 reminder dispatcher
 - 자동 태그 병합·분리, 의미 검색, 노드 압축
 - Neo4j, Kafka, Redis, 별도 AI 마이크로서비스
 
-다음 단계는 owner-scoped tag/alias 후보 조회와 Fake cloud의 field-level 요청·실패 상태(`USER_INPUT_NEEDED`, `PENDING_OFFLINE`)를 더 구체화하는 것입니다. 실제 provider와 로컬 모델 연결은 현재 기본 결정에 따라 보류하며, 별도 승인과 평가·비용·개인정보 경계가 준비되기 전에는 도입하지 않습니다.
+local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 적용되며 잠금 중 추가 시도로 만료가 연장되지 않습니다. 만료 뒤 정상 로그인하면 실패 기록을 초기화합니다. 다음 단계는 공개 배포 전 email 검증·비밀번호 재설정·IP와 edge의 abuse 방어 같은 account hardening과, owner-scoped tag/alias 후보 조회 및 Fake cloud의 field-level 요청·실패 상태(`USER_INPUT_NEEDED`, `PENDING_OFFLINE`)를 더 구체화하는 것입니다. 실제 AI provider와 로컬 모델 연결은 현재 기본 결정에 따라 보류하며, 별도 승인과 평가·비용·개인정보 경계가 준비되기 전에는 도입하지 않습니다.
 
 ## 문서
 
@@ -177,5 +239,6 @@ Playwright는 Android Chrome에 가까운 412×915 touch viewport, `ko-KR`, `Asi
 - [OpenAPI 3.1 명세](docs/openapi.yaml)
 - [현재 데이터 모델](docs/DATA_MODEL.md)
 - [AI 안전 경계](docs/AI_PIPELINE.md)
+- [배포 및 운영 가이드](docs/DEPLOYMENT.md)
 - [마일스톤](docs/ROADMAP.md)
 - [ADR](docs/adr)

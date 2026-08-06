@@ -34,8 +34,7 @@ class KoreanDateParserTest {
     assertThat(result.getFirst().value()).isEqualTo("2026-11-25");
     assertThat(result.getFirst().precision()).isEqualTo(DatePrecision.DATE_ONLY);
     assertThat(result.getFirst().timeSpecified()).isFalse();
-    assertThat(result.getFirst().ambiguityReasons())
-        .containsExactly(AmbiguityReason.MISSING_TIME);
+    assertThat(result.getFirst().ambiguityReasons()).containsExactly(AmbiguityReason.MISSING_TIME);
   }
 
   @Test
@@ -51,10 +50,7 @@ class KoreanDateParserTest {
   @Test
   void infersNearestFutureYearButPreservesMissingYearAndTimeSignals() {
     var currentYear = parser.parse("11.25 과제", BASE, SEOUL).getFirst();
-    var nextYear =
-        parser
-            .parse("1.2 과제", Instant.parse("2026-12-31T15:30:00Z"), SEOUL)
-            .getFirst();
+    var nextYear = parser.parse("1.2 과제", Instant.parse("2026-12-31T15:30:00Z"), SEOUL).getFirst();
 
     assertThat(currentYear.value()).isEqualTo("2026-11-25");
     assertThat(currentYear.precision()).isEqualTo(DatePrecision.DATE_ONLY);
@@ -111,10 +107,7 @@ class KoreanDateParserTest {
   @Test
   void fullLookingInvalidClockNeverFallsBackToADateOnlyCandidate() {
     for (String content :
-        List.of(
-            "2026.11.25 25:00 제출",
-            "2026.11.25 18:60 제출",
-            "2026.11.25 18:060 제출")) {
+        List.of("2026.11.25 25:00 제출", "2026.11.25 18:60 제출", "2026.11.25 18:060 제출")) {
       var result = parser.parse(content, BASE, SEOUL);
 
       assertThat(result).hasSize(1);
@@ -130,9 +123,7 @@ class KoreanDateParserTest {
 
   @Test
   void rejectsAnExplicitTimeInsideAnIanaDstGap() {
-    var result =
-        parser.parse(
-            "2026.3.8 02:30 예약", BASE, "America/New_York").getFirst();
+    var result = parser.parse("2026.3.8 02:30 예약", BASE, "America/New_York").getFirst();
 
     assertThat(result.surfaceText()).isEqualTo("2026.3.8 02:30");
     assertThat(result.value()).isNull();
@@ -143,9 +134,7 @@ class KoreanDateParserTest {
 
   @Test
   void rejectsAnExplicitTimeInsideAnIanaDstOverlap() {
-    var result =
-        parser.parse(
-            "2026.11.1 01:30 예약", BASE, "America/New_York").getFirst();
+    var result = parser.parse("2026.11.1 01:30 예약", BASE, "America/New_York").getFirst();
 
     assertThat(result.surfaceText()).isEqualTo("2026.11.1 01:30");
     assertThat(result.value()).isNull();
@@ -156,9 +145,7 @@ class KoreanDateParserTest {
 
   @Test
   void acceptsAnUnambiguousExplicitTimeAfterTheDstGap() {
-    var result =
-        parser.parse(
-            "2026.3.8 03:30 예약", BASE, "America/New_York").getFirst();
+    var result = parser.parse("2026.3.8 03:30 예약", BASE, "America/New_York").getFirst();
 
     assertThat(result.value()).isEqualTo("2026-03-08T03:30:00-04:00");
     assertThat(result.precision()).isEqualTo(DatePrecision.EXACT_TIME);
@@ -168,17 +155,11 @@ class KoreanDateParserTest {
   @Test
   void yearlessLeapDayChoosesTheFirstRealOccurrenceOnOrAfterTheBaseDate() {
     var beforeLeapDay =
-        parser
-            .parse("2.29 확인", Instant.parse("2024-02-28T00:00:00Z"), SEOUL)
-            .getFirst();
+        parser.parse("2.29 확인", Instant.parse("2024-02-28T00:00:00Z"), SEOUL).getFirst();
     var afterLeapDay =
-        parser
-            .parse("2.29 확인", Instant.parse("2024-03-01T00:00:00Z"), SEOUL)
-            .getFirst();
+        parser.parse("2.29 확인", Instant.parse("2024-03-01T00:00:00Z"), SEOUL).getFirst();
     var nonLeapYear =
-        parser
-            .parse("2.29 확인", Instant.parse("2026-01-01T00:00:00Z"), SEOUL)
-            .getFirst();
+        parser.parse("2.29 확인", Instant.parse("2026-01-01T00:00:00Z"), SEOUL).getFirst();
 
     assertThat(beforeLeapDay.value()).isEqualTo("2024-02-29");
     assertThat(afterLeapDay.value()).isEqualTo("2028-02-29");
@@ -189,19 +170,14 @@ class KoreanDateParserTest {
   @Test
   void dayOnlyDeadlineSkipsMonthsThatDoNotContainTheRequestedDay() {
     var fromFebruary =
-        parser
-            .parse("31일까지 제출", Instant.parse("2026-02-10T00:00:00Z"), SEOUL)
-            .getFirst();
+        parser.parse("31일까지 제출", Instant.parse("2026-02-10T00:00:00Z"), SEOUL).getFirst();
     var fromThirtyDayMonth =
-        parser
-            .parse("31일까지 제출", Instant.parse("2026-04-10T00:00:00Z"), SEOUL)
-            .getFirst();
+        parser.parse("31일까지 제출", Instant.parse("2026-04-10T00:00:00Z"), SEOUL).getFirst();
 
     assertThat(fromFebruary.value()).isEqualTo("2026-03-31");
     assertThat(fromThirtyDayMonth.value()).isEqualTo("2026-05-31");
     assertThat(fromFebruary.precision()).isEqualTo(DatePrecision.DATE_ONLY);
-    assertThat(fromFebruary.ambiguityReasons())
-        .containsExactly(AmbiguityReason.MISSING_YEAR);
+    assertThat(fromFebruary.ambiguityReasons()).containsExactly(AmbiguityReason.MISSING_YEAR);
   }
 
   @Test

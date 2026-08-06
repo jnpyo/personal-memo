@@ -9,7 +9,54 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
 - Milestone 0: complete.
 - Milestone 1: complete, including memo lifecycle/recovery, production PWA packaging, and mobile E2E coverage.
 - Milestone 2: in progress. Korean date policy, versioned fixtures, runtime schema/domain validation, versioned field-level routing with persisted provenance, provider-independent Fake cloud enrichment, prompt-injection boundaries, and `UNKNOWN` user resolution are implemented.
+- Authentication hardening: complete for the MVP checkpoint. Local email/password, optional Google OpenID Connect, explicit account linking, PostgreSQL-backed server sessions, CSRF protection, owner identity derived from Spring Security, and a deterministic 5-failure/15-minute local-account lock are implemented. Authentication unit/integration coverage and the full local-account primary browser E2E suite pass.
+- Production/deployment hardening: complete for a controlled private checkpoint. Explicit dev/prod Compose overlays, required production database secrets, fail-closed production registration, Secure/SameSite session and CSRF cookies, validated forwarded headers, non-root health-checked images, static verification, and backup/restore/Flyway operating guidance are present.
+- Google behavior is covered with mocked OIDC claims and authorization-request tests; no real-provider credential round trip is claimed. Email verification, password recovery delivery, safe initial-account provisioning, separate migration/runtime database roles, IP/edge rate limiting and abuse protection, MFA/passkeys, account deletion, external TLS/certificate automation, secret management, monitoring, and automated backup drills remain public-release work.
 - Real local/cloud model adapters remain intentionally deferred by the current product decision. No provider is introduced merely to satisfy the original roadmap bullet.
+- Product decisions already reflected in code are recorded as resolved in `OPEN_QUESTIONS.md`; that file now reserves confirmation prompts for genuinely open launch or post-usage choices.
+
+## Authentication hardening slice
+
+### Deliverables
+
+- local registration, sign-in, current-session, and sign-out APIs
+- same-account login failure tracking with a non-extending 15-minute lock after five failures and counter reset after successful post-expiry login
+- optional Google OpenID Connect sign-in behind configuration
+- explicit Google link intent and safe unlink rules; no automatic email-based account merge
+- PostgreSQL-backed Spring Session schema and identity tables through Flyway
+- `CurrentIdentity` abstraction backed by Spring Security instead of a fixed development UUID
+- CSRF-aware React API client and authenticated application shell
+- account panel showing available and linked sign-in methods
+- mocked-provider integration coverage and local-auth mobile E2E coverage
+
+### Exit criteria
+
+- unauthenticated domain access fails with `401` and all reads and writes remain owner-scoped;
+- local and linked Google login resolve to the same internal owner without exposing credentials or provider tokens to browser storage;
+- Google configuration can be absent without breaking startup or local login;
+- linking requires an authenticated explicit intent, and the last usable login method cannot be removed;
+- unknown, invalid-password, and locked-account login attempts share one public error while lock state transitions remain integration-tested;
+- session, CSRF, ownership, unit, integration, and primary E2E tests pass without contacting Google.
+
+## Production/deployment hardening slice
+
+### Deliverables
+
+- explicit `compose.dev.yaml` and `compose.prod.yaml` overlays over one base topology
+- production database credentials without development defaults and fail-fast auth configuration
+- loopback-only production frontend behind a trusted same-origin HTTPS edge
+- non-root backend/frontend runtime images, read-only backend filesystem, dropped capabilities, and container health checks
+- production Secure session/XSRF cookies and validated forwarded scheme/port propagation
+- backend Spotless/SpotBugs verification and production Compose contract validation
+- PowerShell deployment, health, backup, separate-project restore, forward Flyway migration, and rollback guidance
+
+### Exit criteria
+
+- a developer can start the development stack only through the documented overlay and a unique project name;
+- production configuration refuses missing database secrets, enabled local registration, and incomplete or insecure Google settings;
+- production exposes neither PostgreSQL nor Spring Boot directly to the host network;
+- image and configuration checks are reproducible without introducing a second datastore or service;
+- the checkpoint is described as controlled private deployment, not as a public self-service launch.
 
 ## Milestone 0 — Decisions and scaffolding
 
@@ -75,11 +122,14 @@ The complete user flow works without a real AI provider.
 - local-result DTO and schema validation
 - deterministic ambiguity gate
 - cloud provider abstraction with a fake adapter
-- one real provider adapter behind configuration
+- provider-independent failure and consent boundaries exercised with a fake adapter
 - top-k retrieval context
 - structured-output and domain validation
 - async analysis status, timeout, retry policy, and cost metrics
 - prompt-injection test cases
+
+A real provider adapter is a separately approved follow-up after privacy, evaluation, latency, and
+cost limits are defined. It is not an exit criterion for the current checkpoint.
 
 ### Exit criteria
 
@@ -115,7 +165,7 @@ Do not hard-code a model before the benchmark and licensing review.
 
 ### Deliverables
 
-- installable app shell
+- extend the existing installable app shell and user-prompted update lifecycle for offline reliability
 - IndexedDB outbox
 - foreground retry and explicit sync state
 - conflict response UI

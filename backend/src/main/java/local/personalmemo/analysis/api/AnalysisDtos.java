@@ -17,11 +17,9 @@ public final class AnalysisDtos {
 
   public record Start(
       @Min(1) int memoRevision,
-      @NotBlank @Pattern(regexp = "AUTO", message = "must be AUTO in the fake-analysis flow")
-          String policy) {}
+      @NotBlank @Pattern(regexp = "AUTO", message = "must be AUTO in the fake-analysis flow") String policy) {}
 
-  public record RunView(
-      UUID id, UUID memoId, int memoRevision, String status, UUID proposalId) {}
+  public record RunView(UUID id, UUID memoId, int memoRevision, String status, UUID proposalId) {}
 
   public record Due(
       @NotBlank @Size(max = 100) String surfaceText,
@@ -31,9 +29,7 @@ public final class AnalysisDtos {
       boolean timeSpecified) {}
 
   public record Item(
-      @NotBlank String kind,
-      @NotBlank @Size(max = 200) String title,
-      @Valid Due due) {}
+      @NotBlank String kind, @NotBlank @Size(max = 200) String title, @Valid Due due) {}
 
   public record Tag(UUID existingTagId, @Size(max = 100) String newCanonicalName) {}
 
@@ -42,7 +38,12 @@ public final class AnalysisDtos {
       @NotBlank String selectedType,
       @NotBlank @Size(max = 200) String title,
       @NotNull @Size(max = 10) List<@Valid Tag> selectedTags,
-      @NotEmpty @Size(max = 3) List<@Valid Item> items) {}
+      @NotEmpty @Size(max = 3) List<@Valid Item> items) {
+    public Apply {
+      selectedTags = selectedTags == null ? null : List.copyOf(selectedTags);
+      items = items == null ? null : List.copyOf(items);
+    }
+  }
 
   public record ApplicationView(UUID applicationId, String status) {}
 

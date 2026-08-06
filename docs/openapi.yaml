@@ -2,16 +2,20 @@ openapi: 3.1.0
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 info:
   title: Personal Memo API
-  version: 0.2.0
+  version: 0.3.1
   description: >-
-    Milestone 1의 AI-free vertical slice와 외부 모델 없는 결정론적 분석 계약입니다.
+    Server-session 인증, Milestone 1의 AI-free vertical slice와 외부 모델 없는 결정론적 분석 계약입니다.
     분석 결과는 제안이며, canonical 태그와 할 일은 사용자 승인 endpoint를
-    통해서만 생성됩니다.
+    통해서만 생성됩니다. Cookie-authenticated mutation은 CSRF header가 필요합니다.
+    Owner-scoped 요청은 선택적인 X-Expected-Owner-Id client snapshot guard를 지원하지만,
+    권한과 실제 owner는 항상 authenticated server principal에서 결정됩니다.
 servers:
   - url: /api/v1
-security: []
+security:
+  - sessionCookie: []
 tags:
   - name: Health
+  - name: Authentication
   - name: Memos
   - name: Analysis
   - name: Tasks
@@ -23,6 +27,7 @@ paths:
       tags: [Health]
       operationId: getApiHealth
       summary: Check frontend-to-backend connectivity
+      security: []
       responses:
         "200":
           description: API is reachable.
@@ -31,7 +36,176 @@ paths:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
 
+  /auth/capabilities:
+    get:
+      tags: [Authentication]
+      operationId: getAuthCapabilities
+      summary: Discover enabled sign-in and registration methods
+      security: []
+      responses:
+        "200":
+          description: Public authentication capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthCapabilities"
+
+  /auth/csrf:
+    get:
+      tags: [Authentication]
+      operationId: getCsrfToken
+      summary: Obtain the current browser-session CSRF token
+      security: []
+      responses:
+        "200":
+          description: Token and the server-selected request names.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CsrfToken"
+
+  /auth/register:
+    post:
+      tags: [Authentication]
+      operationId: registerLocalAccount
+      summary: Create a local account and authenticated server session
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Local account created and session established.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /auth/login:
+    post:
+      tags: [Authentication]
+      operationId: loginWithLocalCredentials
+      summary: Establish a server session with local credentials
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /auth/me:
+    get:
+      tags: [Authentication]
+      operationId: getCurrentAuthSession
+      summary: Read the current authenticated internal user
+      responses:
+        "200":
+          description: Current session and usable login methods.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      operationId: logout
+      summary: Idempotently invalidate the current server session
+      description: >-
+        A server session is optional so a client can safely repeat logout after expiry or a
+        successful earlier call. A current CSRF token remains mandatory. When an authenticated
+        principal is present, X-Expected-Owner-Id is checked before LogoutFilter invalidates the
+        session.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ExpectedOwnerId"
+      responses:
+        "204":
+          description: Session invalidated, or no authenticated session remained.
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+
+  /auth/google/link-intent:
+    post:
+      tags: [Authentication]
+      operationId: createGoogleLinkIntent
+      summary: Start an explicit Google identity-link operation
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ExpectedOwnerId"
+      responses:
+        "200":
+          description: Short-lived link intent created in the authenticated session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleLinkIntent"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+
+  /auth/identities/google:
+    delete:
+      tags: [Authentication]
+      operationId: unlinkGoogleIdentity
+      summary: Remove Google while preserving another usable login method
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ExpectedOwnerId"
+      responses:
+        "200":
+          description: Updated session after unlinking.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+
   /memos:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
     get:
       tags: [Memos]
       operationId: listMemos
@@ -60,6 +234,10 @@ paths:
                 maxItems: 100
                 items:
                   $ref: "#/components/schemas/MemoView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
     post:
@@ -67,6 +245,7 @@ paths:
       operationId: createMemo
       summary: Save the first immutable raw memo revision
       parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
@@ -86,14 +265,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MemoView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
         "409":
-          $ref: "#/components/responses/Conflict"
+          $ref: "#/components/responses/OwnerOrDomainConflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
   /memos/{memoId}:
     parameters:
       - $ref: "#/components/parameters/MemoId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
     get:
       tags: [Memos]
       operationId: getMemo
@@ -105,8 +289,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MemoView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
     patch:
       tags: [Memos]
       operationId: updateMemo
@@ -117,6 +305,7 @@ paths:
         clientUpdatedAt and timeZone are an optional pair; the PWA always sends both,
         and retries reuse the original body snapshot and idempotency key.
       parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
@@ -131,10 +320,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MemoView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          $ref: "#/components/responses/OwnerOrDomainConflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
     delete:
@@ -145,6 +338,7 @@ paths:
         Marks the memo TRASHED and pending review runs STALE. Derived records remain
         stored but are hidden from active task and graph projections.
       parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
@@ -153,22 +347,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MemoView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          $ref: "#/components/responses/OwnerOrDomainConflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
   /memos/{memoId}/restore:
     parameters:
       - $ref: "#/components/parameters/MemoId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
     post:
       tags: [Memos]
       operationId: restoreMemo
       summary: Restore a soft-deleted memo to ACTIVE
       description: Restoring a memo does not revive analysis runs already marked STALE.
       parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
@@ -177,16 +377,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MemoView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          $ref: "#/components/responses/OwnerOrDomainConflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
   /memos/{memoId}/analysis-runs:
     parameters:
       - $ref: "#/components/parameters/MemoId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
     post:
       tags: [Analysis]
       operationId: startAnalysis
@@ -206,6 +411,7 @@ paths:
         proposal JSON is limited to 65,536 UTF-8 bytes and providerMetadata to 8,192 UTF-8
         bytes.
       parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
@@ -220,16 +426,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AnalysisRunView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          $ref: "#/components/responses/OwnerOrDomainConflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
   /analysis-proposals/{proposalId}:
     parameters:
       - $ref: "#/components/parameters/ProposalId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
     get:
       tags: [Analysis]
       operationId: getAnalysisProposal
@@ -241,10 +452,16 @@ paths:
             application/json:
               schema:
                 $ref: ../contracts/analysis-proposal.schema.json
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
 
   /analysis-proposals:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
     get:
       tags: [Analysis]
       operationId: listRecoverableAnalysisProposals
@@ -274,12 +491,17 @@ paths:
                 maxItems: 100
                 items:
                   $ref: "#/components/schemas/ProposalRecoveryView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
   /analysis-proposals/{proposalId}/apply:
     parameters:
       - $ref: "#/components/parameters/ProposalId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
     post:
       tags: [Analysis]
       operationId: applyAnalysisProposal
@@ -288,6 +510,7 @@ paths:
         Validates owner, current memo revision, tags, items, and due values, then
         creates the application and all derived records in one transaction.
       parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
@@ -307,21 +530,27 @@ paths:
                   value:
                     applicationId: 1b49505a-7615-4250-a82e-254525465baf
                     status: APPLIED
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          $ref: "#/components/responses/OwnerOrDomainConflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
   /analysis-proposals/{proposalId}/reject:
     parameters:
       - $ref: "#/components/parameters/ProposalId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
     post:
       tags: [Analysis]
       operationId: rejectAnalysisProposal
       summary: Reject a proposal without creating canonical data
       parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
@@ -335,21 +564,27 @@ paths:
                   value:
                     proposalId: 6b41133d-e81a-4751-b4b0-623b8c794bf3
                     status: REJECTED
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          $ref: "#/components/responses/OwnerOrDomainConflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
   /analysis-proposals/{proposalId}/postpone:
     parameters:
       - $ref: "#/components/parameters/ProposalId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
     post:
       tags: [Analysis]
       operationId: postponeAnalysisProposal
       summary: Postpone a proposal without creating canonical data
       parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
@@ -363,21 +598,27 @@ paths:
                   value:
                     proposalId: 6b41133d-e81a-4751-b4b0-623b8c794bf3
                     status: POSTPONED
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          $ref: "#/components/responses/OwnerOrDomainConflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
   /analysis-applications/{applicationId}/undo:
     parameters:
       - $ref: "#/components/parameters/ApplicationId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
     post:
       tags: [Analysis]
       operationId: undoAnalysisApplication
       summary: Remove derived records while preserving raw memo revisions
       parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
@@ -391,14 +632,20 @@ paths:
                   value:
                     applicationId: 1b49505a-7615-4250-a82e-254525465baf
                     status: UNDONE
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          $ref: "#/components/responses/OwnerOrDomainConflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
   /analysis-applications/latest:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
     get:
       tags: [Analysis]
       operationId: getLatestAnalysisApplication
@@ -412,12 +659,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApplicationRecoveryView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
 
   /tasks:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
     get:
       tags: [Tasks]
       operationId: listTasks
-      summary: List confirmed task facets for the development owner
+      summary: List confirmed task facets for the authenticated owner
       responses:
         "200":
           description: Tasks with derived overdue state.
@@ -427,16 +680,22 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/TaskView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
 
   /tasks/{taskId}:
     parameters:
       - $ref: "#/components/parameters/TaskId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
     patch:
       tags: [Tasks]
       operationId: updateTaskStatus
       summary: Change a task's persisted source status
       description: OVERDUE is derived and cannot be written as a source status.
       parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
@@ -451,14 +710,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TaskUpdateView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          $ref: "#/components/responses/OwnerOrDomainConflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
   /graph/home:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
     get:
       tags: [Graph]
       operationId: getGraphHome
@@ -478,9 +743,42 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GraphProjection"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
 
 components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: SESSION
+      description: Opaque, revocable server session. The cookie is HttpOnly in the browser.
+
   parameters:
+    ExpectedOwnerId:
+      name: X-Expected-Owner-Id
+      in: header
+      required: false
+      description: >-
+        Authenticated user ID captured by the client when this request starts. This is
+        only a cross-tab/session-race guard and never selects an owner or grants access;
+        the server principal remains the sole authorization source. When an authenticated
+        principal exists, a malformed UUID or a different value returns 409
+        SESSION_OWNER_CHANGED before the endpoint mutates domain or idempotency state.
+        Anonymous idempotent logout has no owner to compare. Omitting the header is allowed.
+      schema:
+        type: string
+        format: uuid
+    CsrfHeader:
+      name: X-XSRF-TOKEN
+      in: header
+      required: true
+      description: Value returned by `GET /auth/csrf`; required for cookie-authenticated mutations.
+      schema:
+        type: string
+        minLength: 1
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -522,6 +820,60 @@ components:
         format: uuid
 
   responses:
+    Unauthorized:
+      description: >-
+        No valid authenticated server session exists, or the account was disabled.
+        Typical codes are AUTHENTICATION_REQUIRED and ACCOUNT_DISABLED.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            authenticationRequired:
+              value:
+                code: AUTHENTICATION_REQUIRED
+                message: Authentication is required.
+                fieldErrors: []
+                correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+    CsrfForbidden:
+      description: >-
+        The cookie-authenticated mutation did not include the current CSRF token.
+        The response code is CSRF_TOKEN_INVALID and no domain mutation occurs.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            invalidCsrf:
+              value:
+                code: CSRF_TOKEN_INVALID
+                message: A valid CSRF token is required.
+                fieldErrors: []
+                correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+    OwnerOrDomainConflict:
+      description: >-
+        When an authenticated principal exists on an endpoint carrying X-Expected-Owner-Id,
+        a malformed value or a different owner returns SESSION_OWNER_CHANGED before domain
+        or idempotency state changes. Anonymous idempotent logout has no owner to compare.
+        The endpoint may also return its documented revision, lifecycle, identity, or
+        idempotency conflict code.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            sessionOwnerChanged:
+              value:
+                code: SESSION_OWNER_CHANGED
+                message: The authenticated account changed before this request was sent.
+                fieldErrors: []
+                correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+    Forbidden:
+      description: CSRF validation or another authenticated access rule failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
     NotFound:
       description: The resource is absent or outside the current owner scope.
       content:
@@ -542,6 +894,121 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
 
   schemas:
+    LoginMethod:
+      type: string
+      enum: [LOCAL, GOOGLE]
+
+    AuthCapabilities:
+      type: object
+      additionalProperties: false
+      required: [registrationEnabled, googleEnabled, googleRegistrationEnabled]
+      properties:
+        registrationEnabled:
+          type: boolean
+        googleEnabled:
+          type: boolean
+          description: >-
+            True only when Google authentication is explicitly enabled and the server
+            started with non-blank client credential settings. It does not prove that
+            Google has accepted those credentials. Existing linked identities and explicit
+            linking remain available when this is true. Google authentication itself is false
+            by default.
+        googleRegistrationEnabled:
+          type: boolean
+          description: >-
+            True only when googleEnabled is true and the separate Google account-creation policy
+            is enabled. It tells a client whether an unseen Google identity may create a new
+            internal user before starting OAuth. The default and production value is false;
+            attempts are then rejected with GOOGLE_REGISTRATION_DISABLED while existing linked
+            identities and explicit linking remain available.
+
+    CsrfToken:
+      type: object
+      additionalProperties: false
+      required: [headerName, parameterName, token]
+      properties:
+        headerName:
+          type: string
+        parameterName:
+          type: string
+        token:
+          type: string
+
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password, displayName, timeZone]
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+        password:
+          type: string
+          format: password
+          minLength: 12
+          maxLength: 128
+          description: Also limited to the configured password encoder's safe UTF-8 byte length.
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        timeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          examples: [Asia/Seoul]
+
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 128
+
+    AuthSession:
+      type: object
+      additionalProperties: false
+      required: [userId, email, displayName, loginMethods]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        loginMethods:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/LoginMethod"
+
+    GoogleLinkIntent:
+      type: object
+      additionalProperties: false
+      required: [authorizationUrl]
+      properties:
+        authorizationUrl:
+          type: string
+          description: Same-origin server endpoint for starting Google authorization.
+          examples: [/oauth2/authorization/google]
+
     HealthResponse:
       type: object
       additionalProperties: false

@@ -4,11 +4,10 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import local.personalmemo.common.DevIdentity;
+import local.personalmemo.common.auth.CurrentIdentity;
 import local.personalmemo.common.error.DomainException;
 import local.personalmemo.common.idempotency.IdempotencyService;
 import local.personalmemo.task.api.TaskDtos.Update;
@@ -23,10 +22,10 @@ public class TaskService {
   private static final String UPDATE_OPERATION = "TASK_STATUS_UPDATE";
 
   private final JdbcClient db;
-  private final DevIdentity identity;
+  private final CurrentIdentity identity;
   private final IdempotencyService idempotency;
 
-  public TaskService(JdbcClient db, DevIdentity identity, IdempotencyService idempotency) {
+  public TaskService(JdbcClient db, CurrentIdentity identity, IdempotencyService idempotency) {
     this.db = db;
     this.identity = identity;
     this.idempotency = idempotency;
@@ -84,8 +83,7 @@ public class TaskService {
     if (!"ACTIVE".equals(current.memoStatus())) {
       throw DomainException.conflict("MEMO_NOT_ACTIVE", "The task's memo is not active.");
     }
-    Timestamp completedAt =
-        "DONE".equals(request.status()) ? Timestamp.from(Instant.now()) : null;
+    Timestamp completedAt = "DONE".equals(request.status()) ? Timestamp.from(Instant.now()) : null;
     boolean changed = !current.taskStatus().equals(request.status());
     if (changed) {
       db.sql(
@@ -142,8 +140,7 @@ public class TaskService {
         .query(
             (resultSet, rowNumber) ->
                 new TaskState(
-                    resultSet.getString("task_status"),
-                    resultSet.getString("memo_status")))
+                    resultSet.getString("task_status"), resultSet.getString("memo_status")))
         .optional()
         .orElseThrow(() -> DomainException.notFound("Task"));
   }

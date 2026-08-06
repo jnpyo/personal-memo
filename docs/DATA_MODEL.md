@@ -1,6 +1,6 @@
-# Data model — implemented Milestone 1 + deterministic analysis slice
+# Data model — authenticated deterministic-analysis MVP
 
-이 문서는 현재 Flyway `V1`–`V7`이 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다.
+이 문서는 현재 Flyway `V1`–`V9`가 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다.
 
 ## Invariants
 
@@ -10,6 +10,10 @@
 - proposal과 confirmed canonical record는 분리한다.
 - 파생 record는 `analysis_application` provenance를 보유한다.
 - 모든 사용자 데이터 read/write는 `owner_id` 범위 안에서 수행하며, owner-bound foreign key가 교차 owner 참조를 거절한다.
+- client는 `owner_id`를 선택하지 못한다. 인증된 `users.id`가 server security context를 통해 owner가 된다.
+- local credential과 Google identity는 한 internal user에 연결되는 login method일 뿐 domain data의 owner key가 아니다.
+- Google identity는 `(provider, provider_subject)`로 유일하며 email 일치만으로 internal user를 연결하지 않는다.
+- server session은 PostgreSQL에 저장하고 browser에는 opaque session id만 전달한다.
 - graph는 canonical table의 projection이며 rendered node 위치를 원본으로 저장하지 않는다.
 - `OVERDUE`는 column이나 task source status가 아니다.
 
@@ -19,11 +23,49 @@
 
 ```text
 id UUID PK
+primary_email VARCHAR(254) NULL
+primary_email_normalized VARCHAR(254) NULL
+display_name VARCHAR(80) NULL
+status ACTIVE | DISABLED | LEGACY_UNCLAIMED
 created_at TIMESTAMPTZ
 updated_at TIMESTAMPTZ
+UNIQUE normalized email when present
 ```
 
-개발 환경에는 고정 UUID의 단일 사용자를 seed한다. schema와 query는 이후 인증 도입을 위해 처음부터 owner-aware하다.
+`users.id`가 모든 login method와 canonical domain data가 공유하는 안정적인 internal identity다. 기존 개발 환경의 고정 UUID 사용자는 migration compatibility를 위해 email과 credential 없이 그대로 남으며, 신규 가입자가 그 데이터를 자동으로 가져가지 않는다. 신규 local/Google account는 email과 표시 이름을 가진다.
+
+### `local_credentials`
+
+```text
+user_id UUID PK/FK -> users
+password_hash VARCHAR(255)
+failed_attempts INTEGER
+locked_until TIMESTAMPTZ NULL
+password_changed_at TIMESTAMPTZ
+```
+
+email lookup은 `users.primary_email_normalized`를 사용해 credential과 user email이 서로 어긋나는 중복 column을 두지 않는다. raw password는 저장하지 않는다. `password_hash`는 Spring Security delegating encoder가 만든 algorithm identifier 포함 one-way hash다. login 실패는 account 존재 여부를 노출하지 않는 공통 오류로 응답한다. 같은 계정에서 잘못된 비밀번호가 연속 5회 발생하면 `failed_attempts=5`와 현재 시각부터 15분 뒤의 `locked_until`을 저장한다. 잠금 중 추가 시도는 counter나 만료 시각을 연장하지 않는다. 잠금이 만료된 뒤 정상 로그인하면 `failed_attempts`와 `locked_until`을 초기화하며, 만료 후 다시 실패하면 새 실패 구간을 1부터 시작한다. 이 table의 계정 단위 잠금과 별도로 공개 배포에는 IP·edge rate limiting과 abuse 방어가 필요하다.
+
+### `external_identities`
+
+```text
+id UUID PK
+user_id UUID FK -> users
+provider GOOGLE
+provider_subject VARCHAR(255)
+email_at_login VARCHAR(254)
+email_verified BOOLEAN
+linked_at TIMESTAMPTZ
+last_login_at TIMESTAMPTZ
+UNIQUE (provider, provider_subject)
+UNIQUE (user_id, provider)
+```
+
+Google의 stable `sub` claim이 provider subject다. `email_at_login`은 verified profile snapshot이며 identity key나 자동 병합 key가 아니다. 기존 normalized email과 충돌하는 미연결 Google login은 account-link-required로 거절하고, 기존 session에서 시작한 명시적 link flow만 연결을 만든다. provider authorization code/access token/refresh token은 이 schema에 저장하지 않는다.
+
+### `SPRING_SESSION` and `SPRING_SESSION_ATTRIBUTES`
+
+Spring Session JDBC의 opaque browser session을 저장한다. table과 index는 framework auto-DDL이 아니라 V8 Flyway migration이 소유한다. session row에는 생성·최근 접근·만료 시각과 principal name이 있고, serialized security context 같은 attribute는 session primary key에 종속되어 session 삭제 시 함께 삭제된다.
 
 ### `user_settings`
 
@@ -115,7 +157,7 @@ FK (memo_id, owner_id) -> memos(id, owner_id)
 FK (memo_id, memo_revision, owner_id) -> memo_revisions(memo_id, revision, owner_id)
 ```
 
-현재 결정론적 analyzer는 run이 참조하는 revision의 `client_recorded_at`과 `source_time_zone`을 입력으로 사용한다. 서버가 소유하는 `analyzer_version`, `prompt_version`, `local_model_version`, `embedding_model_version`, `routing_policy_version`은 각각 비어 있지 않은 1–64자 값으로 run마다 저장된다. 현재 Fake 경로는 `fake-v2`, `none`, `none`, `none`, `field-policy-v1`을 사용한다. `routing_policy_version`은 점수 임계값과 구조적 신호 규칙의 버전을 보존하고, `ambiguity_reasons`는 cloud 처리 전 서버가 재구성한 최초 라우팅 원인을 보존한다. 모호성 gate가 local proposal로 충분하다고 판정하면 `LOCAL`, Fake cloud enrichment가 필요하면 `HYBRID`를 저장한다. `MOCK`·`CLOUD` 값은 후속 adapter와 이전 단계 호환을 위해 표현 가능하지만 현재 실행 경로에서는 사용하지 않는다. memo가 수정되면 현재 revision보다 오래된 미적용 run을 `STALE`로 표시하며 application 단계에서도 revision을 다시 검사한다.
+현재 결정론적 analyzer는 run이 참조하는 revision의 `client_recorded_at`과 `source_time_zone`을 입력으로 사용한다. 서버가 소유하는 `analyzer_version`, `prompt_version`, `local_model_version`, `embedding_model_version`, `routing_policy_version`은 각각 비어 있지 않은 1–64자 값으로 run마다 저장된다. 현재 Fake 경로는 `fake-v3`, `none`, `none`, `none`, `field-policy-v1`을 사용한다. `routing_policy_version`은 점수 임계값과 구조적 신호 규칙의 버전을 보존하고, `ambiguity_reasons`는 cloud 처리 전 서버가 재구성한 최초 라우팅 원인을 보존한다. 모호성 gate가 local proposal로 충분하다고 판정하면 `LOCAL`, Fake cloud enrichment가 필요하면 `HYBRID`를 저장한다. `MOCK`·`CLOUD` 값은 후속 adapter와 이전 단계 호환을 위해 표현 가능하지만 현재 실행 경로에서는 사용하지 않는다. memo가 수정되면 현재 revision보다 오래된 미적용 run을 `STALE`로 표시하며 application 단계에서도 revision을 다시 검사한다.
 
 ### `analysis_proposals`
 
@@ -310,6 +352,9 @@ memos + memo_items + task_details
 
 ## Current indexes
 
+- partial unique `users(primary_email_normalized)` when email is present
+- unique `external_identities(provider, provider_subject)` and `(user_id, provider)`
+- Spring Session lookup/expiry/principal indexes
 - `memos(owner_id, status, updated_at DESC)`
 - `analysis_runs(memo_id, memo_revision, status)`
 - `memo_items(owner_id, created_at DESC)`
@@ -332,5 +377,8 @@ memos + memo_items + task_details
 - automatic tag merge/split proposal
 - graph cluster/compression/layout persistence
 - event detail, rich item/tag relation, search index
+- local email verification and password-reset token/delivery state
+- login abuse/rate-limit audit state if the selected policy requires additional persistence
+- MFA/passkey authenticators and account recovery codes
 
 필요한 vertical slice가 시작될 때 파괴적 변경 없이 새 Flyway migration으로 추가한다.

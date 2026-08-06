@@ -1,6 +1,5 @@
 # ADR 0003: Development single-user identity
 
-Status: Accepted — 2026-08-05
+Status: Superseded by ADR 0005 — 2026-08-05
 
-Development uses one seeded user selected server-side. Every owned table and query still carries `owner_id`. The client cannot choose an owner. Production authentication and retention policy require a later ADR; secure cookie authentication is the current recommendation.
-
+The initial AI-free slice used one seeded user selected server-side. Every owned table and query still carried `owner_id`, and the client could not choose an owner. ADR 0005 replaces the runtime identity with authenticated internal users while preserving this seeded row and its data for migration compatibility.

@@ -7,6 +7,27 @@ export type MemoView = {
   createdAt: string;
 };
 
+export type LoginMethod = 'LOCAL' | 'GOOGLE';
+
+export type AuthCapabilities = {
+  registrationEnabled: boolean;
+  googleEnabled: boolean;
+  googleRegistrationEnabled: boolean;
+};
+
+export type AuthSession = {
+  userId: string;
+  email: string;
+  displayName: string;
+  loginMethods: LoginMethod[];
+};
+
+export type CsrfToken = {
+  headerName: string;
+  parameterName: string;
+  token: string;
+};
+
 export type MemoStatus = 'ACTIVE' | 'TRASHED';
 
 type UpdateMemoContent = {

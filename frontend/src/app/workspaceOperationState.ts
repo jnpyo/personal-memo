@@ -1,0 +1,9 @@
+import type { AuthOperation } from '../features/auth/authState';
+
+export function hasPendingServerOperation(input: {
+  workspaceBusy: boolean;
+  pendingTaskId: string | null;
+  authOperation: AuthOperation | null;
+}): boolean {
+  return input.workspaceBusy || input.pendingTaskId !== null || input.authOperation !== null;
+}

@@ -22,8 +22,7 @@ class OwnerIsolationIntegrationTest extends PostgresIntegrationTestSupport {
   private final UUID otherMemoId = UUID.fromString("30000000-0000-0000-0000-000000000002");
   private final UUID otherRunId = UUID.fromString("31000000-0000-0000-0000-000000000002");
   private final UUID otherProposalId = UUID.fromString("32000000-0000-0000-0000-000000000002");
-  private final UUID otherApplicationId =
-      UUID.fromString("33000000-0000-0000-0000-000000000002");
+  private final UUID otherApplicationId = UUID.fromString("33000000-0000-0000-0000-000000000002");
   private final UUID otherItemId = UUID.fromString("34000000-0000-0000-0000-000000000002");
   private final UUID otherTagId = UUID.fromString("35000000-0000-0000-0000-000000000002");
 
@@ -114,8 +113,7 @@ class OwnerIsolationIntegrationTest extends PostgresIntegrationTestSupport {
   @Test
   void readsAndProjectionsNeverExposeAnotherOwnersRecords() throws Exception {
     var memo = mvc.perform(get("/api/v1/memos/{id}", otherMemoId)).andReturn();
-    var proposal =
-        mvc.perform(get("/api/v1/analysis-proposals/{id}", otherProposalId)).andReturn();
+    var proposal = mvc.perform(get("/api/v1/analysis-proposals/{id}", otherProposalId)).andReturn();
     var tasks = mvc.perform(get("/api/v1/tasks")).andReturn();
     var graph = mvc.perform(get("/api/v1/graph/home")).andReturn();
 
@@ -156,14 +154,18 @@ class OwnerIsolationIntegrationTest extends PostgresIntegrationTestSupport {
     item.put("due", null);
     Map<String, Object> selection =
         Map.of(
-            "expectedMemoRevision", 1,
-            "selectedType", "TASK",
-            "title", "외부 태그 차단",
-            "selectedTags", List.of(Map.of("existingTagId", otherTagId)),
-            "items", List.of(item));
+            "expectedMemoRevision",
+            1,
+            "selectedType",
+            "TASK",
+            "title",
+            "외부 태그 차단",
+            "selectedTags",
+            List.of(Map.of("existingTagId", otherTagId)),
+            "items",
+            List.of(item));
 
-    var crossOwnerApply =
-        applyProposal(ownProposalId, "cross-owner-tag-apply", selection);
+    var crossOwnerApply = applyProposal(ownProposalId, "cross-owner-tag-apply", selection);
     assertNotFound(crossOwnerApply);
     assertThat(
             db.sql("select count(*) from analysis_applications where owner_id=:owner")

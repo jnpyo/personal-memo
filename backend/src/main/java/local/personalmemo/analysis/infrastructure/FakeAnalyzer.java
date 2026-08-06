@@ -27,13 +27,9 @@ import tools.jackson.databind.node.ObjectNode;
 @Component
 public class FakeAnalyzer implements LocalAnalyzer {
   private static final AnalysisProvenance PROVENANCE =
-      new AnalysisProvenance("fake-v2", "none", "none", "none");
+      new AnalysisProvenance("fake-v3", "none", "none", "none");
   private static final int MAX_DATE_CANDIDATES = 5;
   private static final int MAX_ITEM_CANDIDATES = 3;
-  private static final String OPERATING_SYSTEMS_TAG_ID =
-      "10000000-0000-0000-0000-000000000001";
-  private static final String ASSIGNMENT_TAG_ID =
-      "10000000-0000-0000-0000-000000000002";
   private static final Pattern OPERATING_SYSTEMS_ALIAS =
       Pattern.compile("(?<![A-Za-z0-9])os(?![A-Za-z0-9])", Pattern.CASE_INSENSITIVE);
 
@@ -57,11 +53,8 @@ public class FakeAnalyzer implements LocalAnalyzer {
     List<ParsedDate> dates = detectedDates.stream().limit(MAX_DATE_CANDIDATES).toList();
     AnalysisShape shape = classify(content);
     LinkedHashSet<AmbiguityReason> signals = new LinkedHashSet<>();
-    shape.signals().stream()
-        .sorted(Comparator.comparingInt(Enum::ordinal))
-        .forEach(signals::add);
-    if (detectedDates.size() > MAX_DATE_CANDIDATES
-        || shape.items().size() > MAX_ITEM_CANDIDATES) {
+    shape.signals().stream().sorted(Comparator.comparingInt(Enum::ordinal)).forEach(signals::add);
+    if (detectedDates.size() > MAX_DATE_CANDIDATES || shape.items().size() > MAX_ITEM_CANDIDATES) {
       signals.add(AmbiguityReason.CANDIDATE_LIMIT_EXCEEDED);
     }
     detectedDates.forEach(
@@ -70,6 +63,10 @@ public class FakeAnalyzer implements LocalAnalyzer {
                 .sorted(Comparator.comparingInt(Enum::ordinal))
                 .forEach(signals::add));
     String title = suggestedTitle(content, dates);
+    ArrayNode tagCandidates = extractTagCandidates(content, shape.newTopic());
+    if (hasNewTagProposal(tagCandidates)) {
+      signals.add(AmbiguityReason.NEW_TOPIC);
+    }
 
     ObjectNode proposal = json.createObjectNode();
     proposal
@@ -84,7 +81,7 @@ public class FakeAnalyzer implements LocalAnalyzer {
             .put("needsConfirmation", true));
     proposal.set("typeCandidates", createTypeCandidates(shape.types()));
     proposal.set("dateCandidates", createDateCandidates(dates));
-    proposal.set("tagCandidates", extractTagCandidates(content, shape.newTopic()));
+    proposal.set("tagCandidates", tagCandidates);
     proposal.set("itemCandidates", createItemCandidates(shape.items(), title));
     proposal.set("relationCandidates", json.createArrayNode());
     proposal.set("ambiguityReasons", createAmbiguityReasons(signals));
@@ -102,9 +99,7 @@ public class FakeAnalyzer implements LocalAnalyzer {
             .put("detectedDateCandidateCount", detectedDates.size())
             .put("emittedDateCandidateCount", dates.size())
             .put("detectedItemCandidateCount", shape.items().size())
-            .put(
-                "emittedItemCandidateCount",
-                Math.min(shape.items().size(), MAX_ITEM_CANDIDATES))
+            .put("emittedItemCandidateCount", Math.min(shape.items().size(), MAX_ITEM_CANDIDATES))
             .put("toolCalls", 0));
     return proposal;
   }
@@ -185,11 +180,7 @@ public class FakeAnalyzer implements LocalAnalyzer {
     }
     if (compact.matches(".*(?:\\d{1,2}\\.\\d{1,2}).*(?:운영체제|OS)\\s*과제\\s*$")) {
       return shape(
-          List.of("UNKNOWN"),
-          List.of(),
-          Set.of(AmbiguityReason.MISSING_ACTION),
-          null,
-          0.52);
+          List.of("UNKNOWN"), List.of(), Set.of(AmbiguityReason.MISSING_ACTION), null, 0.52);
     }
     if (hasTaskAction(compact)) {
       return shape(
@@ -212,8 +203,7 @@ public class FakeAnalyzer implements LocalAnalyzer {
   }
 
   private boolean hasTaskAction(String content) {
-    return List.of("제출", "올리기", "확인", "찾아보고", "정리", "준비", "하기")
-        .stream()
+    return List.of("제출", "올리기", "확인", "찾아보고", "정리", "준비", "하기").stream()
         .anyMatch(content::contains);
   }
 
@@ -295,21 +285,24 @@ public class FakeAnalyzer implements LocalAnalyzer {
     ArrayNode tags = json.createArrayNode();
     boolean hasOperatingSystemsAlias = OPERATING_SYSTEMS_ALIAS.matcher(content).find();
     if (content.contains("운영체제") || hasOperatingSystemsAlias) {
-      tags.add(
-          tagCandidate(
-              OPERATING_SYSTEMS_TAG_ID,
-              "운영체제",
-              hasOperatingSystemsAlias ? "OS" : null,
-              0.98,
-              false));
+      tags.add(tagCandidate(null, "운영체제", hasOperatingSystemsAlias ? "OS" : null, 0.98, true));
     }
     if (content.contains("과제")) {
-      tags.add(tagCandidate(ASSIGNMENT_TAG_ID, "과제", null, 0.96, false));
+      tags.add(tagCandidate(null, "과제", null, 0.96, true));
     }
     if (newTopic != null) {
       tags.add(tagCandidate(null, newTopic, null, 0.72, true));
     }
     return tags;
+  }
+
+  private boolean hasNewTagProposal(ArrayNode candidates) {
+    for (var candidate : candidates) {
+      if (candidate.path("isNewProposal").asBoolean()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private ObjectNode tagCandidate(

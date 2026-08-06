@@ -28,7 +28,7 @@ export function MemoCapture({
 
   return (
     <form className="capture-bar" onSubmit={handleSubmit}>
-      <label htmlFor="memo-content">{prompt}</label>
+      <label htmlFor="memo-content" aria-live="polite">{prompt}</label>
       <textarea
         id="memo-content"
         value={content}

@@ -7,11 +7,13 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
-import local.personalmemo.common.DevIdentity;
+import local.personalmemo.common.auth.CurrentIdentity;
 import local.personalmemo.common.error.DomainException;
 import local.personalmemo.common.security.Hashing;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -20,11 +22,11 @@ public class IdempotencyService {
   private static final int MAX_KEY_LENGTH = 128;
 
   private final JdbcClient db;
-  private final DevIdentity identity;
+  private final CurrentIdentity identity;
   private final ObjectMapper json;
   private final Clock clock;
 
-  public IdempotencyService(JdbcClient db, DevIdentity identity, ObjectMapper json) {
+  public IdempotencyService(JdbcClient db, CurrentIdentity identity, ObjectMapper json) {
     this.db = db;
     this.identity = identity;
     this.json = json;
@@ -32,6 +34,7 @@ public class IdempotencyService {
   }
 
   /** Must be called inside the transaction that performs the protected mutation. */
+  @Transactional(propagation = Propagation.MANDATORY)
   public Optional<StoredResult> find(String operation, String key, String requestHash) {
     String validatedKey = validateKey(key);
     acquireTransactionLock(operation, validatedKey);
@@ -64,6 +67,7 @@ public class IdempotencyService {
         new StoredResult(stored.get().resourceId(), parse(stored.get().responseJson())));
   }
 
+  @Transactional(propagation = Propagation.MANDATORY)
   public void store(
       String operation, String key, String requestHash, UUID resourceId, Object response) {
     String responseJson = write(response);
@@ -131,8 +135,7 @@ public class IdempotencyService {
   private String validateKey(String key) {
     if (key == null || key.isBlank() || key.length() > MAX_KEY_LENGTH) {
       throw DomainException.invalid(
-          "INVALID_IDEMPOTENCY_KEY",
-          "Idempotency-Key must contain between 1 and 128 characters.");
+          "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key must contain between 1 and 128 characters.");
     }
     return key;
   }

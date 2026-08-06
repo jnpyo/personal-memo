@@ -70,6 +70,351 @@ main {
   line-height: 1.6;
 }
 
+.hero-actions {
+  display: flex;
+  width: 100%;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.auth-shell {
+  display: grid;
+  width: min(100%, 980px);
+  min-height: 100dvh;
+  align-content: center;
+  gap: 32px;
+  padding: max(28px, env(safe-area-inset-top)) 18px max(28px, env(safe-area-inset-bottom));
+}
+
+.auth-intro h1 {
+  margin: 16px 0;
+  font-family: Georgia, "Noto Serif KR", serif;
+  font-size: clamp(2.7rem, 14vw, 5rem);
+  font-weight: 500;
+  letter-spacing: -0.055em;
+  line-height: 0.98;
+}
+
+.auth-intro p {
+  max-width: 500px;
+  margin: 0;
+  color: #536158;
+  line-height: 1.65;
+}
+
+.auth-card {
+  border: 1px solid #d3cec2;
+  border-radius: 24px;
+  background: #fffdf7;
+  padding: 22px;
+  box-shadow: 0 18px 60px #17221c12;
+}
+
+.auth-card__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.auth-card__heading h2,
+.account-panel__body h2 {
+  margin: 5px 0 0;
+  font-size: 1.45rem;
+}
+
+.auth-connection {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #efe9db;
+  color: #5d665f;
+  padding: 7px 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.auth-connection--online {
+  background: #e2f0e7;
+  color: #286447;
+}
+
+.auth-connection--offline {
+  background: #f7e4e1;
+  color: #98443b;
+}
+
+.auth-notice {
+  margin-bottom: 16px;
+  border-radius: 12px;
+  background: #edf3ee;
+  padding: 11px 12px;
+  line-height: 1.5;
+}
+
+.auth-notice p {
+  margin: 0 0 8px;
+}
+
+.auth-notice--error {
+  background: #fbefed;
+  color: #8a3c35;
+}
+
+.auth-form {
+  display: grid;
+  gap: 15px;
+}
+
+.auth-form label {
+  display: grid;
+  gap: 6px;
+  color: #465249;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.auth-form input {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid #c7cec5;
+  border-radius: 12px;
+  background: #fff;
+  color: #17221c;
+  padding: 11px 12px;
+}
+
+.auth-form input:focus-visible {
+  outline: 3px solid #e4b65766;
+  outline-offset: 1px;
+  border-color: #8b6b29;
+}
+
+.auth-submit {
+  min-height: 50px;
+  margin-top: 4px;
+  border: 0;
+  border-radius: 12px;
+  background: #17221c;
+  color: #fff;
+  font-weight: 800;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0;
+  color: #899189;
+  font-size: 0.72rem;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  height: 1px;
+  flex: 1;
+  background: #ddd8cc;
+  content: "";
+}
+
+.google-auth-button {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid #c7cec5;
+  border-radius: 12px;
+  background: #fff;
+  color: #28362e;
+  text-decoration: none;
+  font-weight: 800;
+}
+
+.google-auth-button span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 50%;
+  background: #f1f3f4;
+  color: #4285f4;
+  font-weight: 900;
+}
+
+.google-auth-help {
+  margin: 10px 2px 0;
+  color: #657068;
+  font-size: 0.76rem;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.auth-switch {
+  margin: 20px 0 0;
+  color: #657068;
+  text-align: center;
+  font-size: 0.82rem;
+}
+
+.text-button {
+  border: 0;
+  background: transparent;
+  color: #245b42;
+  padding: 3px;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.account-panel {
+  position: relative;
+}
+
+.account-panel > summary {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #c7cec5;
+  border-radius: 999px;
+  padding: 5px 11px 5px 6px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.account-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.account-panel > summary span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 50%;
+  background: #17221c;
+  color: #fff;
+  font-size: 0.74rem;
+}
+
+.account-panel > summary strong {
+  max-width: 120px;
+  overflow: hidden;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-panel__body {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(330px, calc(100vw - 36px));
+  border: 1px solid #d3cec2;
+  border-radius: 18px;
+  background: #fffdf7;
+  padding: 17px;
+  box-shadow: 0 18px 50px #17221c26;
+}
+
+.account-panel__body > div:first-child p {
+  margin: 7px 0 0;
+  overflow-wrap: anywhere;
+  color: #68746c;
+  font-size: 0.78rem;
+}
+
+.login-methods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 16px 0;
+}
+
+.login-methods span {
+  border-radius: 999px;
+  background: #e8efe9;
+  color: #315a45;
+  padding: 6px 9px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.account-action {
+  width: 100%;
+  min-height: 42px;
+}
+
+.account-help,
+.account-confirm p {
+  margin: 12px 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.account-success {
+  color: #28704d;
+}
+
+.account-success p {
+  margin: 12px 0 4px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.account-success .text-button {
+  color: #28704d;
+  font-size: 0.75rem;
+}
+
+.account-error {
+  color: #9c4339;
+}
+
+.account-error p {
+  margin: 12px 0 4px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.account-error .text-button {
+  color: #8c3b34;
+  font-size: 0.75rem;
+}
+
+.account-confirm {
+  border-radius: 12px;
+  background: #fbefed;
+  padding: 10px;
+}
+
+.account-confirm p {
+  margin-top: 0;
+}
+
+.account-confirm div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.account-confirm button {
+  min-height: 38px;
+  border-radius: 9px;
+  padding: 7px 9px;
+}
+
+.account-logout {
+  width: 100%;
+  margin-top: 18px;
+  color: #8c3b34;
+}
+
 .connection-status {
   display: inline-flex;
   align-items: center;
@@ -854,8 +1199,21 @@ main {
     justify-content: space-between;
   }
 
+  .auth-shell {
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+    align-items: center;
+    gap: 64px;
+    padding-right: 28px;
+    padding-left: 28px;
+  }
+
   .connection-status {
     flex: 0 0 auto;
+  }
+
+  .hero-actions {
+    width: auto;
+    justify-content: flex-start;
   }
 
   .task-row {

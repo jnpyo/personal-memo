@@ -24,7 +24,12 @@ type Props = {
   onTrash: (memo: MemoView) => void;
   onRestore: (memo: MemoView) => void;
   onAnalyze: (memo: MemoView) => void;
+  onDirtyChange: (dirty: boolean) => void;
 };
+
+export function memoEditHasChanges(originalContent: string, draftContent: string): boolean {
+  return originalContent !== draftContent;
+}
 
 function formatCreatedAt(value: string): string {
   const date = new Date(value);
@@ -50,12 +55,15 @@ export function MemoLibrary({
   onTrash,
   onRestore,
   onAnalyze,
+  onDirtyChange,
 }: Props) {
   const [filter, setFilter] = useState<MemoStatus>('ACTIVE');
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
   // The API already orders by updated_at, which is intentionally not exposed in MemoView yet.
   const memos = filter === 'ACTIVE' ? activeMemos : trashedMemos;
   const pending = busy;
+
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
 
   useEffect(() => {
     if (!editDraft) return;
@@ -66,13 +74,17 @@ export function MemoLibrary({
       current.content === editDraft.content
     ) {
       setEditDraft(null);
+      onDirtyChange(false);
     }
-  }, [activeMemos, editDraft]);
+  }, [activeMemos, editDraft, onDirtyChange]);
 
   async function saveEdit() {
     if (!editDraft || !isMemoContentValid(editDraft.content)) return;
     const saved = await onUpdate(editDraft.memo, editDraft.content);
-    if (saved) setEditDraft(null);
+    if (saved) {
+      setEditDraft(null);
+      onDirtyChange(false);
+    }
   }
 
   return (
@@ -153,9 +165,11 @@ export function MemoLibrary({
                       rows={5}
                       value={editDraft.content}
                       disabled={pending}
-                      onChange={(event) =>
-                        setEditDraft({ ...editDraft, content: event.target.value })
-                      }
+                      onChange={(event) => {
+                        const content = event.target.value;
+                        setEditDraft({ ...editDraft, content });
+                        onDirtyChange(memoEditHasChanges(editDraft.memo.content, content));
+                      }}
                     />
                     {editIsStale && (
                       <p className="memo-editor__warning">
@@ -170,7 +184,10 @@ export function MemoLibrary({
                           type="button"
                           className="secondary-button"
                           disabled={pending}
-                          onClick={() => setEditDraft(null)}
+                          onClick={() => {
+                            setEditDraft(null);
+                            onDirtyChange(false);
+                          }}
                         >
                           취소
                         </button>
@@ -196,7 +213,7 @@ export function MemoLibrary({
                     <button
                       type="button"
                       className="approve-button"
-                      disabled={pending || analysisBlocked}
+                      disabled={pending || analysisBlocked || editDraft !== null}
                       title={analysisBlocked ? '열려 있는 제안을 먼저 처리해 주세요.' : undefined}
                       onClick={() => onAnalyze(memo)}
                     >
@@ -205,15 +222,18 @@ export function MemoLibrary({
                     <button
                       type="button"
                       className="secondary-button"
-                      disabled={pending}
-                      onClick={() => setEditDraft({ memo, content: memo.content })}
+                      disabled={pending || editDraft !== null}
+                      onClick={() => {
+                        setEditDraft({ memo, content: memo.content });
+                        onDirtyChange(false);
+                      }}
                     >
                       원문 수정
                     </button>
                     <button
                       type="button"
                       className="danger-button"
-                      disabled={pending}
+                      disabled={pending || editDraft !== null}
                       onClick={() => onTrash(memo)}
                     >
                       {pendingScope === `trash:${memo.id}` ? '이동 중…' : '휴지통으로'}
@@ -227,7 +247,7 @@ export function MemoLibrary({
                     <button
                       type="button"
                       className="secondary-button"
-                      disabled={pending}
+                      disabled={pending || editDraft !== null}
                       onClick={() => onRestore(memo)}
                     >
                       {pendingScope === `restore:${memo.id}` ? '복원 중…' : '활성 메모로 복원'}

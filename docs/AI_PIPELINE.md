@@ -273,7 +273,7 @@ The version-1 result should contain fields conceptually equivalent to:
   "relationCandidates": [],
   "ambiguityReasons": [],
   "providerMetadata": {
-    "analyzerVersion": "fake-v2",
+    "analyzerVersion": "fake-v3",
     "promptVersion": "none",
     "localModelVersion": "none",
     "embeddingModelVersion": "none",
@@ -296,7 +296,7 @@ The backend:
 3. creates application event;
 4. writes derived items, task records, and relations in one transaction;
 5. records provenance for each derived value;
-6. publishes a graph-projection update after commit.
+6. commits the transaction; after success, the client refetches the task and graph projections.
 
 ## Personalization without fine-tuning
 

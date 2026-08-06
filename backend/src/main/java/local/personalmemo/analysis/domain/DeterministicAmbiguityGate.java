@@ -44,8 +44,8 @@ public final class DeterministicAmbiguityGate {
 
   /**
    * Reconstructs deterministic routing signals from structured candidates as well as the
-   * analyzer-declared summary. The server therefore does not rely on an analyzer faithfully
-   * copying every field-level warning into the top-level array.
+   * analyzer-declared summary. The server therefore does not rely on an analyzer faithfully copying
+   * every field-level warning into the top-level array.
    */
   public List<AmbiguityReason> routingSignals(JsonNode proposal) {
     Objects.requireNonNull(proposal, "proposal");

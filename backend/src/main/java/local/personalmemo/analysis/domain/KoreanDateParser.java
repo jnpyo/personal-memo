@@ -25,8 +25,7 @@ import java.util.regex.Pattern;
 /** Deterministic, side-effect-free extraction for the Korean date expressions in the P0 corpus. */
 public final class KoreanDateParser {
   private static final Pattern FULL_DATE_TIME =
-      Pattern.compile(
-          "(?<!\\d)(\\d{4})\\.(\\d{1,2})\\.(\\d{1,2})\\s+(\\d{1,9}):(\\d{1,9})(?!\\d)");
+      Pattern.compile("(?<!\\d)(\\d{4})\\.(\\d{1,2})\\.(\\d{1,2})\\s+(\\d{1,9}):(\\d{1,9})(?!\\d)");
   private static final Pattern FULL_DATE =
       Pattern.compile("(?<!\\d)(\\d{4})\\.(\\d{1,2})\\.(\\d{1,2})(?!\\d)");
   private static final Pattern MONTH_AND_DAY =
@@ -35,14 +34,12 @@ public final class KoreanDateParser {
       Pattern.compile("(?<!\\d)(\\d{1,2})월\\s*(\\d{1,2})일");
   private static final Pattern DAY_ONLY_DEADLINE =
       Pattern.compile("(?<![\\d월])([012]?\\d|3[01])일까지");
-  private static final Pattern NEXT_WEEK_TUESDAY =
-      Pattern.compile("다음\\s*주\\s*화요일(?:까지)?");
+  private static final Pattern NEXT_WEEK_TUESDAY = Pattern.compile("다음\\s*주\\s*화요일(?:까지)?");
   private static final Pattern APPROXIMATE_NEXT_WEEK = Pattern.compile("다음\\s*주쯤");
   private static final Pattern APPROXIMATE_NEXT_MONTH = Pattern.compile("다음\\s*달(?:에)?");
   private static final Pattern YESTERDAY = Pattern.compile("어제");
 
-  public List<ParsedDate> parse(
-      String content, Instant baseInstant, String timeZoneIdentifier) {
+  public List<ParsedDate> parse(String content, Instant baseInstant, String timeZoneIdentifier) {
     Objects.requireNonNull(content, "content");
     Objects.requireNonNull(baseInstant, "baseInstant");
     if (timeZoneIdentifier == null || timeZoneIdentifier.isBlank()) {
@@ -64,12 +61,7 @@ public final class KoreanDateParser {
         candidates,
         RulePriority.FULL_DATE_TIME,
         matcher -> parseFullDateTime(matcher, timeZone));
-    collect(
-        content,
-        FULL_DATE,
-        candidates,
-        RulePriority.FULL_DATE,
-        this::parseFullDate);
+    collect(content, FULL_DATE, candidates, RulePriority.FULL_DATE, this::parseFullDate);
     collect(
         content,
         MONTH_AND_DAY,
@@ -140,8 +132,7 @@ public final class KoreanDateParser {
               Integer.parseInt(matcher.group(2)),
               Integer.parseInt(matcher.group(3)));
       LocalTime time =
-          LocalTime.of(
-              Integer.parseInt(matcher.group(4)), Integer.parseInt(matcher.group(5)));
+          LocalTime.of(Integer.parseInt(matcher.group(4)), Integer.parseInt(matcher.group(5)));
       LocalDateTime localDateTime = LocalDateTime.of(date, time);
       List<ZoneOffset> validOffsets = timeZone.getRules().getValidOffsets(localDateTime);
       if (validOffsets.size() != 1) {
@@ -326,8 +317,7 @@ public final class KoreanDateParser {
   }
 
   private Comparator<PrioritizedDate> candidateOrder() {
-    return Comparator.comparingInt(
-            (PrioritizedDate candidate) -> candidate.date().startOffset())
+    return Comparator.comparingInt((PrioritizedDate candidate) -> candidate.date().startOffset())
         .thenComparing(
             Comparator.comparingInt(
                     (PrioritizedDate candidate) ->
@@ -409,5 +399,9 @@ public final class KoreanDateParser {
       DatePrecision precision,
       boolean timeSpecified,
       double confidence,
-      Set<AmbiguityReason> ambiguityReasons) {}
+      Set<AmbiguityReason> ambiguityReasons) {
+    public ParsedDate {
+      ambiguityReasons = Set.copyOf(ambiguityReasons);
+    }
+  }
 }

@@ -48,8 +48,7 @@ class AnalysisProposalValidatorTest {
     ObjectNode invalidSpan = proposal(memoId, 1, content);
     ((ObjectNode) invalidSpan.at("/itemCandidates/0"))
         .set(
-            "sourceSpan",
-            json.createObjectNode().put("start", 0).put("end", content.length() + 1));
+            "sourceSpan", json.createObjectNode().put("start", 0).put("end", content.length() + 1));
 
     assertInvalidProposal(() -> validator.validate(impossibleDate, memoId, 1, content.length()));
     assertInvalidProposal(() -> validator.validate(invalidSpan, memoId, 1, content.length()));
@@ -57,11 +56,7 @@ class AnalysisProposalValidatorTest {
 
   private ObjectNode proposal(UUID memoId, int revision, String content) {
     return analyzer.analyze(
-        memoId,
-        revision,
-        content,
-        Instant.parse("2026-08-05T02:00:00Z"),
-        "Asia/Seoul");
+        memoId, revision, content, Instant.parse("2026-08-05T02:00:00Z"), "Asia/Seoul");
   }
 
   private void assertInvalidProposal(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {

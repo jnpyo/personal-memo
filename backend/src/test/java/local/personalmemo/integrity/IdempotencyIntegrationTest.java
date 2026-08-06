@@ -135,8 +135,7 @@ class IdempotencyIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(db.sql("select count(*) from task_details").query(Long.class).single()).isEqualTo(1);
     assertThat(db.sql("select count(*) from item_tags").query(Long.class).single()).isEqualTo(1);
 
-    var changedApply =
-        applyProposal(proposalId, "same-apply-key", 1, "동일 키의 다른 제목", due);
+    var changedApply = applyProposal(proposalId, "same-apply-key", 1, "동일 키의 다른 제목", due);
     assertIdempotencyConflict(changedApply);
     assertThat(
             db.sql("select title from memo_items where application_id=:id")
@@ -157,13 +156,7 @@ class IdempotencyIntegrationTest extends PostgresIntegrationTestSupport {
                 .asText());
     UUID applicationId =
         UUID.fromString(
-            response(
-                    applyProposal(
-                        proposalId,
-                        "apply-for-undo-idempotency",
-                        1,
-                        "OS과제 제출",
-                        null))
+            response(applyProposal(proposalId, "apply-for-undo-idempotency", 1, "OS과제 제출", null))
                 .path("applicationId")
                 .asText());
 

@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import local.personalmemo.common.DevIdentity;
+import local.personalmemo.common.auth.CurrentIdentity;
 import local.personalmemo.common.error.DomainException;
 import local.personalmemo.common.idempotency.IdempotencyService;
 import local.personalmemo.common.security.Hashing;
@@ -17,6 +17,7 @@ import local.personalmemo.memo.api.MemoDtos.Create;
 import local.personalmemo.memo.api.MemoDtos.Update;
 import local.personalmemo.memo.api.MemoDtos.View;
 import local.personalmemo.memo.domain.MemoSnapshot;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,10 +32,10 @@ public class MemoService {
   private static final int MAX_LIST_LIMIT = 100;
 
   private final JdbcClient db;
-  private final DevIdentity identity;
+  private final CurrentIdentity identity;
   private final IdempotencyService idempotency;
 
-  public MemoService(JdbcClient db, DevIdentity identity, IdempotencyService idempotency) {
+  public MemoService(JdbcClient db, CurrentIdentity identity, IdempotencyService idempotency) {
     this.db = db;
     this.identity = identity;
     this.idempotency = idempotency;
@@ -50,29 +51,26 @@ public class MemoService {
       return idempotency.convert(replay.get().response(), View.class);
     }
 
-    boolean memoIdExists =
-        db.sql("select exists(select 1 from memos where id = :memoId)")
-            .param("memoId", command.id())
-            .query(Boolean.class)
-            .single();
-    if (memoIdExists) {
+    Timestamp now = Timestamp.from(Instant.now());
+    try {
+      db.sql(
+              """
+              insert into memos(
+                id, owner_id, current_revision, status, pinned, created_at, updated_at
+              ) values (
+                :memoId, :ownerId, 1, 'ACTIVE', false, :now, :now
+              )
+              """)
+          .param("memoId", command.id())
+          .param("ownerId", identity.ownerId())
+          .param("now", now)
+          .update();
+    } catch (DuplicateKeyException exception) {
+      // Client-generated UUIDs are globally unique, but resolving a collision must not probe a
+      // row outside the authenticated owner's scope.
       throw DomainException.conflict(
           "MEMO_ID_CONFLICT", "The requested memo identifier is already in use.");
     }
-
-    Timestamp now = Timestamp.from(Instant.now());
-    db.sql(
-            """
-            insert into memos(
-              id, owner_id, current_revision, status, pinned, created_at, updated_at
-            ) values (
-              :memoId, :ownerId, 1, 'ACTIVE', false, :now, :now
-            )
-            """)
-        .param("memoId", command.id())
-        .param("ownerId", identity.ownerId())
-        .param("now", now)
-        .update();
     db.sql(
             """
             insert into memo_revisions(
@@ -106,7 +104,8 @@ public class MemoService {
     String status = validateListStatus(requestedStatus);
     int limit = Math.max(1, Math.min(requestedLimit, MAX_LIST_LIMIT));
 
-    return db.sql(
+    return db
+        .sql(
             """
             select m.id,
                    m.current_revision,
@@ -386,8 +385,7 @@ public class MemoService {
 
   private String validateListStatus(String status) {
     if (!LISTABLE_STATUSES.contains(status)) {
-      throw DomainException.invalid(
-          "INVALID_MEMO_STATUS", "status must be ACTIVE or TRASHED.");
+      throw DomainException.invalid("INVALID_MEMO_STATUS", "status must be ACTIVE or TRASHED.");
     }
     return status;
   }

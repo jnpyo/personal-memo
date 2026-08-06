@@ -41,12 +41,10 @@ class AnalysisProposalContractBoundaryTest {
             proposal -> ((ObjectNode) proposal.path("suggestedTitle")).put("unexpected", true)),
         unknownPropertyCase(
             "type candidate",
-            proposal ->
-                ((ObjectNode) proposal.at("/typeCandidates/0")).put("unexpected", true)),
+            proposal -> ((ObjectNode) proposal.at("/typeCandidates/0")).put("unexpected", true)),
         unknownPropertyCase(
             "date candidate",
-            proposal ->
-                ((ObjectNode) proposal.at("/dateCandidates/0")).put("unexpected", true)),
+            proposal -> ((ObjectNode) proposal.at("/dateCandidates/0")).put("unexpected", true)),
         unknownPropertyCase(
             "tag candidate",
             proposal -> ((ObjectNode) proposal.at("/tagCandidates/0")).put("unexpected", true)),
@@ -56,8 +54,7 @@ class AnalysisProposalContractBoundaryTest {
         unknownPropertyCase(
             "source span",
             proposal ->
-                ((ObjectNode) proposal.at("/itemCandidates/0/sourceSpan"))
-                    .put("unexpected", true)),
+                ((ObjectNode) proposal.at("/itemCandidates/0/sourceSpan")).put("unexpected", true)),
         unknownPropertyCase(
             "relation candidate",
             proposal ->
@@ -95,13 +92,7 @@ class AnalysisProposalContractBoundaryTest {
     ((ObjectNode) proposal.path("providerMetadata")).put("embeddingModelVersion", "other");
 
     assertInvalid(
-        () ->
-            validator.validate(
-                proposal,
-                MEMO_ID,
-                1,
-                CONTENT.length(),
-                analyzer.provenance()));
+        () -> validator.validate(proposal, MEMO_ID, 1, CONTENT.length(), analyzer.provenance()));
   }
 
   @Test
@@ -111,19 +102,13 @@ class AnalysisProposalContractBoundaryTest {
     assertInvalid(
         () ->
             validator.validate(
-                proposal,
-                MEMO_ID,
-                1,
-                CONTENT.length(),
-                analyzer.provenance(),
-                "field-policy-v2"));
+                proposal, MEMO_ID, 1, CONTENT.length(), analyzer.provenance(), "field-policy-v2"));
   }
 
   @Test
   void boundsMatchedAliasByUnicodeCodePoint() {
     ObjectNode oneHundredAliases = richProposal();
-    ((ObjectNode) oneHundredAliases.at("/tagCandidates/0"))
-        .put("matchedAlias", "😀".repeat(100));
+    ((ObjectNode) oneHundredAliases.at("/tagCandidates/0")).put("matchedAlias", "😀".repeat(100));
     ObjectNode oneHundredOneAliases = richProposal();
     ((ObjectNode) oneHundredOneAliases.at("/tagCandidates/0"))
         .put("matchedAlias", "😀".repeat(101));
@@ -136,8 +121,7 @@ class AnalysisProposalContractBoundaryTest {
   void rejectsIntegralNumbersThatCannotBeRepresentedAsThirtyTwoBitOffsets() {
     ObjectNode revisionOverflow = richProposal().put("memoRevision", 4_294_967_297L);
     ObjectNode spanOverflow = richProposal();
-    ((ObjectNode) spanOverflow.at("/itemCandidates/0/sourceSpan"))
-        .put("end", 4_294_967_296L);
+    ((ObjectNode) spanOverflow.at("/itemCandidates/0/sourceSpan")).put("end", 4_294_967_296L);
 
     assertInvalid(() -> validate(revisionOverflow));
     assertInvalid(() -> validate(spanOverflow));
@@ -164,8 +148,7 @@ class AnalysisProposalContractBoundaryTest {
     ObjectNode twoHundredEmoji = richProposal();
     ((ObjectNode) twoHundredEmoji.path("suggestedTitle")).put("value", "😀".repeat(200));
     ObjectNode twoHundredOneEmoji = richProposal();
-    ((ObjectNode) twoHundredOneEmoji.path("suggestedTitle"))
-        .put("value", "😀".repeat(201));
+    ((ObjectNode) twoHundredOneEmoji.path("suggestedTitle")).put("value", "😀".repeat(201));
 
     assertThatCode(() -> validate(twoHundredEmoji)).doesNotThrowAnyException();
     assertInvalid(() -> validate(twoHundredOneEmoji));
@@ -173,8 +156,7 @@ class AnalysisProposalContractBoundaryTest {
 
   @ParameterizedTest(name = "valid {0}, value={1}, timeSpecified={2}")
   @MethodSource("validDateCombinations")
-  void acceptsOnlyCoherentDateCombinations(
-      String precision, String value, boolean timeSpecified) {
+  void acceptsOnlyCoherentDateCombinations(String precision, String value, boolean timeSpecified) {
     ObjectNode proposal = proposalWithDate(precision, value, timeSpecified);
 
     assertThatCode(() -> validate(proposal)).doesNotThrowAnyException();
@@ -182,8 +164,7 @@ class AnalysisProposalContractBoundaryTest {
 
   @ParameterizedTest(name = "invalid {0}, value={1}, timeSpecified={2}")
   @MethodSource("invalidDateCombinations")
-  void rejectsIncoherentDateCombinations(
-      String precision, String value, boolean timeSpecified) {
+  void rejectsIncoherentDateCombinations(String precision, String value, boolean timeSpecified) {
     ObjectNode proposal = proposalWithDate(precision, value, timeSpecified);
 
     assertInvalid(() -> validate(proposal));
@@ -202,6 +183,7 @@ class AnalysisProposalContractBoundaryTest {
     ObjectNode newTag = richProposal();
     ObjectNode tag = (ObjectNode) newTag.at("/tagCandidates/0");
     tag.putNull("existingTagId").put("isNewProposal", true);
+    removeAmbiguityReason(newTag, "NEW_TOPIC");
 
     ObjectNode unknownType = richProposal();
     ((ObjectNode) unknownType.at("/typeCandidates/0")).put("value", "UNKNOWN");
@@ -212,6 +194,15 @@ class AnalysisProposalContractBoundaryTest {
     assertInvalid(() -> validate(newTag));
     assertInvalid(() -> validate(unknownType));
     assertInvalid(() -> validate(missingAction));
+  }
+
+  private void removeAmbiguityReason(ObjectNode proposal, String reason) {
+    ArrayNode reasons = (ArrayNode) proposal.path("ambiguityReasons");
+    for (int index = reasons.size() - 1; index >= 0; index--) {
+      if (reason.equals(reasons.get(index).asText())) {
+        reasons.remove(index);
+      }
+    }
   }
 
   @Test
@@ -240,8 +231,7 @@ class AnalysisProposalContractBoundaryTest {
     assertInvalid(() -> validate(blankObject));
   }
 
-  private DynamicTest unknownPropertyCase(
-      String name, Consumer<ObjectNode> insertUnknownProperty) {
+  private DynamicTest unknownPropertyCase(String name, Consumer<ObjectNode> insertUnknownProperty) {
     return DynamicTest.dynamicTest(
         name,
         () -> {
@@ -293,12 +283,7 @@ class AnalysisProposalContractBoundaryTest {
 
   private ObjectNode richProposal() {
     ObjectNode proposal =
-        analyzer.analyze(
-            MEMO_ID,
-            1,
-            CONTENT,
-            Instant.parse("2026-08-05T02:00:00Z"),
-            "Asia/Seoul");
+        analyzer.analyze(MEMO_ID, 1, CONTENT, Instant.parse("2026-08-05T02:00:00Z"), "Asia/Seoul");
     ((ObjectNode) proposal.at("/itemCandidates/0"))
         .set("sourceSpan", json.createObjectNode().put("start", 0).put("end", 1));
     ArrayNode relations = (ArrayNode) proposal.path("relationCandidates");

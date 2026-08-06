@@ -13,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -23,11 +24,11 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 @SpringBootTest
-@AutoConfigureMockMvc
+@AutoConfigureMockMvc(addFilters = false)
+@Import(DomainTestIdentityConfiguration.class)
 public abstract class PostgresIntegrationTestSupport {
 
-  protected static final UUID OWNER_ID =
-      UUID.fromString("00000000-0000-0000-0000-000000000001");
+  protected static final UUID OWNER_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
   protected static final UUID OPERATING_SYSTEMS_TAG_ID =
       UUID.fromString("10000000-0000-0000-0000-000000000001");
   protected static final UUID ASSIGNMENT_TAG_ID =
@@ -100,10 +101,14 @@ public abstract class PostgresIntegrationTestSupport {
   protected MvcResult createMemo(UUID memoId, String key, String content) throws Exception {
     var body =
         Map.of(
-            "id", memoId,
-            "content", content,
-            "clientCreatedAt", OffsetDateTime.parse("2026-08-05T11:00:00+09:00"),
-            "timeZone", "Asia/Seoul");
+            "id",
+            memoId,
+            "content",
+            content,
+            "clientCreatedAt",
+            OffsetDateTime.parse("2026-08-05T11:00:00+09:00"),
+            "timeZone",
+            "Asia/Seoul");
     return mvc.perform(
             post("/api/v1/memos")
                 .header("Idempotency-Key", key)
@@ -121,8 +126,8 @@ public abstract class PostgresIntegrationTestSupport {
         content);
   }
 
-  protected MvcResult updateMemo(
-      UUID memoId, String key, int expectedRevision, String content) throws Exception {
+  protected MvcResult updateMemo(UUID memoId, String key, int expectedRevision, String content)
+      throws Exception {
     return mvc.perform(
             patch("/api/v1/memos/{id}", memoId)
                 .header("Idempotency-Key", key)
@@ -139,20 +144,17 @@ public abstract class PostgresIntegrationTestSupport {
                 .header("Idempotency-Key", key)
                 .contentType("application/json")
                 .content(
-                    json.writeValueAsBytes(
-                        Map.of("memoRevision", memoRevision, "policy", "AUTO"))))
+                    json.writeValueAsBytes(Map.of("memoRevision", memoRevision, "policy", "AUTO"))))
         .andReturn();
   }
 
   protected MvcResult trashMemo(UUID memoId, String key) throws Exception {
-    return mvc.perform(
-            delete("/api/v1/memos/{id}", memoId).header("Idempotency-Key", key))
+    return mvc.perform(delete("/api/v1/memos/{id}", memoId).header("Idempotency-Key", key))
         .andReturn();
   }
 
   protected MvcResult restoreMemo(UUID memoId, String key) throws Exception {
-    return mvc.perform(
-            post("/api/v1/memos/{id}/restore", memoId).header("Idempotency-Key", key))
+    return mvc.perform(post("/api/v1/memos/{id}/restore", memoId).header("Idempotency-Key", key))
         .andReturn();
   }
 
@@ -165,12 +167,16 @@ public abstract class PostgresIntegrationTestSupport {
     item.put("due", due);
     var body =
         Map.of(
-            "expectedMemoRevision", expectedRevision,
-            "selectedType", "TASK",
-            "title", title,
+            "expectedMemoRevision",
+            expectedRevision,
+            "selectedType",
+            "TASK",
+            "title",
+            title,
             "selectedTags",
-                java.util.List.of(Map.of("existingTagId", OPERATING_SYSTEMS_TAG_ID)),
-            "items", java.util.List.of(item));
+            java.util.List.of(Map.of("existingTagId", OPERATING_SYSTEMS_TAG_ID)),
+            "items",
+            java.util.List.of(item));
     return applyProposal(proposalId, key, body);
   }
 

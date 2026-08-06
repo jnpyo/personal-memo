@@ -4,6 +4,7 @@ type Props = {
   tasks: Task[];
   loading: boolean;
   error: string | null;
+  busy: boolean;
   pendingTaskId: string | null;
   onRetry: () => void;
   onStatusChange: (task: Task, status: TaskStatus) => void;
@@ -33,6 +34,7 @@ export function TaskList({
   tasks,
   loading,
   error,
+  busy,
   pendingTaskId,
   onRetry,
   onStatusChange,
@@ -78,7 +80,7 @@ export function TaskList({
                       type="button"
                       key={status}
                       aria-pressed={task.status === status}
-                      disabled={pending}
+                      disabled={busy}
                       onClick={() => onStatusChange(task, status)}
                     >
                       {pending && task.status !== status ? '…' : STATUS_LABEL[status]}

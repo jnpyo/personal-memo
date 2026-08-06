@@ -11,11 +11,12 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.UUID;
 import local.personalmemo.analysis.domain.AnalysisProvenance;
-import local.personalmemo.analysis.domain.CloudAnalysisRequest;
 import local.personalmemo.analysis.domain.CloudAnalysisGateway;
+import local.personalmemo.analysis.domain.CloudAnalysisRequest;
 import local.personalmemo.analysis.domain.LocalAnalyzer;
 import local.personalmemo.analysis.infrastructure.FakeAnalyzer;
 import local.personalmemo.analysis.infrastructure.FakeCloudAnalysisGateway;
@@ -29,7 +30,7 @@ import tools.jackson.databind.node.ObjectNode;
 @PostgresIntegration
 class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
   private static final AnalysisProvenance FAKE_PROVENANCE =
-      new AnalysisProvenance("fake-v2", "none", "none", "none");
+      new AnalysisProvenance("fake-v3", "none", "none", "none");
 
   @MockitoBean private LocalAnalyzer localAnalyzer;
   @MockitoBean private CloudAnalysisGateway cloudGateway;
@@ -63,11 +64,57 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
 
     var started = startAnalysis(memoId, "route-local-start", 1);
     UUID runId = UUID.fromString(response(started).path("id").asText());
+    UUID proposalId = UUID.fromString(response(started).path("proposalId").asText());
+    var proposal = mvc.perform(get("/api/v1/analysis-proposals/{id}", proposalId)).andReturn();
 
     assertThat(started.getResponse().getStatus()).isEqualTo(200);
     assertRun(runId, "LOCAL");
+    assertThat(response(proposal).at("/tagCandidates/0/existingTagId").asText())
+        .isEqualTo(OPERATING_SYSTEMS_TAG_ID.toString());
+    assertThat(response(proposal).at("/tagCandidates/0/canonicalName").asText()).isEqualTo("운영체제");
+    assertThat(response(proposal).at("/tagCandidates/0/matchedAlias").asText()).isEqualTo("OS");
+    assertThat(response(proposal).at("/tagCandidates/0/isNewProposal").asBoolean()).isFalse();
+    assertThat(response(proposal).at("/tagCandidates/1/existingTagId").asText())
+        .isEqualTo(ASSIGNMENT_TAG_ID.toString());
+    assertThat(response(proposal).path("ambiguityReasons").toString()).doesNotContain("NEW_TOPIC");
+    assertThat(response(proposal).at("/providerMetadata/route").asText()).isEqualTo("LOCAL_REVIEW");
     verify(cloudGateway, never()).enrich(any(CloudAnalysisRequest.class));
     assertCanonicalDataWasNotChanged();
+  }
+
+  @Test
+  void ownerNeutralCandidateNeverResolvesToAnotherOwnersMatchingTag() throws Exception {
+    UUID otherOwnerId = UUID.randomUUID();
+    UUID otherTagId = UUID.randomUUID();
+    Timestamp now = Timestamp.from(Instant.parse("2026-08-05T02:00:00Z"));
+    db.sql("insert into users(id,created_at,updated_at) values(:id,:now,:now)")
+        .param("id", otherOwnerId)
+        .param("now", now)
+        .update();
+    db.sql(
+            "insert into tags(id,owner_id,canonical_name,normalized_name,state,created_at,updated_at) "
+                + "values(:id,:ownerId,'유리패드','유리패드','ACTIVE',:now,:now)")
+        .param("id", otherTagId)
+        .param("ownerId", otherOwnerId)
+        .param("now", now)
+        .update();
+    UUID memoId = UUID.randomUUID();
+    createMemo(memoId, "route-other-owner-name-create", "유리패드 마모 상태 다음 달에 다시 확인");
+
+    var started = startAnalysis(memoId, "route-other-owner-name-start", 1);
+    UUID proposalId = UUID.fromString(response(started).path("proposalId").asText());
+    var proposal = mvc.perform(get("/api/v1/analysis-proposals/{id}", proposalId)).andReturn();
+
+    assertThat(started.getResponse().getStatus()).isEqualTo(200);
+    assertThat(response(proposal).at("/tagCandidates/0/existingTagId").isNull()).isTrue();
+    assertThat(response(proposal).at("/tagCandidates/0/isNewProposal").asBoolean()).isTrue();
+    assertThat(response(proposal).toString()).doesNotContain(otherTagId.toString());
+    assertThat(
+            db.sql("select count(*) from tags where owner_id=:ownerId")
+                .param("ownerId", OWNER_ID)
+                .query(Long.class)
+                .single())
+        .isEqualTo(2L);
   }
 
   @Test
@@ -148,10 +195,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(runAmbiguityReasons(runId)).contains("LOW_TYPE_MARGIN");
     assertThat(response(proposal).at("/providerMetadata/receivedRoutingReasons").toString())
         .contains("LOW_TYPE_MARGIN");
-    assertThat(
-            response(proposal)
-                .at("/providerMetadata/receivedRoutingPolicyVersion")
-                .asText())
+    assertThat(response(proposal).at("/providerMetadata/receivedRoutingPolicyVersion").asText())
         .isEqualTo("field-policy-v1");
     verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
   }
@@ -184,8 +228,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
               CloudAnalysisRequest request = invocation.getArgument(0);
               ObjectNode enriched = request.validatedLocalProposal();
               ObjectNode date = (ObjectNode) enriched.at("/dateCandidates/0");
-              date
-                  .put("value", "2026-08-12")
+              date.put("value", "2026-08-12")
                   .put("precision", "DATE_ONLY")
                   .put("timeSpecified", false)
                   .putArray("ambiguityReasons");
@@ -433,7 +476,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
             .single();
     assertThat(state.route()).isEqualTo(expectedRoute);
     assertThat(state.status()).isEqualTo("REVIEW_REQUIRED");
-    assertThat(state.analyzerVersion()).isEqualTo("fake-v2");
+    assertThat(state.analyzerVersion()).isEqualTo("fake-v3");
     assertThat(state.promptVersion()).isEqualTo("none");
     assertThat(state.localModelVersion()).isEqualTo("none");
     assertThat(state.embeddingModelVersion()).isEqualTo("none");
@@ -460,8 +503,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
 
   private void assertFailedAnalysisLeftOnlyRawMemo(UUID memoId, String expectedContent) {
     assertThat(
-            db.sql(
-                    "select content from memo_revisions where memo_id=:memoId and owner_id=:ownerId")
+            db.sql("select content from memo_revisions where memo_id=:memoId and owner_id=:ownerId")
                 .param("memoId", memoId)
                 .param("ownerId", OWNER_ID)
                 .query(String.class)
@@ -471,8 +513,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(db.sql("select count(*) from analysis_proposals").query(Long.class).single())
         .isZero();
     assertThat(
-            db.sql(
-                    "select count(*) from idempotency_records where operation='ANALYSIS_START'")
+            db.sql("select count(*) from idempotency_records where operation='ANALYSIS_START'")
                 .query(Long.class)
                 .single())
         .isZero();

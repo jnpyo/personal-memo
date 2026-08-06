@@ -32,13 +32,7 @@ class AnalysisApplicationValidatorTest {
 
   @Test
   void exactTimeRequiresOffsetAndConvertsToUtcInstant() {
-    Due due =
-        new Due(
-            "11월 25일 18시",
-            "2026-11-25T18:00:00+09:00",
-            "EXACT_TIME",
-            "Asia/Seoul",
-            true);
+    Due due = new Due("11월 25일 18시", "2026-11-25T18:00:00+09:00", "EXACT_TIME", "Asia/Seoul", true);
 
     var validated = validator.validate(apply(due)).items().getFirst().due();
 
@@ -49,19 +43,15 @@ class AnalysisApplicationValidatorTest {
   @Test
   void rejectsImpossibleDatesUnknownZonesAndInventedDateOnlyTimes() {
     assertInvalidDate(
-        new Due("2월 30일", "2026-02-30", "DATE_ONLY", "Asia/Seoul", false),
-        "INVALID_DATE_VALUE");
+        new Due("2월 30일", "2026-02-30", "DATE_ONLY", "Asia/Seoul", false), "INVALID_DATE_VALUE");
     assertInvalidDate(
-        new Due("11.25", "2026-11-25", "DATE_ONLY", "Mars/Olympus", false),
-        "INVALID_TIME_ZONE");
+        new Due("11.25", "2026-11-25", "DATE_ONLY", "Mars/Olympus", false), "INVALID_TIME_ZONE");
     assertInvalidDate(
-        new Due("11.25", "2026-11-25", "DATE_ONLY", "Asia/Seoul", true),
-        "INVALID_DATE_VALUE");
+        new Due("11.25", "2026-11-25", "DATE_ONLY", "Asia/Seoul", true), "INVALID_DATE_VALUE");
   }
 
   private Apply apply(Due due) {
-    return new Apply(
-        1, "TASK", "과제 제출", List.of(), List.of(new Item("TASK", "과제 제출", due)));
+    return new Apply(1, "TASK", "과제 제출", List.of(), List.of(new Item("TASK", "과제 제출", due)));
   }
 
   private void assertInvalidDate(Due due, String expectedCode) {

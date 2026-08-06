@@ -71,7 +71,7 @@ class UndoOrphanTagIntegrationTest extends PostgresIntegrationTestSupport {
     try (var executor = Executors.newFixedThreadPool(2);
         Connection blocker = dataSource.getConnection()) {
       blocker.setAutoCommit(false);
-      acquireOwnerUndoLock(blocker);
+      acquireOwnerApplicationLock(blocker);
 
       var creatorUndo =
           executor.submit(
@@ -124,17 +124,16 @@ class UndoOrphanTagIntegrationTest extends PostgresIntegrationTestSupport {
         .isEqualTo(2);
   }
 
-  private void acquireOwnerUndoLock(Connection connection) throws Exception {
+  private void acquireOwnerApplicationLock(Connection connection) throws Exception {
     try (PreparedStatement statement =
-        connection.prepareStatement(
-            "select pg_advisory_xact_lock(hashtextextended(?, 0))")) {
-      statement.setString(1, OWNER_ID + ":ANALYSIS_UNDO_OWNER");
+        connection.prepareStatement("select pg_advisory_xact_lock(hashtextextended(?, 0))")) {
+      statement.setString(1, OWNER_ID + ":ANALYSIS_APPLICATION_OWNER");
       statement.execute();
     }
   }
 
-  private boolean awaitWaitingAdvisoryLocks(
-      long expectedCount, long timeout, TimeUnit timeUnit) throws InterruptedException {
+  private boolean awaitWaitingAdvisoryLocks(long expectedCount, long timeout, TimeUnit timeUnit)
+      throws InterruptedException {
     long deadline = System.nanoTime() + timeUnit.toNanos(timeout);
     while (System.nanoTime() < deadline) {
       long waiting =
@@ -162,20 +161,23 @@ class UndoOrphanTagIntegrationTest extends PostgresIntegrationTestSupport {
     createMemo(memoId, keyPrefix + "-create", keyPrefix + " 작업");
     UUID proposalId =
         UUID.fromString(
-            response(startAnalysis(memoId, keyPrefix + "-start", 1))
-                .path("proposalId")
-                .asText());
+            response(startAnalysis(memoId, keyPrefix + "-start", 1)).path("proposalId").asText());
     Map<String, Object> item = new LinkedHashMap<>();
     item.put("kind", "TASK");
     item.put("title", keyPrefix + " 작업");
     item.put("due", null);
     Map<String, Object> selection =
         Map.of(
-            "expectedMemoRevision", 1,
-            "selectedType", "TASK",
-            "title", keyPrefix + " 작업",
-            "selectedTags", List.of(tagSelection),
-            "items", List.of(item));
+            "expectedMemoRevision",
+            1,
+            "selectedType",
+            "TASK",
+            "title",
+            keyPrefix + " 작업",
+            "selectedTags",
+            List.of(tagSelection),
+            "items",
+            List.of(item));
     var result = applyProposal(proposalId, keyPrefix + "-apply", selection);
     assertThat(result.getResponse().getStatus()).isEqualTo(200);
     return UUID.fromString(response(result).path("applicationId").asText());

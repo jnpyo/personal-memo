@@ -140,16 +140,19 @@ class TaskStateIntegrationTest extends PostgresIntegrationTestSupport {
     createMemo(memoId, "create-task-" + memoId, "지난 과제 제출");
     UUID proposalId =
         UUID.fromString(
-            response(startAnalysis(memoId, "start-task-" + memoId, 1))
-                .path("proposalId")
-                .asText());
+            response(startAnalysis(memoId, "start-task-" + memoId, 1)).path("proposalId").asText());
     Map<String, Object> due =
         Map.of(
-            "surfaceText", "지난 날짜",
-            "value", value,
-            "precision", precision,
-            "timeZone", "Asia/Seoul",
-            "timeSpecified", false);
+            "surfaceText",
+            "지난 날짜",
+            "value",
+            value,
+            "precision",
+            precision,
+            "timeZone",
+            "Asia/Seoul",
+            "timeSpecified",
+            false);
     var applied = applyProposal(proposalId, "apply-task-" + memoId, 1, "지난 과제", due);
     assertThat(applied.getResponse().getStatus()).isEqualTo(200);
     return db.sql("select memo_item_id from task_details").query(UUID.class).single();

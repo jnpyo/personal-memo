@@ -30,10 +30,8 @@ class MemoLifecycleIntegrationTest extends PostgresIntegrationTestSupport {
     var active = mvc.perform(get("/api/v1/memos").param("status", "ACTIVE")).andReturn();
     var trashed = mvc.perform(get("/api/v1/memos").param("status", "TRASHED")).andReturn();
     var bounded =
-        mvc.perform(get("/api/v1/memos").param("status", "ACTIVE").param("limit", "1"))
-            .andReturn();
-    var invalid =
-        mvc.perform(get("/api/v1/memos").param("status", "DELETED")).andReturn();
+        mvc.perform(get("/api/v1/memos").param("status", "ACTIVE").param("limit", "1")).andReturn();
+    var invalid = mvc.perform(get("/api/v1/memos").param("status", "DELETED")).andReturn();
 
     assertThat(active.getResponse().getStatus()).isEqualTo(200);
     assertThat(response(active).size()).isEqualTo(2);
@@ -98,8 +96,7 @@ class MemoLifecycleIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(response(firstTrash).path("status").asText()).isEqualTo("TRASHED");
     assertThat(response(trashReplay)).isEqualTo(response(firstTrash));
     assertThat(trashMismatch.getResponse().getStatus()).isEqualTo(409);
-    assertThat(response(trashMismatch).path("code").asText())
-        .isEqualTo("IDEMPOTENCY_KEY_REUSED");
+    assertThat(response(trashMismatch).path("code").asText()).isEqualTo("IDEMPOTENCY_KEY_REUSED");
     assertThat(
             db.sql("select status from analysis_runs where id=:id")
                 .param("id", runId)
@@ -115,8 +112,7 @@ class MemoLifecycleIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(response(firstRestore).path("status").asText()).isEqualTo("ACTIVE");
     assertThat(response(restoreReplay)).isEqualTo(response(firstRestore));
     assertThat(restoreMismatch.getResponse().getStatus()).isEqualTo(409);
-    assertThat(response(restoreMismatch).path("code").asText())
-        .isEqualTo("IDEMPOTENCY_KEY_REUSED");
+    assertThat(response(restoreMismatch).path("code").asText()).isEqualTo("IDEMPOTENCY_KEY_REUSED");
     assertThat(
             db.sql("select content from memo_revisions where memo_id=:id order by revision")
                 .param("id", memoId)
@@ -140,11 +136,7 @@ class MemoLifecycleIntegrationTest extends PostgresIntegrationTestSupport {
                 .asText());
     var applied =
         applyProposal(
-            proposalId,
-            "apply-before-derived-visibility",
-            1,
-            "OS assignment submit",
-            null);
+            proposalId, "apply-before-derived-visibility", 1, "OS assignment submit", null);
     assertThat(applied.getResponse().getStatus()).isEqualTo(200);
     UUID taskId = db.sql("select memo_item_id from task_details").query(UUID.class).single();
 
@@ -172,8 +164,7 @@ class MemoLifecycleIntegrationTest extends PostgresIntegrationTestSupport {
     assertDerivedVisibility(memoId, taskId, true);
   }
 
-  private void assertDerivedVisibility(UUID memoId, UUID taskId, boolean visible)
-      throws Exception {
+  private void assertDerivedVisibility(UUID memoId, UUID taskId, boolean visible) throws Exception {
     var tasks = mvc.perform(get("/api/v1/tasks")).andReturn();
     var graph = mvc.perform(get("/api/v1/graph/home")).andReturn();
     assertThat(tasks.getResponse().getStatus()).isEqualTo(200);

@@ -48,13 +48,11 @@ class KoreanMemoFixtureTest {
   }
 
   @TestFactory
-  Stream<DynamicTest> everyKoreanMemoFixtureProducesAValidDeterministicProposal()
-      throws Exception {
+  Stream<DynamicTest> everyKoreanMemoFixtureProducesAValidDeterministicProposal() throws Exception {
     return StreamSupport.stream(fixtures().spliterator(), false)
         .map(
             fixture ->
-                DynamicTest.dynamicTest(
-                    fixture.path("id").asText(), () -> verifyFixture(fixture)));
+                DynamicTest.dynamicTest(fixture.path("id").asText(), () -> verifyFixture(fixture)));
   }
 
   private void verifyFixture(JsonNode fixture) {
@@ -63,15 +61,21 @@ class KoreanMemoFixtureTest {
     JsonNode proposal = analyzer.analyze(memoId, 3, content, BASE_INSTANT, TIME_ZONE);
 
     validator.validate(proposal, memoId, 3, content.length());
-    assertThat(proposal.at("/providerMetadata/route").asText())
-        .isEqualTo(fixture.path("expectedRoute").asText());
+    boolean hasOwnerNeutralTagCandidate = hasOwnerNeutralTagCandidate(proposal);
+    String expectedAnalyzerRoute =
+        hasOwnerNeutralTagCandidate ? "CLOUD_ENRICH" : fixture.path("expectedRoute").asText();
+    assertThat(proposal.at("/providerMetadata/route").asText()).isEqualTo(expectedAnalyzerRoute);
     assertThat(ambiguityGate.route(ambiguityGate.routingSignals(proposal)).name())
-        .isEqualTo(fixture.path("expectedRoute").asText());
+        .isEqualTo(expectedAnalyzerRoute);
     assertThat(textValues(proposal.path("typeCandidates"), "value"))
         .containsExactlyElementsOf(textValues(fixture.path("expectedTypes"), null));
 
     List<String> actualSignals = textValues(proposal.path("ambiguityReasons"), null);
-    List<String> expectedSignals = textValues(fixture.path("expectedSignals"), null);
+    List<String> expectedSignals =
+        new ArrayList<>(textValues(fixture.path("expectedSignals"), null));
+    if (hasOwnerNeutralTagCandidate && !expectedSignals.contains("NEW_TOPIC")) {
+      expectedSignals.add("NEW_TOPIC");
+    }
     assertThat(actualSignals).containsExactlyInAnyOrderElementsOf(expectedSignals);
     assertThat(proposal.path("itemCandidates")).hasSizeLessThanOrEqualTo(3);
 
@@ -83,22 +87,19 @@ class KoreanMemoFixtureTest {
       case "clear-explicit-task" -> {
         assertThat(proposal.at("/dateCandidates/0/value").asText())
             .isEqualTo("2026-11-25T18:00:00+09:00");
-        assertThat(proposal.at("/dateCandidates/0/precision").asText())
-            .isEqualTo("EXACT_TIME");
-        assertExistingOsAlias(proposal);
+        assertThat(proposal.at("/dateCandidates/0/precision").asText()).isEqualTo("EXACT_TIME");
+        assertOwnerNeutralOsAlias(proposal);
       }
       case "clear-date-only-task" -> {
         assertThat(proposal.at("/dateCandidates/0/value").asText()).isEqualTo("2026-11-25");
         assertThat(proposal.at("/dateCandidates/0/surfaceText").asText()).isEqualTo("11.25");
-        assertExistingOsAlias(proposal);
+        assertOwnerNeutralOsAlias(proposal);
       }
       case "relative-exact-task" ->
-          assertThat(proposal.at("/dateCandidates/0/value").asText())
-              .isEqualTo("2026-08-11");
+          assertThat(proposal.at("/dateCandidates/0/value").asText()).isEqualTo("2026-08-11");
       case "imprecise-reference-task" -> {
         assertThat(proposal.at("/dateCandidates/0/value").isNull()).isTrue();
-        assertThat(proposal.at("/dateCandidates/0/precision").asText())
-            .isEqualTo("APPROXIMATE");
+        assertThat(proposal.at("/dateCandidates/0/precision").asText()).isEqualTo("APPROXIMATE");
       }
       case "information-only" -> assertNoTaskItems(proposal);
       case "mixed-information-task" ->
@@ -129,13 +130,21 @@ class KoreanMemoFixtureTest {
     }
   }
 
-  private void assertExistingOsAlias(JsonNode proposal) {
+  private void assertOwnerNeutralOsAlias(JsonNode proposal) {
     JsonNode tag = proposal.path("tagCandidates").get(0);
-    assertThat(tag.path("existingTagId").asText())
-        .isEqualTo("10000000-0000-0000-0000-000000000001");
+    assertThat(tag.path("existingTagId").isNull()).isTrue();
     assertThat(tag.path("canonicalName").asText()).isEqualTo("운영체제");
     assertThat(tag.path("matchedAlias").asText()).isEqualTo("OS");
-    assertThat(tag.path("isNewProposal").asBoolean()).isFalse();
+    assertThat(tag.path("isNewProposal").asBoolean()).isTrue();
+  }
+
+  private boolean hasOwnerNeutralTagCandidate(JsonNode proposal) {
+    for (JsonNode tag : proposal.path("tagCandidates")) {
+      if (tag.path("existingTagId").isNull() && tag.path("isNewProposal").asBoolean()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private void assertNoTaskItems(JsonNode proposal) {

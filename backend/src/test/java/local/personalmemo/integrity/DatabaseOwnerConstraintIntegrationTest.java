@@ -14,8 +14,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 class DatabaseOwnerConstraintIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
-  void compositeForeignKeysRejectCrossOwnerRelationshipsAtTheDatabaseBoundary()
-      throws Exception {
+  void compositeForeignKeysRejectCrossOwnerRelationshipsAtTheDatabaseBoundary() throws Exception {
     UUID ownMemo = UUID.randomUUID();
     createMemo(ownMemo, "db-owner-own-create", "소유권 제약 작업");
     var started = startAnalysis(ownMemo, "db-owner-own-start", 1);

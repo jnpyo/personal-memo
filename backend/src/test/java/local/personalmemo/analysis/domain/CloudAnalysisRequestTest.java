@@ -19,8 +19,7 @@ class CloudAnalysisRequestTest {
     List<AmbiguityReason> reasons = new ArrayList<>();
     reasons.add(AmbiguityReason.LOW_TYPE_MARGIN);
 
-    CloudAnalysisRequest request =
-        new CloudAnalysisRequest(proposal, reasons, "field-policy-v1");
+    CloudAnalysisRequest request = new CloudAnalysisRequest(proposal, reasons, "field-policy-v1");
     proposal.put("memoRevision", 2);
     reasons.clear();
     request.validatedLocalProposal().put("memoRevision", 3);
@@ -49,9 +48,7 @@ class CloudAnalysisRequestTest {
     assertThatThrownBy(
             () ->
                 new CloudAnalysisRequest(
-                    proposal,
-                    List.of(),
-                    "😀".repeat(AnalysisProvenance.MAX_VERSION_LENGTH + 1)))
+                    proposal, List.of(), "😀".repeat(AnalysisProvenance.MAX_VERSION_LENGTH + 1)))
         .isInstanceOf(IllegalArgumentException.class);
   }
 }

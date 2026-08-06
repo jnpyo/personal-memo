@@ -30,9 +30,7 @@ class AnalysisRecoveryIntegrationTest extends PostgresIntegrationTestSupport {
                 .asText());
     UUID applicationId =
         UUID.fromString(
-            response(
-                    applyProposal(
-                        proposalId, "recovery-latest-apply", 1, "복구할 작업", null))
+            response(applyProposal(proposalId, "recovery-latest-apply", 1, "복구할 작업", null))
                 .path("applicationId")
                 .asText());
 
@@ -45,8 +43,7 @@ class AnalysisRecoveryIntegrationTest extends PostgresIntegrationTestSupport {
 
     undoApplication(applicationId, "recovery-latest-undo");
     var undone = mvc.perform(get("/api/v1/analysis-applications/latest")).andReturn();
-    assertThat(response(undone).path("applicationId").asText())
-        .isEqualTo(applicationId.toString());
+    assertThat(response(undone).path("applicationId").asText()).isEqualTo(applicationId.toString());
     assertThat(response(undone).path("status").asText()).isEqualTo("UNDONE");
   }
 
@@ -108,8 +105,7 @@ class AnalysisRecoveryIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(response(recovered).at("/0/proposalId").asText())
         .isEqualTo(currentProposal.toString());
     assertThat(response(recovered).at("/0/status").asText()).isEqualTo("POSTPONED");
-    assertThat(response(recovered).at("/0/createdAt").asText())
-        .isEqualTo("2026-08-05T03:00:00Z");
+    assertThat(response(recovered).at("/0/createdAt").asText()).isEqualTo("2026-08-05T03:00:00Z");
     assertThat(response(recovered).at("/0/proposal/memoId").asText())
         .isEqualTo(currentMemo.toString());
 
@@ -123,8 +119,7 @@ class AnalysisRecoveryIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(response(awaitingReview).size()).isEqualTo(1);
     assertThat(response(awaitingReview).at("/0/proposalId").asText())
         .isEqualTo(reviewProposal.toString());
-    assertThat(response(awaitingReview).at("/0/status").asText())
-        .isEqualTo("REVIEW_REQUIRED");
+    assertThat(response(awaitingReview).at("/0/status").asText()).isEqualTo("REVIEW_REQUIRED");
     assertThat(response(awaitingReview).at("/0/createdAt").asText())
         .isEqualTo("2026-08-05T04:00:00Z");
     assertThat(response(awaitingReview).at("/0/proposal/memoId").asText())
@@ -132,21 +127,16 @@ class AnalysisRecoveryIntegrationTest extends PostgresIntegrationTestSupport {
 
     var bounded =
         mvc.perform(
-                get("/api/v1/analysis-proposals")
-                    .param("status", "POSTPONED")
-                    .param("limit", "0"))
+                get("/api/v1/analysis-proposals").param("status", "POSTPONED").param("limit", "0"))
             .andReturn();
     assertThat(response(bounded).size()).isEqualTo(1);
 
     var unsupported =
         mvc.perform(
-                get("/api/v1/analysis-proposals")
-                    .param("status", "APPLIED")
-                    .param("limit", "1"))
+                get("/api/v1/analysis-proposals").param("status", "APPLIED").param("limit", "1"))
             .andReturn();
     assertThat(unsupported.getResponse().getStatus()).isEqualTo(422);
-    assertThat(response(unsupported).path("code").asText())
-        .isEqualTo("INVALID_PROPOSAL_STATUS");
+    assertThat(response(unsupported).path("code").asText()).isEqualTo("INVALID_PROPOSAL_STATUS");
   }
 
   private void postpone(UUID proposalId, String key) throws Exception {

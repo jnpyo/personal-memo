@@ -81,11 +81,7 @@ class DeterministicAmbiguityGateTest {
         .add(json.createObjectNode().put("score", 0.72).put("isNewProposal", true));
     proposal
         .putArray("itemCandidates")
-        .add(
-            json.createObjectNode()
-                .put("kind", "TASK")
-                .putNull("action")
-                .putNull("object"));
+        .add(json.createObjectNode().put("kind", "TASK").putNull("action").putNull("object"));
 
     assertThat(gate.routingSignals(proposal))
         .contains(
@@ -125,14 +121,10 @@ class DeterministicAmbiguityGateTest {
     conflicting
         .putArray("itemCandidates")
         .add(
-            json.createObjectNode()
-                .put("kind", "INFORMATION")
-                .putNull("action")
-                .putNull("object"));
+            json.createObjectNode().put("kind", "INFORMATION").putNull("action").putNull("object"));
 
     assertThat(gate.routingSignals(missingTask)).contains(AmbiguityReason.MISSING_ACTION);
-    assertThat(gate.routingSignals(conflicting))
-        .contains(AmbiguityReason.LOCAL_CLOUD_CONFLICT);
+    assertThat(gate.routingSignals(conflicting)).contains(AmbiguityReason.LOCAL_CLOUD_CONFLICT);
   }
 
   private ObjectNode emptyProposal() {

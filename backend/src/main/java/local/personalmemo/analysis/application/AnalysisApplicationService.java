@@ -17,7 +17,7 @@ import local.personalmemo.analysis.domain.AnalysisApplicationValidator.Validated
 import local.personalmemo.analysis.domain.AnalysisApplicationValidator.ValidatedDue;
 import local.personalmemo.analysis.domain.AnalysisApplicationValidator.ValidatedItem;
 import local.personalmemo.analysis.domain.AnalysisApplicationValidator.ValidatedTag;
-import local.personalmemo.common.DevIdentity;
+import local.personalmemo.common.auth.CurrentIdentity;
 import local.personalmemo.common.error.DomainException;
 import local.personalmemo.common.idempotency.IdempotencyService;
 import local.personalmemo.memo.application.MemoService;
@@ -33,7 +33,7 @@ public class AnalysisApplicationService {
   private static final String UNDO_OPERATION = "ANALYSIS_UNDO";
 
   private final JdbcClient db;
-  private final DevIdentity identity;
+  private final CurrentIdentity identity;
   private final MemoService memos;
   private final AnalysisApplicationValidator validator;
   private final IdempotencyService idempotency;
@@ -41,7 +41,7 @@ public class AnalysisApplicationService {
 
   public AnalysisApplicationService(
       JdbcClient db,
-      DevIdentity identity,
+      CurrentIdentity identity,
       MemoService memos,
       AnalysisApplicationValidator validator,
       IdempotencyService idempotency,
@@ -63,6 +63,7 @@ public class AnalysisApplicationService {
       return idempotency.convert(replay.get().response(), ApplicationView.class);
     }
 
+    acquireOwnerApplicationLock();
     ValidatedApply selection = validator.validate(request);
     ProposalRun observedProposal = findProposalRun(proposalId, false);
     MemoSnapshot memo = memos.getCurrentForUpdate(observedProposal.memoId());
@@ -143,10 +144,11 @@ public class AnalysisApplicationService {
       return idempotency.convert(replay.get().response(), ApplicationView.class);
     }
 
-    acquireOwnerUndoLock();
+    acquireOwnerApplicationLock();
     ApplicationRecord application = findApplicationForUpdate(applicationId);
     if ("APPLIED".equals(application.status())) {
-      reverseDerivedRecords(application, Timestamp.from(Instant.now()));
+      MemoSnapshot memo = memos.getCurrentForUpdate(application.memoId());
+      reverseDerivedRecords(application, memo, Timestamp.from(Instant.now()));
     } else if (!"UNDONE".equals(application.status())) {
       throw DomainException.conflict(
           "APPLICATION_NOT_UNDOABLE", "The analysis application cannot be undone.");
@@ -223,8 +225,7 @@ public class AnalysisApplicationService {
               .optional();
       if (createdTag.isEmpty()) {
         throw DomainException.conflict(
-            "TAG_ALREADY_EXISTS",
-            "A canonical tag with the same normalized name already exists.");
+            "TAG_ALREADY_EXISTS", "A canonical tag with the same normalized name already exists.");
       }
       tagIds.add(createdTag.get());
     }
@@ -325,8 +326,7 @@ public class AnalysisApplicationService {
         .update();
   }
 
-  private void linkTags(
-      UUID itemId, List<UUID> tagIds, UUID applicationId, Timestamp confirmedAt) {
+  private void linkTags(UUID itemId, List<UUID> tagIds, UUID applicationId, Timestamp confirmedAt) {
     for (UUID tagId : tagIds) {
       db.sql(
               """
@@ -351,7 +351,8 @@ public class AnalysisApplicationService {
     }
   }
 
-  private void reverseDerivedRecords(ApplicationRecord application, Timestamp undoneAt) {
+  private void reverseDerivedRecords(
+      ApplicationRecord application, MemoSnapshot memo, Timestamp undoneAt) {
     db.sql(
             """
             delete from item_tags it
@@ -402,29 +403,22 @@ public class AnalysisApplicationService {
     db.sql(
             """
             update analysis_runs r
-               set status = case
-                 when exists (
-                   select 1
-                     from memos m
-                    where m.id = :memoId
-                      and m.owner_id = :ownerId
-                      and m.status = 'ACTIVE'
-                      and m.current_revision = :memoRevision
-                 ) then 'REVIEW_REQUIRED'
-                 else 'STALE'
-               end
+               set status = :restoredStatus
              where r.id = :runId
                and r.owner_id = :ownerId
             """)
-        .param("memoId", application.memoId())
-        .param("memoRevision", application.memoRevision())
+        .param(
+            "restoredStatus",
+            memo.isActive() && memo.currentRevision() == application.memoRevision()
+                ? "REVIEW_REQUIRED"
+                : "STALE")
         .param("runId", application.runId())
         .param("ownerId", identity.ownerId())
         .update();
   }
 
-  private void acquireOwnerUndoLock() {
-    String lockScope = identity.ownerId() + ":ANALYSIS_UNDO_OWNER";
+  private void acquireOwnerApplicationLock() {
+    String lockScope = identity.ownerId() + ":ANALYSIS_APPLICATION_OWNER";
     db.sql("select pg_advisory_xact_lock(hashtextextended(:lockScope, 0))")
         .param("lockScope", lockScope)
         .query(
@@ -531,8 +525,7 @@ public class AnalysisApplicationService {
         .orElseThrow(() -> DomainException.notFound("Analysis application"));
   }
 
-  private ApplicationRecord mapApplication(ResultSet resultSet, int rowNumber)
-      throws SQLException {
+  private ApplicationRecord mapApplication(ResultSet resultSet, int rowNumber) throws SQLException {
     return new ApplicationRecord(
         resultSet.getObject("id", UUID.class),
         resultSet.getString("status"),
@@ -541,8 +534,7 @@ public class AnalysisApplicationService {
         resultSet.getObject("run_id", UUID.class));
   }
 
-  private void ensureApplicable(
-      ProposalRun proposal, MemoSnapshot memo, int expectedMemoRevision) {
+  private void ensureApplicable(ProposalRun proposal, MemoSnapshot memo, int expectedMemoRevision) {
     if (!memo.isActive()) {
       throw DomainException.conflict("MEMO_NOT_ACTIVE", "The memo is not active.");
     }

@@ -14,13 +14,10 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 class FakeAnalyzerTest {
-  private static final String OPERATING_SYSTEMS_TAG_ID =
-      "10000000-0000-0000-0000-000000000001";
-
   private final FakeAnalyzer analyzer = new FakeAnalyzer(new ObjectMapper());
 
   @Test
-  void preservesDateSurfaceAndResolvesAlias() {
+  void preservesDateSurfaceAndEmitsOwnerNeutralAliasCandidate() {
     var result =
         analyzer.analyze(
             UUID.randomUUID(),
@@ -37,18 +34,16 @@ class FakeAnalyzerTest {
         .contains("MISSING_YEAR", "MISSING_TIME");
     assertThat(result.at("/tagCandidates/0/canonicalName").asText()).isEqualTo("운영체제");
     assertThat(result.at("/tagCandidates/0/matchedAlias").asText()).isEqualTo("OS");
-    assertThat(result.at("/tagCandidates/0/isNewProposal").asBoolean()).isFalse();
+    assertThat(result.at("/tagCandidates/0/existingTagId").isNull()).isTrue();
+    assertThat(result.at("/tagCandidates/0/isNewProposal").asBoolean()).isTrue();
+    assertThat(result.path("ambiguityReasons").toString()).contains("NEW_TOPIC");
   }
 
   @Test
   void rollsDateOnlyCandidateIntoNextYearWhenMonthAndDayAlreadyPassed() {
     var result =
         analyzer.analyze(
-            UUID.randomUUID(),
-            4,
-            "1.2 과제 제출",
-            Instant.parse("2026-12-31T15:30:00Z"),
-            "Asia/Seoul");
+            UUID.randomUUID(), 4, "1.2 과제 제출", Instant.parse("2026-12-31T15:30:00Z"), "Asia/Seoul");
 
     assertThat(result.at("/dateCandidates/0/value").asText()).isEqualTo("2027-01-02");
     assertThat(result.path("memoRevision").asInt()).isEqualTo(4);
@@ -58,20 +53,15 @@ class FakeAnalyzerTest {
   void doesNotCreateCanonicalRecordsAndCarriesVersionMetadataOnlyInProposal() {
     UUID memoId = UUID.randomUUID();
     var result =
-        analyzer.analyze(
-            memoId,
-            2,
-            "아이디어 기록",
-            Instant.parse("2026-08-05T02:00:00Z"),
-            "Asia/Seoul");
+        analyzer.analyze(memoId, 2, "아이디어 기록", Instant.parse("2026-08-05T02:00:00Z"), "Asia/Seoul");
 
     assertThat(result.path("schemaVersion").asText()).isEqualTo("1");
     assertThat(result.path("memoId").asText()).isEqualTo(memoId.toString());
-    assertThat(analyzer.version()).isEqualTo("fake-v2");
+    assertThat(analyzer.version()).isEqualTo("fake-v3");
     assertThat(analyzer.provenance().promptVersion()).isEqualTo("none");
     assertThat(analyzer.provenance().localModelVersion()).isEqualTo("none");
     assertThat(analyzer.provenance().embeddingModelVersion()).isEqualTo("none");
-    assertThat(result.at("/providerMetadata/analyzerVersion").asText()).isEqualTo("fake-v2");
+    assertThat(result.at("/providerMetadata/analyzerVersion").asText()).isEqualTo("fake-v3");
     assertThat(result.at("/providerMetadata/promptVersion").asText()).isEqualTo("none");
     assertThat(result.at("/providerMetadata/localModelVersion").asText()).isEqualTo("none");
     assertThat(result.at("/providerMetadata/embeddingModelVersion").asText()).isEqualTo("none");
@@ -84,7 +74,7 @@ class FakeAnalyzerTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"OS과제 제출", "os과제 제출"})
-  void resolvesAsciiAliasAtAKoreanBoundaryAndRecordsTheMatchedAlias(String content) {
+  void detectsAsciiAliasAtAKoreanBoundaryAndRecordsTheMatchedAlias(String content) {
     var result = analyze(content);
     JsonNode tag = operatingSystemsTag(result);
 
@@ -92,7 +82,7 @@ class FakeAnalyzerTest {
   }
 
   @Test
-  void resolvesCanonicalNameWithoutClaimingAnAliasMatch() {
+  void detectsCanonicalNameWithoutClaimingAnAliasMatch() {
     var result = analyze("운영체제 과제 제출");
     JsonNode tag = operatingSystemsTag(result);
 
@@ -100,7 +90,7 @@ class FakeAnalyzerTest {
   }
 
   @Test
-  void recordsAliasWhenCanonicalNameAndAliasAreBothPresent() {
+  void detectsAliasWhenCanonicalNameAndAliasAreBothPresent() {
     var result = analyze("운영체제 OS과제 제출");
     JsonNode tag = operatingSystemsTag(result);
 
@@ -111,7 +101,7 @@ class FakeAnalyzerTest {
   void doesNotResolveOsInsideAnAsciiAlphanumericToken() {
     var result = analyze("postmortem 정리하기");
 
-    assertThat(tagIds(result)).doesNotContain(OPERATING_SYSTEMS_TAG_ID);
+    assertThat(tagNames(result)).doesNotContain("운영체제");
   }
 
   @Test
@@ -166,33 +156,26 @@ class FakeAnalyzerTest {
                 + "2026.08.09 09:00 2026.08.10 09:00 2026.08.11 09:00 과제 제출");
 
     assertThat(result.path("dateCandidates")).hasSize(5);
-    assertThat(result.path("ambiguityReasons").toString())
-        .contains("CANDIDATE_LIMIT_EXCEEDED");
+    assertThat(result.path("ambiguityReasons").toString()).contains("CANDIDATE_LIMIT_EXCEEDED");
     assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("CLOUD_ENRICH");
   }
 
   private ObjectNode analyze(String content) {
     return analyzer.analyze(
-        UUID.randomUUID(),
-        1,
-        content,
-        Instant.parse("2026-08-05T02:00:00Z"),
-        "Asia/Seoul");
+        UUID.randomUUID(), 1, content, Instant.parse("2026-08-05T02:00:00Z"), "Asia/Seoul");
   }
 
-  private List<String> tagIds(JsonNode proposal) {
-    ArrayList<String> ids = new ArrayList<>();
+  private List<String> tagNames(JsonNode proposal) {
+    ArrayList<String> names = new ArrayList<>();
     for (var tag : proposal.path("tagCandidates")) {
-      if (tag.path("existingTagId").isTextual()) {
-        ids.add(tag.path("existingTagId").asText());
-      }
+      names.add(tag.path("canonicalName").asText());
     }
-    return List.copyOf(ids);
+    return List.copyOf(names);
   }
 
   private JsonNode operatingSystemsTag(JsonNode proposal) {
     for (var tag : proposal.path("tagCandidates")) {
-      if (OPERATING_SYSTEMS_TAG_ID.equals(tag.path("existingTagId").asText())) {
+      if ("운영체제".equals(tag.path("canonicalName").asText())) {
         return tag;
       }
     }

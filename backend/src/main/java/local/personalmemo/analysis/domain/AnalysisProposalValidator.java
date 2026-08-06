@@ -32,12 +32,7 @@ public class AnalysisProposalValidator {
   private static final Set<String> TYPE_CANDIDATE_FIELDS = Set.of("value", "score");
   private static final Set<String> DATE_CANDIDATE_FIELDS =
       Set.of(
-          "surfaceText",
-          "value",
-          "precision",
-          "timeSpecified",
-          "confidence",
-          "ambiguityReasons");
+          "surfaceText", "value", "precision", "timeSpecified", "confidence", "ambiguityReasons");
   private static final Set<String> TAG_CANDIDATE_FIELDS =
       Set.of("existingTagId", "canonicalName", "matchedAlias", "score", "isNewProposal");
   private static final Set<String> ITEM_CANDIDATE_FIELDS =
@@ -112,11 +107,7 @@ public class AnalysisProposalValidator {
 
   private void validateProviderMetadata(JsonNode metadata) {
     requireObject(metadata, "providerMetadata");
-    requireText(
-        metadata,
-        "analyzerVersion",
-        1,
-        AnalysisProvenance.MAX_VERSION_LENGTH);
+    requireText(metadata, "analyzerVersion", 1, AnalysisProvenance.MAX_VERSION_LENGTH);
     requireText(metadata, "promptVersion", 1, AnalysisProvenance.MAX_VERSION_LENGTH);
     requireText(metadata, "localModelVersion", 1, AnalysisProvenance.MAX_VERSION_LENGTH);
     requireText(metadata, "embeddingModelVersion", 1, AnalysisProvenance.MAX_VERSION_LENGTH);
@@ -184,9 +175,7 @@ public class AnalysisProposalValidator {
     }
     JsonNode items = proposal.path("itemCandidates");
     String topType = topType(proposal.path("typeCandidates"));
-    if ("TASK".equals(topType)
-        && items.isEmpty()
-        && !summary.contains("MISSING_ACTION")) {
+    if ("TASK".equals(topType) && items.isEmpty() && !summary.contains("MISSING_ACTION")) {
       fail("A task proposal without items must carry MISSING_ACTION.");
     }
     if (topType != null && !"UNKNOWN".equals(topType) && !items.isEmpty()) {
@@ -289,12 +278,10 @@ public class AnalysisProposalValidator {
     }
   }
 
-  private void validateCandidateDateValue(
-      JsonNode value, String precision, boolean timeSpecified) {
+  private void validateCandidateDateValue(JsonNode value, String precision, boolean timeSpecified) {
     switch (precision) {
       case "DATE_ONLY" -> validateDateOnlyCandidate(value, timeSpecified);
-      case "EXACT_TIME", "RELATIVE_EXACT" ->
-          validateExactTimeCandidate(value, timeSpecified);
+      case "EXACT_TIME", "RELATIVE_EXACT" -> validateExactTimeCandidate(value, timeSpecified);
       case "APPROXIMATE", "UNKNOWN" -> validateImpreciseCandidate(value, timeSpecified);
       default -> throw new IllegalStateException("Unexpected date precision.");
     }
@@ -411,8 +398,7 @@ public class AnalysisProposalValidator {
       }
       parseUuid(requireText(candidate, "targetId", 1, 64), "relationCandidates[].targetId");
       String relationType = requireText(candidate, "relationType", 1, 32);
-      if (!Set.of("RELATED_TO", "CONTINUES", "DEPENDS_ON", "REFERENCES")
-          .contains(relationType)) {
+      if (!Set.of("RELATED_TO", "CONTINUES", "DEPENDS_ON", "REFERENCES").contains(relationType)) {
         fail("relationCandidates[] contains an unsupported relationType.");
       }
       requireScore(candidate.path("score"), "relationCandidates[].score");

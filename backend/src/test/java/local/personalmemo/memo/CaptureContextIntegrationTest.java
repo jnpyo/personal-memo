@@ -24,11 +24,7 @@ class CaptureContextIntegrationTest extends PostgresIntegrationTestSupport {
 
     var created =
         createWithContext(
-            memoId,
-            "capture-context-create",
-            "original memo",
-            clientCreatedAt,
-            "America/New_York");
+            memoId, "capture-context-create", "original memo", clientCreatedAt, "America/New_York");
 
     assertThat(created.getResponse().getStatus()).isEqualTo(201);
     CaptureContext stored = captureContext(memoId, 1);
@@ -44,10 +40,14 @@ class CaptureContextIntegrationTest extends PostgresIntegrationTestSupport {
 
     Map<String, Object> body =
         Map.of(
-            "expectedRevision", 1,
-            "content", "revision two",
-            "clientUpdatedAt", clientUpdatedAt,
-            "timeZone", "America/New_York");
+            "expectedRevision",
+            1,
+            "content",
+            "revision two",
+            "clientUpdatedAt",
+            clientUpdatedAt,
+            "timeZone",
+            "America/New_York");
     var first = updateWithBody(memoId, "capture-context-update", body);
     var replay = updateWithBody(memoId, "capture-context-update", body);
     var mismatch =
@@ -55,10 +55,14 @@ class CaptureContextIntegrationTest extends PostgresIntegrationTestSupport {
             memoId,
             "capture-context-update",
             Map.of(
-                "expectedRevision", 1,
-                "content", "revision two",
-                "clientUpdatedAt", clientUpdatedAt.plusMinutes(1),
-                "timeZone", "America/New_York"));
+                "expectedRevision",
+                1,
+                "content",
+                "revision two",
+                "clientUpdatedAt",
+                clientUpdatedAt.plusMinutes(1),
+                "timeZone",
+                "America/New_York"));
 
     assertThat(first.getResponse().getStatus()).isEqualTo(200);
     assertThat(response(replay)).isEqualTo(response(first));
@@ -97,9 +101,12 @@ class CaptureContextIntegrationTest extends PostgresIntegrationTestSupport {
             memoId,
             "capture-context-missing-zone",
             Map.of(
-                "expectedRevision", 1,
-                "content", "revision two",
-                "clientUpdatedAt", OffsetDateTime.parse("2026-08-05T11:05:00+09:00")));
+                "expectedRevision",
+                1,
+                "content",
+                "revision two",
+                "clientUpdatedAt",
+                OffsetDateTime.parse("2026-08-05T11:05:00+09:00")));
     var missingTimestamp =
         updateWithBody(
             memoId,
@@ -113,10 +120,14 @@ class CaptureContextIntegrationTest extends PostgresIntegrationTestSupport {
             memoId,
             "capture-context-invalid-zone",
             Map.of(
-                "expectedRevision", 1,
-                "content", "revision two",
-                "clientUpdatedAt", OffsetDateTime.parse("2026-08-05T11:05:00+09:00"),
-                "timeZone", "Mars/Olympus_Mons"));
+                "expectedRevision",
+                1,
+                "content",
+                "revision two",
+                "clientUpdatedAt",
+                OffsetDateTime.parse("2026-08-05T11:05:00+09:00"),
+                "timeZone",
+                "Mars/Olympus_Mons"));
 
     assertThat(missingZone.getResponse().getStatus()).isEqualTo(422);
     assertThat(response(missingZone).path("code").asText()).isEqualTo("INVALID_CAPTURE_CONTEXT");
@@ -153,8 +164,7 @@ class CaptureContextIntegrationTest extends PostgresIntegrationTestSupport {
 
     assertThat(started.getResponse().getStatus()).isEqualTo(200);
     assertThat(proposal.getResponse().getStatus()).isEqualTo(200);
-    assertThat(response(proposal).at("/dateCandidates/0/value").asText())
-        .isEqualTo("2019-12-31");
+    assertThat(response(proposal).at("/dateCandidates/0/value").asText()).isEqualTo("2019-12-31");
     Instant runCreatedAt =
         db.sql("select created_at from analysis_runs where memo_id=:memoId")
             .param("memoId", memoId)
@@ -164,11 +174,7 @@ class CaptureContextIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   private MvcResult createWithContext(
-      UUID memoId,
-      String key,
-      String content,
-      OffsetDateTime clientCreatedAt,
-      String timeZone)
+      UUID memoId, String key, String content, OffsetDateTime clientCreatedAt, String timeZone)
       throws Exception {
     return mvc.perform(
             post("/api/v1/memos")
