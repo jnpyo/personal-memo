@@ -39,6 +39,7 @@ export default defineConfig(({ mode }) => {
           ],
         },
         manifest: {
+          id: '/',
           name: 'Personal Memo',
           short_name: 'Memo',
           description: '검토하고 승인한 결과만 지식과 할 일로 만드는 개인 메모',
@@ -46,6 +47,7 @@ export default defineConfig(({ mode }) => {
           theme_color: '#17221c',
           background_color: '#f6f2e8',
           display: 'standalone',
+          scope: '/',
           start_url: '/',
           icons: [
             {

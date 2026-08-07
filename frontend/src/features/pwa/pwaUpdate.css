@@ -1,11 +1,14 @@
 .pwa-update {
   position: fixed;
   z-index: 60;
-  top: max(12px, env(safe-area-inset-top));
-  right: 12px;
-  left: 12px;
+  top: calc(12px + env(safe-area-inset-top));
+  right: calc(12px + env(safe-area-inset-right));
+  left: calc(12px + env(safe-area-inset-left));
   display: flex;
-  width: min(calc(100% - 24px), 720px);
+  width: min(
+    calc(100% - 24px - env(safe-area-inset-right) - env(safe-area-inset-left)),
+    720px
+  );
   flex-direction: column;
   gap: 12px;
   margin: 0 auto;

@@ -54,6 +54,53 @@ public class AuthRepository {
                     .single());
   }
 
+  public InitialAccountProvisioning lockInitialAccountProvisioning() {
+    return db.sql(
+            "select status,provisioned_user_id,method,consumed_at "
+                + "from initial_account_provisioning where singleton=true for update")
+        .query(
+            (row, number) ->
+                new InitialAccountProvisioning(
+                    row.getString("status"),
+                    row.getObject("provisioned_user_id", UUID.class),
+                    row.getString("method"),
+                    row.getTimestamp("consumed_at") == null
+                        ? null
+                        : row.getTimestamp("consumed_at").toInstant()))
+        .single();
+  }
+
+  public Optional<UUID> findFirstClaimedUserId() {
+    return db.sql(
+            "select id from users where status<>'LEGACY_UNCLAIMED' "
+                + "order by created_at,id limit 1")
+        .query(UUID.class)
+        .optional();
+  }
+
+  public boolean consumeInitialAccountProvisioningForCreatedUser(UUID userId, Instant consumedAt) {
+    return consumeInitialAccountProvisioning(userId, "INTERACTIVE_CLI", consumedAt);
+  }
+
+  public boolean consumeInitialAccountProvisioningForPreexistingUser(
+      UUID userId, Instant consumedAt) {
+    return consumeInitialAccountProvisioning(userId, "PREEXISTING", consumedAt);
+  }
+
+  private boolean consumeInitialAccountProvisioning(
+      UUID userId, String method, Instant consumedAt) {
+    return db.sql(
+                "update initial_account_provisioning "
+                    + "set status='CONSUMED',provisioned_user_id=:userId,"
+                    + "method=:method,consumed_at=:consumedAt "
+                    + "where singleton=true and status='AVAILABLE'")
+            .param("userId", userId)
+            .param("method", method)
+            .param("consumedAt", Timestamp.from(consumedAt))
+            .update()
+        == 1;
+  }
+
   public Optional<UserAccount> findUserByNormalizedEmail(String normalizedEmail) {
     return db.sql(
             "select id,primary_email,primary_email_normalized,display_name,status "
@@ -277,4 +324,7 @@ public class AuthRepository {
   }
 
   public record LocalCredential(UserAccount user, String passwordHash, Instant lockedUntil) {}
+
+  public record InitialAccountProvisioning(
+      String status, UUID provisionedUserId, String method, Instant consumedAt) {}
 }

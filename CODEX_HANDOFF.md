@@ -213,7 +213,7 @@ Codex는 바로 실제 모델을 연결하지 말고 다음 세로 흐름부터 
 ## 12. 현재 구현 체크포인트
 
 - Phase 0과 Phase 1의 AI-free 수직 흐름은 구현되어 있다.
-- Flyway `V1`–`V9`가 memo/revision, proposal/application, canonical item/tag/task, owner integrity, revision capture context, analyzer·prompt·local model·embedding model·routing policy provenance, local/Google identity, JDBC session schema와 claimed user identity 무결성을 관리한다.
+- Flyway `V1`–`V10`이 memo/revision, proposal/application, canonical item/tag/task, owner integrity, revision capture context, analyzer·prompt·local model·embedding model·routing policy provenance, local/Google identity, JDBC session schema, claimed user identity 무결성과 일회성 initial-account provisioning gate를 관리한다.
 - 각 local/Google 로그인 수단은 internal UUID에 매핑되고, 명시적으로 연결한 두 수단은 같은 UUID와 PostgreSQL-backed server session을 사용한다. Google email만으로 자동 연결하지 않고 기존 로그인 뒤 명시적 link intent를 요구하며, 마지막 login method는 해제할 수 없다. domain owner는 client 값이나 개발 상수가 아니라 Spring Security context에서 가져온다.
 - React 인증 shell은 capability·CSRF·현재 session을 먼저 확인하고, 로그인 전에는 owner domain API를 호출하지 않는다. service worker는 API와 OAuth/login 경로를 cache하지 않는다.
 - owner별 원문 capture draft는 browser localStorage에 동기식으로 보존하고 저장소 실패를 사용자에게 알린다. 제안 수정·새 태그 입력·원문 revision 편집은 통합 dirty 상태로 추적하며, OAuth·로그아웃·브라우저 이탈을 확인하고 service-worker 업데이트는 사용자가 선택하되 미저장 편집 중에는 적용하지 않는다.
@@ -222,4 +222,6 @@ Codex는 바로 실제 모델을 연결하지 말고 다음 세로 흐름부터 
 - 명확한 결과는 `LOCAL`, 모호한 결과는 authoritative routing 사유를 받는 no-tool Fake cloud를 거쳐 `HYBRID` route로 저장되며 항상 사용자 검토가 필요하다.
 - `UNKNOWN` 유형은 UI가 자동 확정하지 않으며 사용자가 유형을 선택하고 항목을 추가해야 적용할 수 있다.
 - 실제 로컬 모델·클라우드 LLM, Web Push, 완전한 오프라인 동기화, 자동 taxonomy migration, 노드 압축은 아직 연결하지 않는다.
+- private personal-PC checkpoint는 production overlay 위에 기존 frontend Nginx의 private-LAN TLS listener만 추가한다. backend와 PostgreSQL은 host port가 없고, actual personal values·database secret·CA/private leaf key·backup은 Git 밖에 둔다. 첫 local account는 TTY password를 받는 non-web `bootstrap-account` command로 한 번만 만들며 운영 registration을 열지 않는다.
+- `scripts/personal`은 Windows에서 local CA/leaf와 ignored config, `Documents\PersonalMemo\Backups`, exact-project start/stop/status, checksummed logical backup과 별도 project restore 검증을 제공한다. 기준 기기는 Galaxy S24 Ultra이며 safe-area·44/48px touch target·384/412px·landscape·secure context·manifest/SW installability 자동 검사를 추가했지만 실제 기기의 CA 설치·키보드·cutout·home-screen 설치는 사용자가 검증해야 한다.
 - 계정별 연속 5회 실패 시 15분 잠금은 구현되어 있다. 공개 배포 전 account hardening의 다음 순서는 local email verification, password reset delivery, IP·edge rate limit/abuse protection, MFA/passkey 검토와 account deletion이다. 제품 분석의 다음 순서는 owner-scoped tag/alias 후보 조회, field-level Fake cloud 계약과 실패 상태, async 분석 수명주기·관측성이다.

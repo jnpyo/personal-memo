@@ -30,10 +30,70 @@ jobs:
       POSTGRES_DB: personal_memo_config_check
       POSTGRES_USER: personal_memo_config_check
       POSTGRES_PASSWORD: dummy-config-validation-only
+      PERSONAL_MEMO_HTTPS_BIND_ADDRESS: 192.168.1.100
+      PERSONAL_MEMO_HTTPS_PORT: '8443'
+      PERSONAL_MEMO_TLS_CERT_FILE: /tmp/personal-memo-config-cert.pem
+      PERSONAL_MEMO_TLS_KEY_FILE: /tmp/personal-memo-config-key.pem
     steps:
       - uses: actions/checkout@v5
+      - name: Validate private deployment source contracts
+        shell: pwsh
+        run: ./scripts/personal/Test-PersonalMemoSourceContracts.ps1
       - name: Validate the production Compose overlay
         run: docker compose -f compose.yaml -f compose.prod.yaml config --quiet
+      - name: Validate the private-PC Compose overlay
+        run: >-
+          docker compose -f compose.yaml -f compose.prod.yaml -f compose.personal.yaml
+          config --quiet
+      - name: Validate the private-PC Nginx TLS configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          nginx_test_root="$(mktemp -d)"
+          trap 'rm -rf "$nginx_test_root"' EXIT
+          mkdir -p "$nginx_test_root/conf.d" "$nginx_test_root/personal-listeners" "$nginx_test_root/tls"
+          sed 's|${API_PROXY_TARGET}|http://backend:8080|g' \
+            frontend/nginx/default.conf > "$nginx_test_root/conf.d/default.conf"
+          cp frontend/nginx/personal-tls-listener.conf \
+            "$nginx_test_root/personal-listeners/personal-tls.conf"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj '/CN=personal-memo-ci.invalid' \
+            -keyout "$nginx_test_root/tls/server-key.pem" \
+            -out "$nginx_test_root/tls/server-cert.pem"
+          chmod -R a+rX "$nginx_test_root"
+          docker run --rm \
+            --mount type=bind,source="$nginx_test_root/conf.d",target=/etc/nginx/conf.d,readonly \
+            --mount type=bind,source="$nginx_test_root/personal-listeners",target=/etc/nginx/personal-listeners,readonly \
+            --mount type=bind,source="$nginx_test_root/tls",target=/run/personal-memo/tls,readonly \
+            nginxinc/nginx-unprivileged:1.29-alpine nginx -t
+
+  personal-powershell-contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Parse personal deployment scripts with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $failed = $false
+          Get-ChildItem -LiteralPath scripts\personal -Filter *.ps1 -File | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref] $tokens,
+              [ref] $errors
+            ) | Out-Null
+            foreach ($parseError in $errors) {
+              Write-Error "$($_.Name): $($parseError.Message)"
+              $failed = $true
+            }
+          }
+          if ($failed) {
+            throw 'One or more personal deployment scripts failed Windows PowerShell 5.1 parsing.'
+          }
+      - name: Validate private ACL and command contracts
+        shell: powershell
+        run: .\scripts\personal\Test-PersonalMemoSourceContracts.ps1
 
   backend:
     runs-on: ubuntu-latest
@@ -84,7 +144,7 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    needs: [api-contract, production-compose-contract, backend, frontend]
+    needs: [api-contract, production-compose-contract, personal-powershell-contract, backend, frontend]
     timeout-minutes: 20
     env:
       COMPOSE_PROJECT_NAME: personal-memo-e2e-${{ github.run_id }}-${{ github.run_attempt }}

@@ -20,6 +20,7 @@ import local.personalmemo.common.error.DomainException;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.PlatformTransactionManager;
 
 class AuthServiceUnlinkTest {
   private static final Clock CLOCK =
@@ -133,7 +134,8 @@ class AuthServiceUnlinkTest {
         mock(PasswordEncoder.class),
         mock(AuthenticationManager.class),
         new AuthProperties(false, new AuthProperties.Google(false, false, "", "", "")),
-        CLOCK);
+        CLOCK,
+        mock(PlatformTransactionManager.class));
   }
 
   private UserAccount activeUser(UUID userId) {

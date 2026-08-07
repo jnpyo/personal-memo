@@ -1,8 +1,55 @@
-import { expect, test, type Page, type TestInfo } from '@playwright/test';
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 
 type TestCredentials = { email: string; password: string };
 type CsrfToken = { headerName: string; token: string };
 type AuthSession = { userId: string };
+type ManifestIcon = {
+  src?: string;
+  sizes?: string;
+  type?: string;
+  purpose?: string;
+};
+type WebAppManifest = {
+  id?: string;
+  name?: string;
+  short_name?: string;
+  display?: string;
+  scope?: string;
+  start_url?: string;
+  theme_color?: string;
+  background_color?: string;
+  icons?: ManifestIcon[];
+};
+
+async function expectNoHorizontalOverflow(page: Page): Promise<void> {
+  const dimensions = await page.evaluate(() => ({
+    viewportWidth: window.innerWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    bodyWidth: document.body.scrollWidth,
+  }));
+
+  expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
+  expect(dimensions.bodyWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
+}
+
+async function expectInsideViewport(page: Page, locator: Locator): Promise<void> {
+  await expect(locator).toBeVisible();
+  const [box, viewport] = await Promise.all([
+    locator.boundingBox(),
+    page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })),
+  ]);
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
+}
+
+async function expectMinimumTouchHeight(locator: Locator, minimum: number): Promise<void> {
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.height).toBeGreaterThanOrEqual(minimum);
+}
 
 async function googleAuthorizationUrl(page: Page): Promise<URL> {
   const response = await page.request.get('/oauth2/authorization/google', {
@@ -94,6 +141,38 @@ test('creates a local account, logs out, and logs back in', async ({ page }, tes
   await expect(page.getByText('서버 연결됨')).toBeVisible();
 });
 
+test('keeps the 384px portrait and landscape shell usable without horizontal overflow', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 384, height: 854 });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '로그인' })).toBeVisible();
+  await expectMinimumTouchHeight(page.locator('.auth-submit'), 48);
+  await expectMinimumTouchHeight(page.getByRole('button', { name: '계정 만들기', exact: true }), 44);
+  await expectNoHorizontalOverflow(page);
+
+  await registerIsolatedUser(page, testInfo);
+  const accountTrigger = page.getByLabel('계정 메뉴 열기');
+  const capture = page.locator('.capture-bar');
+  const captureSubmit = page.getByRole('button', { name: '원문 저장 후 제안 분석' });
+
+  await expectMinimumTouchHeight(accountTrigger, 44);
+  await expectMinimumTouchHeight(captureSubmit, 48);
+  await expectInsideViewport(page, capture);
+  await expectNoHorizontalOverflow(page);
+
+  await accountTrigger.click();
+  await expectInsideViewport(page, page.locator('.account-panel__body'));
+  await accountTrigger.click();
+
+  await page.setViewportSize({ width: 854, height: 384 });
+  await page.locator('header.hero').scrollIntoViewIfNeeded();
+  await expectInsideViewport(page, accountTrigger);
+  await expectInsideViewport(page, capture);
+  await expectMinimumTouchHeight(captureSubmit, 48);
+  await expectNoHorizontalOverflow(page);
+});
+
 test('keeps the workspace locked across reload until a failed logout is confirmed', async ({ page }, testInfo) => {
   await registerIsolatedUser(page, testInfo);
   await page.route('**/api/v1/auth/logout', async (route) => {
@@ -118,7 +197,11 @@ test('keeps the workspace locked across reload until a failed logout is confirme
   await expect(page.getByText('서버 연결됨')).toHaveCount(0);
 
   await page.unroute('**/api/v1/auth/logout');
-  await page.getByRole('button', { name: '로그아웃 다시 시도' }).click();
+  const retryLogout = page.getByRole('button', { name: '로그아웃 다시 시도' });
+  await retryLogout.evaluate((button: HTMLButtonElement) => button.click()).catch(() => {
+    // A pending confirmation can finish while the test removes the failed-request route.
+    // The terminal login-shell assertions below still prove that logout completed.
+  });
   await expect(page.getByRole('heading', { name: '로그인' })).toBeVisible();
   await expect(page.getByRole('button', { name: '로그아웃 다시 시도' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '계정 만들기', exact: true })).toBeEnabled();
@@ -331,18 +414,70 @@ test('UNKNOWN analysis requires an explicit type and manually confirmed item', a
   await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
 });
 
-test('production build registers an installable offline app shell', async ({ page, context }, testInfo) => {
+test('production build registers an installable offline app shell', async ({
+  page,
+  context,
+  browserName,
+}, testInfo) => {
   await registerIsolatedUser(page, testInfo);
+
+  expect(await page.evaluate(() => window.isSecureContext)).toBe(true);
 
   const manifest = await page.evaluate(async () => {
     const link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
     if (!link) return null;
     const response = await fetch(link.href);
-    return response.json() as Promise<{ icons?: Array<{ sizes?: string }> }>;
+    if (!response.ok) return null;
+    return response.json() as Promise<WebAppManifest>;
+  });
+  expect(manifest).toMatchObject({
+    id: '/',
+    name: 'Personal Memo',
+    short_name: 'Memo',
+    display: 'standalone',
+    scope: '/',
+    start_url: '/',
+    theme_color: '#17221c',
+    background_color: '#f6f2e8',
   });
   expect(manifest?.icons?.map((icon) => icon.sizes)).toEqual(
     expect.arrayContaining(['192x192', '512x512']),
   );
+
+  const iconResults = await page.evaluate(async (icons) => Promise.all(icons.map(async (icon) => {
+    if (!icon.src) return { ...icon, ok: false, width: 0, height: 0, contentType: null };
+    const response = await fetch(icon.src, { cache: 'no-store' });
+    const bitmap = response.ok ? await createImageBitmap(await response.blob()) : null;
+    const result = {
+      ...icon,
+      ok: response.ok,
+      width: bitmap?.width ?? 0,
+      height: bitmap?.height ?? 0,
+      contentType: response.headers.get('content-type'),
+    };
+    bitmap?.close();
+    return result;
+  })), manifest?.icons ?? []);
+  expect(iconResults).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      sizes: '192x192',
+      type: 'image/png',
+      purpose: 'any maskable',
+      ok: true,
+      width: 192,
+      height: 192,
+      contentType: 'image/png',
+    }),
+    expect.objectContaining({
+      sizes: '512x512',
+      type: 'image/png',
+      purpose: 'any maskable',
+      ok: true,
+      width: 512,
+      height: 512,
+      contentType: 'image/png',
+    }),
+  ]));
 
   const serviceWorkerReady = await page.evaluate(async () => {
     if (!('serviceWorker' in navigator)) return false;
@@ -354,9 +489,46 @@ test('production build registers an installable offline app shell', async ({ pag
   expect(serviceWorkerReady).toBe(true);
 
   await page.reload();
+  await expect(page.getByText('서버 연결됨')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
+
+  if (browserName === 'chromium') {
+    const cdp = await context.newCDPSession(page);
+    try {
+      const result = await cdp.send('Page.getInstallabilityErrors');
+      expect(result.installabilityErrors, JSON.stringify(result.installabilityErrors)).toEqual([]);
+    } finally {
+      await cdp.detach();
+    }
+  }
+
   await context.setOffline(true);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: /내 메모는/ })).toBeVisible();
   await expect(page.getByText(/오프라인에서는 로그인하거나 계정을 만들 수 없습니다/)).toBeVisible();
+
+  const networkOnlyPaths = [
+    '/api/v1/auth/me',
+    '/oauth2/authorization/google',
+    '/login/oauth2/code/google',
+  ];
+  const offlineResults = await page.evaluate(async (paths) => Promise.all(paths.map(async (path) => {
+    try {
+      const response = await fetch(path, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        redirect: 'manual',
+      });
+      return { path, resolved: true, status: response.status };
+    } catch {
+      return { path, resolved: false, status: null };
+    }
+  })), networkOnlyPaths);
+  expect(offlineResults).toEqual(networkOnlyPaths.map((path) => ({
+    path,
+    resolved: false,
+    status: null,
+  })));
+
   await context.setOffline(false);
 });

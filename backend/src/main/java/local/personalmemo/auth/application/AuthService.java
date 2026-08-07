@@ -5,9 +5,11 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.Arrays;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import local.personalmemo.auth.config.AuthProperties;
 import local.personalmemo.auth.domain.AppPrincipal;
 import local.personalmemo.auth.domain.GoogleProfile;
@@ -25,7 +27,9 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class AuthService {
@@ -34,20 +38,34 @@ public class AuthService {
   private static final int MAX_GOOGLE_SUBJECT_LENGTH = 255;
   private static final int LOCAL_LOGIN_FAILURE_LIMIT = 5;
   private static final Duration LOCAL_LOGIN_LOCK_DURATION = Duration.ofMinutes(15);
+  private static final Pattern EMAIL_LOCAL_PART =
+      Pattern.compile("[A-Z0-9!#$%&'*+/=?^_`{|}~.-]+", Pattern.CASE_INSENSITIVE);
+  private static final Pattern EMAIL_DOMAIN =
+      Pattern.compile(
+          "[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?" + "(?:\\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)*",
+          Pattern.CASE_INSENSITIVE);
 
   private final AuthRepository repository;
   private final PasswordEncoder passwordEncoder;
   private final AuthenticationManager authenticationManager;
   private final AuthProperties properties;
   private final Clock clock;
+  private final TransactionTemplate initialAccountBootstrapTransactions;
 
   @Autowired
   public AuthService(
       AuthRepository repository,
       PasswordEncoder passwordEncoder,
       AuthenticationManager authenticationManager,
-      AuthProperties properties) {
-    this(repository, passwordEncoder, authenticationManager, properties, Clock.systemUTC());
+      AuthProperties properties,
+      PlatformTransactionManager transactionManager) {
+    this(
+        repository,
+        passwordEncoder,
+        authenticationManager,
+        properties,
+        Clock.systemUTC(),
+        transactionManager);
   }
 
   AuthService(
@@ -55,12 +73,14 @@ public class AuthService {
       PasswordEncoder passwordEncoder,
       AuthenticationManager authenticationManager,
       AuthProperties properties,
-      Clock clock) {
+      Clock clock,
+      PlatformTransactionManager transactionManager) {
     this.repository = repository;
     this.passwordEncoder = passwordEncoder;
     this.authenticationManager = authenticationManager;
     this.properties = properties;
     this.clock = clock;
+    this.initialAccountBootstrapTransactions = new TransactionTemplate(transactionManager);
   }
 
   @Transactional
@@ -68,6 +88,68 @@ public class AuthService {
     if (!properties.registrationEnabled()) {
       throw DomainException.forbidden("REGISTRATION_DISABLED", "Registration is disabled.");
     }
+    return createLocalAccount(email, password, displayName, timeZone, clock.instant());
+  }
+
+  public AppPrincipal bootstrapInitialLocalAccount(
+      String email, char[] password, String displayName, String timeZone) {
+    try {
+      InitialAccountBootstrapAttempt attempt =
+          initialAccountBootstrapTransactions.execute(
+              status ->
+                  bootstrapInitialLocalAccountInTransaction(
+                      email, password, displayName, timeZone));
+      if (attempt == null) {
+        throw new IllegalStateException("Initial-account bootstrap returned no result.");
+      }
+      if (attempt.blockedByPreexistingUser()) {
+        throw DomainException.conflict(
+            "INITIAL_ACCOUNT_BOOTSTRAP_BLOCKED",
+            "A claimed account already exists; bootstrap cannot create another account.");
+      }
+      return attempt.principal();
+    } finally {
+      if (password != null) {
+        Arrays.fill(password, '\0');
+      }
+    }
+  }
+
+  private InitialAccountBootstrapAttempt bootstrapInitialLocalAccountInTransaction(
+      String email, char[] password, String displayName, String timeZone) {
+    if (properties.registrationEnabled() || properties.google().registrationEnabled()) {
+      throw new IllegalStateException(
+          "Initial-account bootstrap requires every self-registration capability to be disabled.");
+    }
+
+    var provisioning = repository.lockInitialAccountProvisioning();
+    if (!"AVAILABLE".equals(provisioning.status())) {
+      throw DomainException.conflict(
+          "INITIAL_ACCOUNT_ALREADY_PROVISIONED",
+          "Initial-account provisioning has already been consumed.");
+    }
+
+    Instant now = clock.instant();
+    var claimedUserId = repository.findFirstClaimedUserId();
+    if (claimedUserId.isPresent()) {
+      if (!repository.consumeInitialAccountProvisioningForPreexistingUser(
+          claimedUserId.get(), now)) {
+        throw new IllegalStateException("Initial-account provisioning state changed unexpectedly.");
+      }
+      return InitialAccountBootstrapAttempt.blocked();
+    }
+
+    AppPrincipal principal =
+        createLocalAccount(
+            email, password == null ? null : new String(password), displayName, timeZone, now);
+    if (!repository.consumeInitialAccountProvisioningForCreatedUser(principal.userId(), now)) {
+      throw new IllegalStateException("Initial-account provisioning state changed unexpectedly.");
+    }
+    return InitialAccountBootstrapAttempt.created(principal);
+  }
+
+  private AppPrincipal createLocalAccount(
+      String email, String password, String displayName, String timeZone, Instant now) {
     String normalizedEmail = normalizeEmail(email);
     String cleanDisplayName = requireBounded(displayName, "displayName", MAX_DISPLAY_NAME_LENGTH);
     validatePassword(password);
@@ -85,7 +167,7 @@ public class AuthService {
               cleanDisplayName,
               passwordEncoder.encode(password),
               timeZone,
-              clock.instant())
+              now)
           .toPrincipal();
     } catch (DataIntegrityViolationException exception) {
       throw emailAlreadyRegistered();
@@ -257,7 +339,27 @@ public class AuthService {
   }
 
   private String normalizeEmail(String email) {
-    return requireBounded(email, "email", MAX_EMAIL_LENGTH).toLowerCase(Locale.ROOT);
+    String trimmed = requireBounded(email, "email", MAX_EMAIL_LENGTH);
+    validateEmailAddress(trimmed);
+    return trimmed.toLowerCase(Locale.ROOT);
+  }
+
+  private void validateEmailAddress(String email) {
+    int separator = email.indexOf('@');
+    if (separator <= 0
+        || separator != email.lastIndexOf('@')
+        || separator > 64
+        || !validLocalPart(email.substring(0, separator))
+        || !EMAIL_DOMAIN.matcher(email.substring(separator + 1)).matches()) {
+      throw DomainException.invalid("VALIDATION_FAILED", "email must be a valid email address.");
+    }
+  }
+
+  private boolean validLocalPart(String localPart) {
+    return !localPart.startsWith(".")
+        && !localPart.endsWith(".")
+        && !localPart.contains("..")
+        && EMAIL_LOCAL_PART.matcher(localPart).matches();
   }
 
   private String requireBounded(String value, String field, int maxLength) {
@@ -311,5 +413,16 @@ public class AuthService {
   private DomainException googleConflict() {
     return DomainException.conflict(
         "GOOGLE_IDENTITY_CONFLICT", "This Google identity is already linked.");
+  }
+
+  private record InitialAccountBootstrapAttempt(
+      AppPrincipal principal, boolean blockedByPreexistingUser) {
+    private static InitialAccountBootstrapAttempt created(AppPrincipal principal) {
+      return new InitialAccountBootstrapAttempt(principal, false);
+    }
+
+    private static InitialAccountBootstrapAttempt blocked() {
+      return new InitialAccountBootstrapAttempt(null, true);
+    }
   }
 }

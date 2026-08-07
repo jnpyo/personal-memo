@@ -17,10 +17,14 @@ FROM nginxinc/nginx-unprivileged:1.29-alpine AS runtime
 ENV API_PROXY_TARGET=http://backend:8080 \
     NGINX_ENVSUBST_FILTER=^API_PROXY_TARGET$
 
+USER root
+RUN mkdir -p /etc/nginx/personal-listeners /run/personal-memo/tls \
+    && chown -R 101:101 /etc/nginx/personal-listeners /run/personal-memo
+
 COPY --from=build --chown=101:101 /app/dist /usr/share/nginx/html
 COPY --chown=101:101 nginx/default.conf /etc/nginx/templates/default.conf.template
 
-EXPOSE 5173
+EXPOSE 5173 8443
 
 USER 101:101
 

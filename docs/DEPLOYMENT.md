@@ -1,6 +1,6 @@
 # 배포 및 운영 가이드
 
-이 문서는 현재 저장소의 `compose.yaml`과 개발·운영 overlay, Dockerfile, Spring `prod` profile을 기준으로 한다. 현재 배포 형태는 한 호스트에서 실행하는 통제된 포트폴리오·비공개 평가 환경이다. 외부 HTTPS edge, 인증서, 자동 백업, 모니터링, 고가용성은 이 저장소가 제공하지 않는다.
+이 문서는 현재 저장소의 `compose.yaml`과 개발·운영·개인 PC overlay, Dockerfile, Spring `prod` profile을 기준으로 한다. 현재 배포 형태는 한 호스트에서 실행하는 통제된 포트폴리오·비공개 평가 환경이다. 개인 PC 모드는 기존 frontend Nginx의 private-LAN HTTPS와 로컬 인증서 생성, 수동 백업·복원 검증을 제공한다. 공개 도메인의 신뢰 인증서 자동 갱신, 자동 백업 일정, 모니터링, 고가용성은 제공하지 않는다.
 
 ## 안전 원칙
 
@@ -10,6 +10,7 @@
 - 기존 프로젝트를 중지하거나 삭제해서 포트 충돌을 해결하지 않는다. 새 프로젝트에는 별도 project name과 host port를 배정한다.
 - `.env.prod`와 백업 파일은 저장소에 커밋하지 않는다. `.gitignore`는 `.env.*`를 제외하지만 운영자는 별도의 접근 제어와 암호화도 적용해야 한다.
 - PostgreSQL은 서버 데이터와 Spring Session의 원본이다. 운영 배포·마이그레이션 전에 논리 백업을 만들고 별도 프로젝트에서 복원 훈련을 완료한다.
+- 개인 PC mode의 LAN HTTPS port는 신뢰하는 private network와 local subnet에만 허용한다. 공유기 port forwarding, DMZ, 공용 Wi-Fi 공개, backend/PostgreSQL host port 노출은 하지 않는다.
 
 ## 개발 환경
 
@@ -49,6 +50,112 @@ GOOGLE_REDIRECT_URI=http://127.0.0.1:5173/login/oauth2/code/google
 docker compose --env-file .env.dev -p $devProject -f compose.yaml -f compose.dev.yaml ps
 docker compose --env-file .env.dev -p $devProject -f compose.yaml -f compose.dev.yaml stop
 ```
+
+## 개인 PC와 Galaxy S24 Ultra
+
+`compose.personal.yaml`은 `compose.yaml`과 `compose.prod.yaml` 뒤에 적용하는 얇은 private
+overlay다. 기존 production 보안 설정은 유지하면서 frontend Nginx에만 고정된 `8443` TLS listener를
+추가하고, 선택한 RFC1918 LAN 주소에만 publish한다. production의 `127.0.0.1:8080` listener는
+container health와 PC 운영 점검용으로 남지만 Secure cookie를 사용하는 정상 로그인은 HTTPS
+origin에서 수행한다. backend와 PostgreSQL은 host port가 없다.
+
+이 private-LAN overlay는 `GOOGLE_AUTH_ENABLED=false`와 빈 provider credential을 의도적으로
+강제한다. Google의 production redirect 검증을 통과하지 못하는 사설 IP callback을 억지로 사용하지
+않는다. 자체 로그인으로 개인 시험을 마친 뒤 공개 HTTPS domain의 일반 `compose.prod.yaml` 배포로
+이전하면, 그때 별도 credential과 정확한 redirect URI를 넣어 명시적 Google 계정 연결을 켠다.
+
+초기화 예시는 다음과 같다. email과 표시 이름은 예시값이며 실제 개인 값은 ignored
+`.env.personal`과 PostgreSQL에만 남겨야 한다. password parameter는 의도적으로 존재하지 않는다.
+
+```powershell
+# 현재 PowerShell 프로세스에만 적용되며 창을 닫으면 원래 정책으로 돌아간다.
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+.\scripts\personal\Initialize-PersonalMemo.ps1 `
+  -LanIPv4 192.168.1.100 `
+  -BootstrapEmail owner@example.invalid `
+  -BootstrapDisplayName "Private Owner"
+
+.\scripts\personal\Test-PersonalMemoConfig.ps1
+.\scripts\personal\Initialize-PersonalAccount.ps1
+# 휴대폰 접속 전, 별도의 관리자 PowerShell에서 한 번 실행한다.
+.\scripts\personal\Enable-PersonalMemoFirewall.ps1
+.\scripts\personal\Start-PersonalMemo.ps1
+.\scripts\personal\Get-PersonalMemoStatus.ps1
+```
+
+initializer는 다음 경계를 지킨다.
+
+- database password를 CSPRNG로 만들고 ignored `.env.personal`에만 기록한다.
+- `Documents\PersonalMemo\PrivateTls`에 local CA와 LAN IP·hostname SAN을 가진 leaf certificate를
+  만들고, staging/final directory와 각 파일 ACL을 민감 내용 생성 전부터 현재 Windows user 하나로
+  제한한다.
+- ignored `.env.personal`은 비밀을 쓰기 전에 빈 임시 파일의 ACL부터 현재 Windows user 하나로
+  제한하며, `Documents\PersonalMemo\Backups`도 같은 상속 ACL로 저장소 밖에 만든다.
+- S24로 복사할 공개 CA `personal-memo-ca.cer`를 별도로 만든다. `ca-key.pem`과
+  `server-key.pem`은 PC 밖이나 container의 CA 위치로 복사하지 않는다. frontend에는 leaf
+  certificate와 leaf key만 read-only로 mount한다.
+- 기존 `.env.personal`이나 `PrivateTls`를 덮어쓰지 않는다. 주소가 바뀌어 certificate를 다시
+  발급해야 할 때는 먼저 backup을 만들고 기존 private material의 보존·폐기를 사람이 결정한다.
+- 이전 checkpoint에서 만든 개인 파일의 ACL을 다시 검증하거나 복구할 때는
+  `.\scripts\personal\Repair-PersonalMemoPrivateAcl.ps1`을 실행한다. 내용은 바꾸지 않고 현재 Windows
+  사용자 한 명의 full-control 규칙만 남긴 뒤 다시 검사한다.
+
+`Initialize-PersonalAccount.ps1`은 현재 source의 backend image를 먼저 build한 뒤 non-web
+`bootstrap-account` command를 attached terminal에서 실행한다. password는 echo 없이 두 번 직접
+입력하며 environment, argument, file, log, HTTP, browser, Agent/model 경로로 받지 않는다. Flyway
+singleton row와 claimed-user 검사를 같은 account
+creation transaction에서 잠그므로 두 번째 실행과 동시 실행은 계정을 추가하지 못한다. local 가입과
+신규 Google account 생성은 전후 모두 꺼져 있다.
+
+S24에는 `personal-memo-ca.cer`만 전송한 뒤 설정의 **보안 및 개인정보 보호 → 기타 보안 설정 →
+기기 저장공간에서 설치 → CA 인증서**에 해당하는 메뉴에서 설치한다. One UI 버전에 따라 문구가
+조금 다를 수 있다. 인증서 경고를 읽고 이 PC에서 직접 만든 fingerprint인지 확인한다. 같은 private
+Wi-Fi에서 `https://<LAN-IP>:8443/`를 Chrome으로 연 뒤 주소창 인증서 오류가 없는지 확인하고,
+Chrome 메뉴의 **설치**를 사용한다. Chrome의 공식 Android 설치 절차는
+[Google Chrome 도움말](https://support.google.com/chrome/answer/9658361?co=GENIE.Platform%3DAndroid)과
+같다. 오프라인 app shell은 열리지만 network-only 인증과 canonical mutation 때문에 완전한 offline
+workspace/sync를 의미하지 않는다.
+
+Windows 기본 실행 정책이 `.ps1` 실행을 막으면 시스템 전체 정책을 낮추지 말고, 작업할 각
+PowerShell 창에서 `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`를 먼저 실행한다.
+Windows 방화벽은 private network profile의 TCP `8443`만 `LocalSubnet`에서 허용한다. 관리자
+PowerShell에서 `.\scripts\personal\Enable-PersonalMemoFirewall.ps1`을 한 번 실행하면 exact project
+이름, LAN IP, port와 기존 rule scope를 검증한 뒤 이 좁은 rule만 만든다. 기존 같은 이름의 rule이
+다른 범위라면 임의로 고치지 않고 중단한다. PC의 LAN address는 공유기의 DHCP reservation으로
+고정하는 편이 좋다. 주소가 바뀌면 URL과 certificate SAN이 맞지 않으므로 재발급이 필요하다. router
+port forwarding은 하지 않는다.
+
+일상 운영 command는 exact project `personal-memo-private-win`만 허용한다.
+
+```powershell
+.\scripts\personal\Get-PersonalMemoStatus.ps1
+.\scripts\personal\Backup-PersonalMemo.ps1
+.\scripts\personal\Stop-PersonalMemo.ps1
+```
+
+backup script는 unique container temp file에 custom-format `pg_dump`를 만들고 `pg_restore --list`와
+container/host SHA-256 일치를 확인한 뒤에만 `Documents\PersonalMemo\Backups`의 최종 이름으로
+원자적으로 이동한다. partial·최종 dump와 checksum은 모두 현재 Windows user 전용 ACL을 갖는다.
+dump에는 원문과 account hash를 포함한 private data가 있지만 live Spring Session row는 제외하고
+복원에 필요한 session table schema만 유지한다. Git이나 공유 폴더에 두지 않는다. 실제 복구 가능성은
+다음 격리 검증으로 확인한다.
+
+```powershell
+.\scripts\personal\Test-PersonalMemoRestore.ps1 `
+  -BackupFile "C:\Users\you\Documents\PersonalMemo\Backups\personal-memo-....dump" `
+  -RemoveAfterVerification
+```
+
+restore script는 생성 규칙이 고정된 별도 project와 volume만 사용하고, checksum·dump parse·restore·
+Flyway·session truncate·backend health·민감 원문을 출력하지 않는 row count를 확인한다. 또한
+initial-account gate singleton, claimed user와 `AVAILABLE` gate의 비공존, orphan local credential 부재를
+scalar query로 검증한다. 개인 canonical volume에 `down --volumes`를 실행하지 않는다.
+
+향후 서버 이전은 live Docker volume 복사가 아니라 `pg_dump`와 checksum을 새 server에 전달하고,
+별도 volume에 restore한 뒤 Flyway와 health/data 검증을 통과시키는 순서로 한다. application topology와
+PostgreSQL owner UUID는 그대로 유지하고 personal TLS overlay 대신 server의 public HTTPS edge만
+교체한다.
 
 ## 운영 환경
 
@@ -102,9 +209,9 @@ GOOGLE_REDIRECT_URI=
 - `GOOGLE_REGISTRATION_ENABLED=false`
 - `SESSION_COOKIE_SECURE=true`
 
-`prod` profile에서 local 가입이나 신규 Google user 자동 생성을 `true`로 덮어쓰면 backend가 시작을 거부한다. 즉, Google provider 로그인 기능을 켜더라도 기존에 연결된 identity의 로그인과 인증된 계정의 명시적 연결만 가능하다. fresh 운영 database에는 지원되는 self-service onboarding 경로가 없는 fail-closed 상태다.
+`prod` profile에서 local 가입이나 신규 Google user 자동 생성을 `true`로 덮어쓰면 backend가 시작을 거부한다. 즉, Google provider 로그인 기능을 켜더라도 기존에 연결된 identity의 로그인과 인증된 계정의 명시적 연결만 가능하다. fresh private database는 위의 one-time interactive bootstrap으로만 첫 local account를 만들 수 있고, public self-service onboarding은 계속 없는 fail-closed 상태다.
 
-현재 Compose는 공식 PostgreSQL image의 초기화 `POSTGRES_USER`를 Flyway와 application runtime에도 함께 사용한다. 이 초기 역할은 database owner 권한을 가지므로 공개 배포의 least-privilege 구성이 아니다. 공개 출시 전에는 migration 전용 역할과 제한된 runtime 역할 및 각 비밀을 분리하고, fresh database의 첫 계정을 만드는 감사 가능한 bootstrap/invitation 절차를 별도로 구현해야 한다.
+현재 Compose는 공식 PostgreSQL image의 초기화 `POSTGRES_USER`를 Flyway와 application runtime에도 함께 사용한다. 이 초기 역할은 database owner 권한을 가지므로 공개 배포의 least-privilege 구성이 아니다. 공개 출시 전에는 migration 전용 역할과 제한된 runtime 역할 및 각 비밀을 분리하고, private one-account command를 유지할지 audited invitation/administrative provisioning으로 대체할지 결정해야 한다.
 
 동일 local 계정에서 잘못된 비밀번호가 연속 5회 발생하면 15분 동안 잠긴다. 잠금 중 추가 시도는 만료를 연장하지 않고, 만료 뒤 정상 로그인하면 실패 counter와 `locked_until`을 초기화한다. 이 방어는 IP·edge 단위 rate limiting이나 분산 abuse 방어를 대신하지 않는다.
 
@@ -169,8 +276,13 @@ docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.p
 
 정기 백업과 모든 배포·Flyway migration 직전에 `pg_dump` custom format 백업을 만든다. migration이 실행되는 동안에는 백업이나 restore를 시작하지 않는다. 다음 명령은 dump를 container의 고정된 임시 파일에 만든 뒤 저장소 밖의 host directory로 복사한다.
 
+개인 PC mode에서는 아래의 긴 수동 예시보다 경로·project·checksum·dump parse guard를 포함한
+`.\scripts\personal\Backup-PersonalMemo.ps1`을 사용한다. 기본 directory는
+`[Environment]::GetFolderPath('MyDocuments')\PersonalMemo\Backups`다. 아래 예시는 별도 일반
+production edge를 운영할 때 각 단계의 의미를 보여 주기 위해 남긴다.
+
 ```powershell
-$backupDirectory = Join-Path $env:USERPROFILE "personal-memo-backups"
+$backupDirectory = Join-Path ([Environment]::GetFolderPath('MyDocuments')) "PersonalMemo\Backups"
 $backupStamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $backupFile = Join-Path $backupDirectory "personal-memo-$backupStamp.dump"
 New-Item -ItemType Directory -Force -Path $backupDirectory
@@ -179,7 +291,7 @@ $postgresContainer = docker compose --env-file .env.prod -p $prodProject -f comp
 if ([string]::IsNullOrWhiteSpace($postgresContainer)) { throw "PostgreSQL container not found for $prodProject" }
 
 docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.prod.yaml exec -T postgres rm -f /tmp/personal-memo-backup.dump
-docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.prod.yaml exec -T postgres sh -c 'pg_dump --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --format=custom --no-owner --no-acl --file=/tmp/personal-memo-backup.dump'
+docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.prod.yaml exec -T postgres sh -c 'pg_dump --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --format=custom --no-owner --no-acl --exclude-table-data=spring_session --exclude-table-data=spring_session_attributes --file=/tmp/personal-memo-backup.dump'
 docker cp "${postgresContainer}:/tmp/personal-memo-backup.dump" $backupFile
 docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.prod.yaml exec -T postgres rm -f /tmp/personal-memo-backup.dump
 
@@ -187,7 +299,7 @@ Get-Item $backupFile
 Get-FileHash -Algorithm SHA256 $backupFile
 ```
 
-백업에는 canonical data와 Spring Session table이 함께 포함된다. 백업 파일과 checksum을 암호화된 별도 저장소에 보관하고 retention·복원 훈련 결과를 기록한다. 파일이 존재한다는 사실만으로 복구 가능하다고 판단하지 않는다.
+백업에는 canonical data와 Spring Session table schema가 포함되지만 live session row와 attribute data는 제외한다. 백업 파일과 checksum을 암호화된 별도 저장소에 보관하고 retention·복원 훈련 결과를 기록한다. 파일이 존재한다는 사실만으로 복구 가능하다고 판단하지 않는다.
 
 ## 별도 프로젝트에서 복원 검증
 
@@ -240,11 +352,11 @@ Remove-Item Env:PERSONAL_MEMO_FRONTEND_PORT
 
 현재 production overlay는 안전한 기본값과 배포 형태를 검증하기 위한 것이며 공개 self-service 서비스 완성을 의미하지 않는다.
 
-- local 가입과 신규 Google user 자동 생성은 운영에서 강제로 비활성화된다. Google 로그인을 켜도 기존 identity와 명시적으로 연결된 계정만 사용할 수 있으므로 fresh database에는 지원되는 self-service onboarding 경로가 없다.
+- local 가입과 신규 Google user 자동 생성은 운영에서 강제로 비활성화된다. fresh private database의 일회성 운영 bootstrap은 있지만 public self-service onboarding, invitation, password recovery는 없다. Google 로그인을 켜도 기존 identity와 명시적으로 연결된 계정만 사용할 수 있다.
 - 실제 Google credential round trip은 자동화된 테스트에서 검증하지 않았고, 운영자가 Google Console 설정과 callback을 별도로 확인해야 한다.
 - 계정별 5회 실패·15분 잠금은 구현되어 있지만 IP·edge 단위 rate limiting과 분산 abuse 대응은 없다.
 - email verification, password-reset delivery, MFA/passkey, 완전한 계정 삭제 자동화가 없다.
-- TLS edge, 인증서 자동 갱신, secret manager, 중앙 로그·metrics·alert, 자동 백업·retention·restore drill이 저장소에 포함되지 않는다.
+- 개인 LAN용 local CA/TLS와 수동 backup/restore guard는 있지만 publicly trusted TLS edge와 인증서 자동 갱신, secret manager, 중앙 로그·metrics·alert, 자동 backup schedule·retention·restore drill은 포함되지 않는다.
 - compose는 현재 source에서 image를 build한다. immutable registry release, 서명·SBOM 정책, 무중단 배포, 다중 host 장애 조치는 별도 운영 체계가 필요하다.
 - 실제 local/cloud AI, 완전한 offline sync, Web Push와 reminder dispatcher도 의도적으로 보류되어 있다.
 

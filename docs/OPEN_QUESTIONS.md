@@ -19,6 +19,11 @@ operational approval. Resolved decisions are not implementation prompts.
   internal user through Google is a separate, fail-closed deployment decision.
 - The seeded `LEGACY_UNCLAIMED` owner remains migration-compatible and is never automatically
   attached to the first account that signs in.
+- A fresh private database is initialized with a dedicated one-time, interactive, non-web command.
+  Its PostgreSQL singleton gate is transactionally locked and preserved by backup/restore; it does
+  not temporarily enable either registration path.
+- Private-PC identity metadata may live only in the ignored local environment. The account password
+  is never accepted through that file, an argument, HTTP, browser storage, model, or Agent tool.
 
 ### Canonical data authority and offline boundary
 
@@ -67,8 +72,8 @@ operational approval. Resolved decisions are not implementation prompts.
 
 - Will public Google account creation use an allowlist, invitations, or explicitly enabled open
   registration?
-- With both production registration paths fail-closed, what audited bootstrap or invitation flow
-  provisions the first usable account in a new database?
+- Will public deployments retain the private one-account bootstrap only for an operator, or replace
+  it with an audited invitation/administrative provisioning workflow?
 - What verification and delivery provider will support local email verification and password reset?
 - Are MFA/passkeys required, and how are all sessions revoked after credential recovery?
 - What proof and retention rules govern complete account deletion?

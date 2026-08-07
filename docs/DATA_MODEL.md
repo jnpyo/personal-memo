@@ -1,6 +1,6 @@
 # Data model — authenticated deterministic-analysis MVP
 
-이 문서는 현재 Flyway `V1`–`V9`가 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다.
+이 문서는 현재 Flyway `V1`–`V10`이 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다.
 
 ## Invariants
 
@@ -18,6 +18,25 @@
 - `OVERDUE`는 column이나 task source status가 아니다.
 
 ## Identity and raw memo
+
+### `initial_account_provisioning`
+
+```text
+singleton BOOLEAN PK (always TRUE)
+status AVAILABLE | CONSUMED
+provisioned_user_id UUID NULL
+method INTERACTIVE_CLI | PREEXISTING NULL
+consumed_at TIMESTAMPTZ NULL
+```
+
+이 table은 계정이나 권한 목록이 아니라 fresh database의 일회성 운영 gate다. bootstrap
+transaction이 singleton row를 `FOR UPDATE`로 잠근 뒤 claimed user가 없는지 다시 확인하고,
+`users`·`user_settings`·`local_credentials` 생성과 같은 transaction에서 `CONSUMED`로 바꾼다.
+동시 실행 중 하나만 성공하며, 재시작·논리 백업·서버 이전 뒤에도 gate가 다시 열리지 않는다.
+V10 적용 시 이미 `ACTIVE` 또는 `DISABLED` 사용자가 있으면 가장 오래된 internal UUID를 감사
+metadata로 남기고 `PREEXISTING`으로 즉시 소비한다. `LEGACY_UNCLAIMED` 개발 owner는 이 판단에서
+제외되고 새 계정에 합쳐지지 않는다. 의도적으로 foreign key를 두지 않아 향후 계정 삭제 정책도
+bootstrap gate를 되살리지 못한다.
 
 ### `users`
 

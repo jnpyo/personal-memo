@@ -11,7 +11,9 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
 - Milestone 2: in progress. Korean date policy, versioned fixtures, runtime schema/domain validation, versioned field-level routing with persisted provenance, provider-independent Fake cloud enrichment, prompt-injection boundaries, and `UNKNOWN` user resolution are implemented.
 - Authentication hardening: complete for the MVP checkpoint. Local email/password, optional Google OpenID Connect, explicit account linking, PostgreSQL-backed server sessions, CSRF protection, owner identity derived from Spring Security, and a deterministic 5-failure/15-minute local-account lock are implemented. Authentication unit/integration coverage and the full local-account primary browser E2E suite pass.
 - Production/deployment hardening: complete for a controlled private checkpoint. Explicit dev/prod Compose overlays, required production database secrets, fail-closed production registration, Secure/SameSite session and CSRF cookies, validated forwarded headers, non-root health-checked images, static verification, and backup/restore/Flyway operating guidance are present.
-- Google behavior is covered with mocked OIDC claims and authorization-request tests; no real-provider credential round trip is claimed. Email verification, password recovery delivery, safe initial-account provisioning, separate migration/runtime database roles, IP/edge rate limiting and abuse protection, MFA/passkeys, account deletion, external TLS/certificate automation, secret management, monitoring, and automated backup drills remain public-release work.
+- Private personal-PC deployment: implemented. A one-time PostgreSQL-locked interactive account bootstrap, a private-LAN HTTPS overlay, local CA/leaf certificate generation, owner-only secret files, guarded Windows operations, logical backups, and isolated restore verification are available without exposing Spring Boot or PostgreSQL to the host network.
+- Galaxy S24 Ultra readiness is covered by 384/412px touch viewports, landscape overflow checks, safe areas, installability diagnostics, and service-worker cache-boundary E2E tests. A real-device CA install, keyboard/cutout behavior, and home-screen installation still require the user's physical phone and are not claimed as automated verification.
+- Google behavior is covered with mocked OIDC claims and authorization-request tests; no real-provider credential round trip is claimed. Email verification, password recovery delivery, separate migration/runtime database roles, IP/edge rate limiting and abuse protection, MFA/passkeys, account deletion, a publicly trusted domain/TLS edge, secret management, monitoring, and automated backup drills remain public-release work.
 - Real local/cloud model adapters remain intentionally deferred by the current product decision. No provider is introduced merely to satisfy the original roadmap bullet.
 - Product decisions already reflected in code are recorded as resolved in `OPEN_QUESTIONS.md`; that file now reserves confirmation prompts for genuinely open launch or post-usage choices.
 
@@ -57,6 +59,35 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
 - production exposes neither PostgreSQL nor Spring Boot directly to the host network;
 - image and configuration checks are reproducible without introducing a second datastore or service;
 - the checkpoint is described as controlled private deployment, not as a public self-service launch.
+
+## Private personal-use deployment slice
+
+### Deliverables
+
+- a fixed `bootstrap-account` non-web command with interactive, non-echoed password confirmation
+- Flyway-owned singleton provisioning state locked in the account-creation transaction
+- production registration and Google account creation kept disabled before and after bootstrap
+- a personal Compose overlay that publishes only the existing frontend Nginx HTTPS listener to one
+  RFC1918 LAN address
+- locally generated CA and leaf certificates outside Git, with only the leaf certificate and key
+  mounted read-only into the frontend container
+- guarded PowerShell commands for initialization, account bootstrap, start, stop, status, logical
+  backup, and isolated restore verification
+- S24-oriented safe-area, touch-target, secure-context, manifest, service-worker, and viewport checks
+
+### Exit criteria
+
+- a fresh database can create exactly one local account without opening an HTTP registration route;
+- concurrent or repeated bootstrap attempts cannot create another account, and the one-time state
+  survives backup and restore;
+- PostgreSQL and Spring Boot publish no host ports while the phone receives the PWA and API from one
+  trusted HTTPS origin;
+- personal values, database credentials, CA private keys, leaf private keys, and dumps remain outside
+  Git;
+- backup output is checksummed and parseable, and restore verification uses a generated disposable
+  project and volume rather than the personal canonical volume;
+- moving to a future server requires a logical database restore and a replacement HTTPS edge, not a
+  domain-model fork or a second source of truth.
 
 ## Milestone 0 — Decisions and scaffolding
 

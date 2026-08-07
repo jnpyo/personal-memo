@@ -22,6 +22,7 @@ select {
 }
 
 button {
+  min-height: 44px;
   cursor: pointer;
 }
 
@@ -37,7 +38,11 @@ main {
   width: min(100%, 840px);
   min-height: 100dvh;
   margin: 0 auto;
-  padding: 28px 18px 210px;
+  padding:
+    calc(28px + env(safe-area-inset-top))
+    calc(18px + env(safe-area-inset-right))
+    calc(210px + env(safe-area-inset-bottom))
+    calc(18px + env(safe-area-inset-left));
 }
 
 .eyebrow {
@@ -85,7 +90,11 @@ main {
   min-height: 100dvh;
   align-content: center;
   gap: 32px;
-  padding: max(28px, env(safe-area-inset-top)) 18px max(28px, env(safe-area-inset-bottom));
+  padding:
+    calc(28px + env(safe-area-inset-top))
+    calc(18px + env(safe-area-inset-right))
+    calc(28px + env(safe-area-inset-bottom))
+    calc(18px + env(safe-area-inset-left));
 }
 
 .auth-intro h1 {
@@ -261,10 +270,15 @@ main {
 }
 
 .text-button {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
   border: 0;
   background: transparent;
   color: #245b42;
-  padding: 3px;
+  padding: 8px;
   font-weight: 800;
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -276,7 +290,7 @@ main {
 
 .account-panel > summary {
   display: inline-flex;
-  min-height: 40px;
+  min-height: 44px;
   align-items: center;
   gap: 8px;
   border: 1px solid #c7cec5;
@@ -347,7 +361,7 @@ main {
 
 .account-action {
   width: 100%;
-  min-height: 42px;
+  min-height: 44px;
 }
 
 .account-help,
@@ -404,7 +418,7 @@ main {
 }
 
 .account-confirm button {
-  min-height: 38px;
+  min-height: 44px;
   border-radius: 9px;
   padding: 7px 9px;
 }
@@ -419,7 +433,7 @@ main {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 40px;
+  min-height: 44px;
   border: 1px solid #c7cec5;
   border-radius: 999px;
   background: transparent;
@@ -559,7 +573,7 @@ main {
 }
 
 .memo-filter button {
-  min-height: 42px;
+  min-height: 44px;
   border: 0;
   border-radius: 9px;
   background: transparent;
@@ -825,6 +839,18 @@ main {
   box-shadow: 0 4px 16px #17221c19;
 }
 
+.react-flow__controls-button {
+  width: 44px;
+  height: 44px;
+}
+
+.react-flow__controls-button svg {
+  width: 18px;
+  max-width: 18px;
+  height: 18px;
+  max-height: 18px;
+}
+
 .task-section,
 .review-card,
 .undo-card,
@@ -882,7 +908,7 @@ main {
 }
 
 .status-control button {
-  min-height: 38px;
+  min-height: 44px;
   border: 0;
   border-left: 1px solid #d4d9d5;
   background: #f6f7f5;
@@ -1013,7 +1039,7 @@ main {
 
 .item-remove-button {
   width: 100%;
-  min-height: 42px;
+  min-height: 44px;
   border: 1px solid #dfbbb6;
   border-radius: 9px;
   background: #fff5f3;
@@ -1070,6 +1096,7 @@ main {
 }
 
 .chips button {
+  min-height: 44px;
   border: 1px solid #c7cec5;
   border-radius: 999px;
   background: #edf2ee;
@@ -1107,7 +1134,7 @@ main {
 .approve-button,
 .secondary-button,
 .danger-button {
-  min-height: 42px;
+  min-height: 44px;
   border-radius: 10px;
   padding: 9px 12px;
   font-weight: 700;
@@ -1134,10 +1161,13 @@ main {
 .capture-bar {
   position: fixed;
   z-index: 20;
-  right: 12px;
-  bottom: max(12px, env(safe-area-inset-bottom));
-  left: 12px;
-  width: min(calc(100% - 24px), 816px);
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  left: calc(12px + env(safe-area-inset-left));
+  width: min(
+    calc(100% - 24px - env(safe-area-inset-right) - env(safe-area-inset-left)),
+    816px
+  );
   margin: 0 auto;
   border: 1px solid #314038;
   border-radius: 20px;
@@ -1179,7 +1209,7 @@ main {
 }
 
 .capture-actions button {
-  min-height: 42px;
+  min-height: 48px;
   border: 0;
   border-radius: 11px;
   background: #e4b657;
@@ -1190,7 +1220,11 @@ main {
 
 @media (min-width: 640px) {
   main {
-    padding: 42px 24px 220px;
+    padding:
+      calc(42px + env(safe-area-inset-top))
+      calc(24px + env(safe-area-inset-right))
+      calc(220px + env(safe-area-inset-bottom))
+      calc(24px + env(safe-area-inset-left));
   }
 
   .hero {
@@ -1203,8 +1237,8 @@ main {
     grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
     align-items: center;
     gap: 64px;
-    padding-right: 28px;
-    padding-left: 28px;
+    padding-right: calc(28px + env(safe-area-inset-right));
+    padding-left: calc(28px + env(safe-area-inset-left));
   }
 
   .connection-status {

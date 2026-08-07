@@ -17,7 +17,17 @@ flowchart TD
     API -. future .-> Push["Web Push service"]
 ```
 
-The PWA and API are exposed through one public origin. The backend owns authentication redirects, provider secrets, session state, CSRF validation, and authorization. Google login is capability-gated so the application still starts and local accounts still work when Google credentials are absent.
+The PWA and API are exposed through one origin. In personal-PC mode the existing frontend Nginx
+terminates private-LAN TLS and proxies every API/OAuth path to an unpublished backend container; a
+future server replaces that narrow TLS overlay with its public HTTPS edge. PostgreSQL remains the
+canonical portable boundary in both forms. The backend owns authentication redirects, provider
+secrets, session state, CSRF validation, and authorization. Google login is capability-gated so the
+application still starts and local accounts still work when Google credentials are absent.
+
+The first private account is not an API concern. A fixed non-web command locks a Flyway-owned
+singleton row, verifies that no claimed user exists, creates the internal UUID/settings/local
+credential, and consumes the gate in one transaction. Password input is attached-console-only and
+the browser, model, Agent tools, environment, and command line cannot invoke or supply it.
 
 ## Data authority
 

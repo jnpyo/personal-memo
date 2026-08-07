@@ -9,6 +9,7 @@ import local.personalmemo.auth.infrastructure.LinkAwareAuthorizationRequestResol
 import local.personalmemo.auth.infrastructure.LocalAccountUserDetailsService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.web.server.servlet.CookieSameSiteSupplier;
 import org.springframework.context.annotation.Bean;
@@ -98,6 +99,7 @@ public class SecurityConfiguration {
   }
 
   @Bean
+  @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
   SecurityFilterChain securityFilterChain(
       HttpSecurity http,
       AuthProperties properties,

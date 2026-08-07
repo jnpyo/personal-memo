@@ -118,6 +118,60 @@ frontend container는 unprivileged Nginx로 빌드된 PWA를 제공하고 `/api`
 
 작성 중 원문은 서버 저장 전까지 internal owner UUID로 분리된 브라우저 `localStorage` 초안입니다. 저장소가 막히거나 가득 차면 화면에 데이터 손실 경고가 표시되고 이탈·업데이트 guard가 켜집니다. 이 초안은 암호화된 보관소가 아니며 로그아웃만으로 삭제되지 않으므로, 공유 기기에서는 브라우저 프로필 자체를 분리하거나 원문을 서버에 저장한 뒤 입력을 비워야 합니다. canonical memo와 완전한 오프라인 동기화 대기열로 취급해서는 안 됩니다.
 
+### 개인 PC에서 Galaxy S24로 사용
+
+공개 스토어에 올리기 전 한 사람이 시험하는 경로는 `compose.personal.yaml`과
+`scripts/personal`에 분리되어 있습니다. 같은 application image와 PostgreSQL schema를 사용하므로
+나중에 서버로 옮길 때 앱을 다시 만들 필요가 없습니다. 개인 mode는 선택한 private LAN IP의
+frontend HTTPS만 공개하고 Spring Boot와 PostgreSQL port는 공개하지 않습니다.
+사설 IP callback을 쓰는 이 개인 overlay에서는 Google OAuth와 provider credential을 의도적으로
+비활성화합니다. 자체 로그인으로 먼저 안정화한 뒤, 공개 HTTPS domain을 준비해 일반 production
+overlay로 이전하면 기존의 명시적 Google 계정 연결 기능을 켤 수 있습니다.
+
+```powershell
+# 이 창에서만 로컬 스크립트 실행을 허용합니다. 시스템 정책은 바꾸지 않습니다.
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+.\scripts\personal\Initialize-PersonalMemo.ps1 `
+  -LanIPv4 192.168.1.100 `
+  -BootstrapEmail owner@example.invalid `
+  -BootstrapDisplayName "Private Owner"
+
+.\scripts\personal\Initialize-PersonalAccount.ps1
+# 휴대폰 접속 전, 별도의 관리자 PowerShell에서 한 번 실행합니다.
+.\scripts\personal\Enable-PersonalMemoFirewall.ps1
+.\scripts\personal\Start-PersonalMemo.ps1
+.\scripts\personal\Get-PersonalMemoStatus.ps1
+```
+
+첫 command는 ignored `.env.personal`, local CA/leaf certificate, 강한 random database password,
+`Documents\PersonalMemo\PrivateTls`, `Documents\PersonalMemo\Backups`를 만듭니다. 실제 email과
+표시 이름은 tracked template에 넣지 않습니다. 두 번째 command에서만 account password를 echo 없이
+두 번 직접 입력합니다. password를 environment, argument, file, browser, Agent/model 도구로 전달하는
+경로는 없습니다. Flyway의 one-time gate 때문에 command를 재실행하거나 동시에 실행해도 계정이 더
+생기지 않으며, 운영 registration은 계속 닫혀 있습니다.
+
+Windows 기본 정책이 로컬 `.ps1` 실행을 막는 경우에도 위의 `Process` 범위 설정만 사용합니다.
+새 PowerShell 창을 닫으면 설정은 사라집니다. 관리자 PowerShell에서 방화벽 스크립트를 실행할 때도
+그 관리자 창에서 같은 명령을 먼저 한 번 실행합니다.
+
+S24에는 `Documents\PersonalMemo\PrivateTls\personal-memo-ca.cer`만 복사해 CA certificate로
+설치합니다. `ca-key.pem`과 `server-key.pem`은 PC 밖으로 복사하지 않습니다. 같은 private Wi-Fi에서
+`https://<PC-LAN-IP>:8443/`를 Chrome으로 열고 인증서 오류가 없는지 확인한 뒤 Chrome 메뉴의
+**설치**를 사용합니다. 관리자 PowerShell에서 `Enable-PersonalMemoFirewall.ps1`을 한 번 실행하면
+선택한 IP와 port를 private profile·local subnet에만 허용합니다. PC IP는 공유기의 DHCP reservation으로
+고정하고 router port forwarding은 하지 않습니다. 자세한 위협 경계, Windows firewall, backup/restore, 서버 이전 순서는
+[배포 및 운영 가이드](docs/DEPLOYMENT.md)에 있습니다.
+
+일상 command는 다음과 같습니다. `Stop`은 container만 멈추고 canonical PostgreSQL volume을
+보존합니다.
+
+```powershell
+.\scripts\personal\Backup-PersonalMemo.ps1
+.\scripts\personal\Stop-PersonalMemo.ps1
+.\scripts\personal\Start-PersonalMemo.ps1
+```
+
 ### 선택적 Google 로그인
 
 개발 overlay는 Google 없이 기동합니다. Google Cloud에서 OAuth Web client를 준비한 경우 `.env.dev`에서 다음 값을 설정합니다.
@@ -216,7 +270,7 @@ docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.p
 docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.prod.yaml ps
 ```
 
-운영 overlay는 frontend만 loopback에 열며 외부 HTTPS same-origin edge를 별도로 요구합니다. local 가입과 신규 Google 사용자 자동 생성은 모두 fail-closed로 비활성화되고, Google 로그인을 켤 때는 client 자격 증명과 절대형 HTTPS redirect URI가 모두 필요합니다. 이미 연결된 Google identity 로그인과 로그인한 local 계정의 명시적 Google 연결은 계속 지원합니다. 현재 형태는 공개 self-service 출시가 아니라 접근을 제한한 포트폴리오·평가용 checkpoint입니다. 환경 변수, health check, Google 설정, backup/restore, Flyway와 rollback 절차는 [배포 및 운영 가이드](docs/DEPLOYMENT.md)를 따릅니다.
+일반 운영 overlay는 frontend만 loopback에 열며 외부 HTTPS same-origin edge를 별도로 요구합니다. 개인 PC overlay는 같은 production 경계 위에서 private LAN용 local TLS listener와 일회성 초기 계정 command를 제공하고 Google OAuth를 강제로 끕니다. local 가입과 신규 Google 사용자 자동 생성은 모두 fail-closed입니다. 추후 공개 HTTPS domain의 일반 production overlay로 이전한 뒤 Google 로그인을 켤 때는 client 자격 증명과 절대형 HTTPS redirect URI가 모두 필요하며, 이미 연결된 Google identity 로그인과 로그인한 local 계정의 명시적 Google 연결만 지원합니다. 현재 형태는 공개 self-service 출시가 아니라 접근을 제한한 포트폴리오·평가용 checkpoint입니다. 환경 변수, health check, Google 설정, backup/restore, Flyway와 rollback 절차는 [배포 및 운영 가이드](docs/DEPLOYMENT.md)를 따릅니다.
 
 ## 현재 경계
 
