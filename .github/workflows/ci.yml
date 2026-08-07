@@ -62,6 +62,7 @@ jobs:
             -out "$nginx_test_root/tls/server-cert.pem"
           chmod -R a+rX "$nginx_test_root"
           docker run --rm \
+            --add-host backend:127.0.0.1 \
             --mount type=bind,source="$nginx_test_root/conf.d",target=/etc/nginx/conf.d,readonly \
             --mount type=bind,source="$nginx_test_root/personal-listeners",target=/etc/nginx/personal-listeners,readonly \
             --mount type=bind,source="$nginx_test_root/tls",target=/run/personal-memo/tls,readonly \
