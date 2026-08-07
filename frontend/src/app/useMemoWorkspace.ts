@@ -157,6 +157,18 @@ export function useMemoWorkspace(ownerId: string) {
     setRetryAction((current) => (!scope || current?.scope === scope ? null : current));
   }
 
+  function clearProposalRetry(proposalId: string) {
+    setRetryAction((current) => {
+      if (!current) return null;
+      const proposalScopes = [
+        `apply:${proposalId}`,
+        `postpone:${proposalId}`,
+        `reject:${proposalId}`,
+      ];
+      return proposalScopes.includes(current.scope) ? null : current;
+    });
+  }
+
   function fail(error: unknown, scope: string, label: string, retry: () => void) {
     if (error instanceof TypeError) setConnection('offline');
     setFeedback({ kind: 'error', message: errorMessage(error) });
@@ -249,7 +261,7 @@ export function useMemoWorkspace(ownerId: string) {
   function changeReview(nextReview: ReviewDraft) {
     setReview(nextReview);
     setHasUnsavedReview(true);
-    clearRetry(`apply:${nextReview.proposalId}`);
+    clearProposalRetry(nextReview.proposalId);
   }
 
   async function applyReview(snapshot: ReviewDraft) {
@@ -272,7 +284,17 @@ export function useMemoWorkspace(ownerId: string) {
       await Promise.all([refreshWorkspace(), refreshMemos(), refreshRecovery()]);
       retryIdentities.current.clear(scope);
     } catch (error) {
-      fail(error, scope, '승인 다시 시도', () => void applyReview(snapshot));
+      if (
+        error instanceof ApiError &&
+        (error.code === 'STALE_MEMO_REVISION' || error.status === 409)
+      ) {
+        clearRetry(scope);
+        retryIdentities.current.clear(scope);
+        setFeedback({ kind: 'error', message: errorMessage(error) });
+        await Promise.all([refreshMemos(), refreshRecovery()]);
+      } else {
+        fail(error, scope, '승인 다시 시도', () => void applyReview(snapshot));
+      }
     } finally {
       setBusyAction(null);
     }

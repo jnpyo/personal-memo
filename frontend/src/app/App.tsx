@@ -161,6 +161,8 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
   const [transientReviewDirty, setTransientReviewDirty] = useState(false);
   const [pwaUpdating, setPwaUpdating] = useState(false);
   const [navigationApproved, setNavigationApproved] = useState(false);
+  const reviewExitFeedbackRef = useRef<HTMLDivElement>(null);
+  const reviewWasOpen = useRef(false);
   const hasUnsavedProposal = workspace.hasUnsavedReview || transientReviewDirty;
   const hasUnsavedChanges = hasUnsavedWorkspaceChanges({
     reviewEdited: workspace.hasUnsavedReview,
@@ -174,6 +176,20 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
     authOperation: account.pending,
   });
   const interactionLocked = serverOperationPending || pwaUpdating;
+
+  useEffect(() => {
+    if (workspace.review) {
+      reviewWasOpen.current = true;
+      return;
+    }
+    if (!reviewWasOpen.current || interactionLocked) return;
+
+    reviewWasOpen.current = false;
+    const frame = window.requestAnimationFrame(() => {
+      reviewExitFeedbackRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [interactionLocked, workspace.review]);
 
   useEffect(() => {
     if (account.pending === null) setNavigationApproved(false);
@@ -231,6 +247,16 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         : workspace.postponedReview
           ? '보류한 제안을 먼저 검토해 주세요.'
           : '메모 원문은 AI 결과와 별도로 먼저 저장됩니다.';
+  const retryFeedback = workspace.retryAction
+    ? () => {
+        const scope = workspace.retryAction?.scope ?? '';
+        const mayDiscardReview =
+          scope.startsWith('update:') ||
+          scope.startsWith('trash:') ||
+          scope.startsWith('undo:');
+        if (!mayDiscardReview || confirmSourceChange()) workspace.retry();
+      }
+    : undefined;
 
   return (
     <main>
@@ -251,21 +277,19 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         </div>
       </header>
 
-      <FeedbackBanner
-        feedback={workspace.feedback}
-        retryLabel={workspace.retryAction?.label}
-        onRetry={workspace.retryAction
-          ? () => {
-              const scope = workspace.retryAction?.scope ?? '';
-              const mayDiscardReview =
-                scope.startsWith('update:') ||
-                scope.startsWith('trash:') ||
-                scope.startsWith('undo:');
-              if (!mayDiscardReview || confirmSourceChange()) workspace.retry();
-            }
-          : undefined}
-        onDismiss={workspace.dismissFeedback}
-      />
+      <div
+        ref={reviewExitFeedbackRef}
+        className="review-exit-feedback"
+        tabIndex={-1}
+        aria-label="작업 결과"
+      >
+        <FeedbackBanner
+          feedback={workspace.feedback}
+          retryLabel={workspace.review ? undefined : workspace.retryAction?.label}
+          onRetry={workspace.review ? undefined : retryFeedback}
+          onDismiss={workspace.dismissFeedback}
+        />
+      </div>
 
       {workspace.recoveryLoading && (
         <p className="recovery-state" role="status" aria-live="polite">
@@ -352,6 +376,7 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
 
       {workspace.review && (
         <ProposalReview
+          key={workspace.review.proposalId}
           review={workspace.review}
           busy={interactionLocked}
           onChange={workspace.changeReview}
@@ -366,6 +391,11 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
           }}
           onReject={workspace.rejectCurrentReview}
           onTransientDirtyChange={setTransientReviewDirty}
+          feedback={workspace.feedback?.kind === 'error' ? workspace.feedback : null}
+          retryScope={workspace.retryAction?.scope}
+          retryLabel={workspace.retryAction?.label}
+          onRetry={retryFeedback}
+          onDismissFeedback={workspace.dismissFeedback}
         />
       )}
 

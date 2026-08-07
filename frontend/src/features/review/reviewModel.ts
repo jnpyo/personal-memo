@@ -19,6 +19,22 @@ export function isItemKind(value: unknown): value is ItemKind {
   return typeof value === 'string' && (ITEM_KINDS as readonly string[]).includes(value);
 }
 
+export function preferredItemKind(proposal: Proposal): ItemKind | null {
+  const topCandidate = proposal.typeCandidates.reduce<Proposal['typeCandidates'][number] | null>(
+    (top, candidate) => (top === null || candidate.score > top.score ? candidate : top),
+    null,
+  );
+  if (
+    topCandidate &&
+    proposal.typeCandidates.some(
+      (candidate) => candidate.value !== topCandidate.value && candidate.score === topCandidate.score,
+    )
+  ) {
+    return null;
+  }
+  return isItemKind(topCandidate?.value) ? topCandidate.value : null;
+}
+
 export type ReviewItemDraft = ItemCandidate & {
   due: DateCandidate | null;
 };
@@ -79,8 +95,7 @@ export function createCustomDateOnly(): DateCandidate {
 export function createReviewDraft(proposalId: string, proposal: Proposal): ReviewDraft {
   const preferredDue = usableDateCandidates(proposal)[0] ?? null;
   let assignedPreferredDue = false;
-  const suggestedType = proposal.typeCandidates[0]?.value;
-  const selectedType = isItemKind(suggestedType) ? suggestedType : null;
+  const selectedType = preferredItemKind(proposal);
   const validItems = proposal.itemCandidates.filter((item) => isItemKind(item.kind));
 
   const draft: ReviewDraft = {

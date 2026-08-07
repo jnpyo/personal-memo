@@ -14,6 +14,7 @@ import {
   isValidIsoDate,
   isValidOffsetDateTime,
   isValidReviewDraft,
+  preferredItemKind,
   removeReviewItem,
 } from './reviewModel';
 
@@ -195,6 +196,42 @@ describe('review model', () => {
       title: '운영체제 과제',
       items: [{ kind: 'TASK', title: '운영체제 과제', due: null }],
     });
+  });
+
+  it('uses the highest-scored type even when candidates are not sorted', () => {
+    const unsortedProposal: Proposal = {
+      ...proposal,
+      typeCandidates: [
+        { value: 'UNKNOWN', score: 0.2 },
+        { value: 'TASK', score: 0.9 },
+      ],
+    };
+
+    expect(preferredItemKind(unsortedProposal)).toBe('TASK');
+    expect(createReviewDraft('proposal-unsorted', unsortedProposal).selectedType).toBe('TASK');
+
+    const unknownFirstByScore: Proposal = {
+      ...proposal,
+      typeCandidates: [
+        { value: 'TASK', score: 0.2 },
+        { value: 'UNKNOWN', score: 0.9 },
+      ],
+    };
+    expect(preferredItemKind(unknownFirstByScore)).toBeNull();
+    expect(createReviewDraft('proposal-unknown-top', unknownFirstByScore).selectedType).toBeNull();
+  });
+
+  it('requires an explicit choice when different type candidates tie for the top score', () => {
+    const tiedProposal: Proposal = {
+      ...proposal,
+      typeCandidates: [
+        { value: 'TASK', score: 0.9 },
+        { value: 'EVENT', score: 0.9 },
+      ],
+    };
+
+    expect(preferredItemKind(tiedProposal)).toBeNull();
+    expect(createReviewDraft('proposal-tied-types', tiedProposal).selectedType).toBeNull();
   });
 
   it('supports partial apply by removing existing proposal items', () => {

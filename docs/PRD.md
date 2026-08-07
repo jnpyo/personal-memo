@@ -87,6 +87,10 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 
 ### 4. Analysis review
 
+- Open review in a mobile modal rather than expanding the workspace inline.
+- First show an exact summary and ask one question: apply this proposal as shown, yes or no.
+- Treat yes as explicit approval; no reveals alternative types and then the field-level editor, never proposal rejection.
+- If the analyzer returns `UNKNOWN` or different types tie for the top score, skip the yes path and ask the user to choose a supported type.
 - Present compact chips for type and tag candidates.
 - Show the interpreted date alongside the original date expression.
 - Explain only uncertain fields, not the entire model reasoning.

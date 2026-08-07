@@ -114,6 +114,38 @@ async function invalidateServerSessionWithoutUpdatingTheApp(page: Page): Promise
   expect(status).toBe(204);
 }
 
+async function advanceMemoRevisionOutOfBand(page: Page, content: string): Promise<void> {
+  const [csrfResponse, memosResponse] = await Promise.all([
+    page.request.get('/api/v1/auth/csrf'),
+    page.request.get('/api/v1/memos?status=ACTIVE&limit=1'),
+  ]);
+  expect(csrfResponse.ok()).toBe(true);
+  expect(memosResponse.ok()).toBe(true);
+  const csrf = await csrfResponse.json() as CsrfToken;
+  const memos = await memosResponse.json() as Array<{ id: string; currentRevision: number }>;
+  expect(memos).toHaveLength(1);
+
+  const updateResponse = await page.request.patch(`/api/v1/memos/${memos[0].id}`, {
+    headers: {
+      [csrf.headerName]: csrf.token,
+      'Idempotency-Key': `e2e-stale-update-${Date.now()}`,
+    },
+    data: {
+      expectedRevision: memos[0].currentRevision,
+      content,
+      clientUpdatedAt: new Date().toISOString(),
+      timeZone: 'Asia/Seoul',
+    },
+  });
+  expect(updateResponse.status()).toBe(200);
+}
+
+async function openProposalEditor(page: Page): Promise<void> {
+  await page.getByRole('button', { name: '아니오, 다른 경우 보기' }).click();
+  await page.getByRole('button', { name: /유형은 맞아요/ }).click();
+  await expect(page.getByLabel('대표 제목')).toBeVisible();
+}
+
 test.afterEach(async ({ context }) => {
   await context.setOffline(false).catch(() => undefined);
 });
@@ -171,6 +203,49 @@ test('keeps the 384px portrait and landscape shell usable without horizontal ove
   await expectInsideViewport(page, capture);
   await expectMinimumTouchHeight(captureSubmit, 48);
   await expectNoHorizontalOverflow(page);
+});
+
+test('keeps the proposal popup usable on S24 portrait and landscape sizes', async ({
+  page,
+}, testInfo) => {
+  const semanticRequests = { apply: 0, postpone: 0, reject: 0 };
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (/\/api\/v1\/analysis-proposals\/[^/]+\/apply$/.test(path)) semanticRequests.apply += 1;
+    if (/\/api\/v1\/analysis-proposals\/[^/]+\/postpone$/.test(path)) semanticRequests.postpone += 1;
+    if (/\/api\/v1\/analysis-proposals\/[^/]+\/reject$/.test(path)) semanticRequests.reject += 1;
+  });
+  await page.setViewportSize({ width: 384, height: 854 });
+  await registerIsolatedUser(page, testInfo);
+  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
+    .fill(`11.25 OS과제 제출 popup-${Date.now()}-${testInfo.retry}`);
+  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
+  const yes = page.getByRole('button', { name: '예, 이대로 적용' });
+  const no = page.getByRole('button', { name: '아니오, 다른 경우 보기' });
+  await expectInsideViewport(page, dialog);
+  await expectMinimumTouchHeight(yes, 48);
+  await expectMinimumTouchHeight(no, 48);
+  await expectNoHorizontalOverflow(page);
+
+  await no.click();
+  await expect(page.getByText('어떤 부분이 다른가요?')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '어떤 부분이 다른가요?' })).toBeFocused();
+  await expectMinimumTouchHeight(page.getByRole('button', { name: '정보 유형 선택' }), 48);
+  expect(semanticRequests).toEqual({ apply: 0, postpone: 0, reject: 0 });
+
+  await page.setViewportSize({ width: 854, height: 384 });
+  await expectInsideViewport(page, dialog);
+  await expectNoHorizontalOverflow(page);
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  const resumeReview = page.getByRole('button', { name: '검토 팝업 열기' });
+  await expect(resumeReview).toBeFocused();
+  await resumeReview.click();
+  await expect(page.getByText('어떤 부분이 다른가요?')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'AI 제안을 확인해 주세요' })).toBeFocused();
 });
 
 test('keeps the workspace locked across reload until a failed logout is confirmed', async ({ page }, testInfo) => {
@@ -244,6 +319,7 @@ test('keeps unsaved proposal edits when another tab discovers the same owner', a
     .fill(`11.25 운영체제 과제 ${marker}`);
   await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
   await expect(page.getByRole('heading', { name: 'AI 제안을 확인해 주세요' })).toBeVisible();
+  await openProposalEditor(page);
   await page.getByLabel('대표 제목').fill(editedTitle);
 
   const otherTab = await context.newPage();
@@ -265,11 +341,14 @@ test('keeps receiver edits mounted while another tab logout remains unconfirmed'
   await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
     .fill(`11.25 운영체제 과제 ${marker}`);
   await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await openProposalEditor(page);
   await page.getByLabel('대표 제목').fill(editedTitle);
 
   const otherTab = await context.newPage();
   await otherTab.goto('/');
   await expect(otherTab.getByText('서버 연결됨')).toBeVisible();
+  await otherTab.getByRole('button', { name: '검토 팝업 닫기' }).click();
+  await expect(otherTab.getByRole('button', { name: '검토 팝업 열기' })).toBeFocused();
   await otherTab.route('**/api/v1/auth/logout', async (route) => {
     await route.fulfill({
       status: 500,
@@ -324,10 +403,92 @@ test('uses unmarked Google login state and marked explicit-link state without co
   expect(linkAuthorization.searchParams.get('client_id')).toBe('e2e-fake-client');
 });
 
-test('raw memo survives review, apply, reload, and undo', async ({ page }, testInfo) => {
-  const marker = `primary-${Date.now()}-${testInfo.retry}`;
+test('applies the complete AI recommendation only after an explicit yes', async ({ page }, testInfo) => {
+  const marker = `yes-${Date.now()}-${testInfo.retry}`;
   const rawMemo = `11.25 OS과제 제출 E2E ${marker}`;
   const proposedTitle = `OS과제 제출 E2E ${marker}`;
+
+  await registerIsolatedUser(page, testInfo);
+  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(rawMemo);
+  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
+  await expect(dialog).toBeVisible();
+  await expect(page.getByLabel('대표 제목')).toHaveCount(0);
+  await expect(page.locator('.task-row').filter({ hasText: proposedTitle })).toHaveCount(0);
+
+  await page.getByRole('button', { name: '예, 이대로 적용' }).click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.task-row').filter({ hasText: proposedTitle })).toBeVisible();
+  await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
+});
+
+test('keeps an apply failure and its retry action inside the proposal popup', async ({
+  page,
+}, testInfo) => {
+  const marker = `apply-retry-${Date.now()}-${testInfo.retry}`;
+  const proposedTitle = `OS과제 제출 E2E ${marker}`;
+
+  await registerIsolatedUser(page, testInfo);
+  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
+    .fill(`11.25 ${proposedTitle}`);
+  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+
+  await page.route('**/api/v1/analysis-proposals/*/apply', async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 'INTERNAL_ERROR', message: 'simulated apply failure' }),
+    });
+  });
+
+  const dialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
+  await page.getByRole('button', { name: '예, 이대로 적용' }).click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('alert')).toContainText('simulated apply failure');
+  const retry = dialog.getByRole('button', { name: '승인 다시 시도' });
+  await expect(retry).toBeVisible();
+
+  await openProposalEditor(page);
+  await page.getByLabel('새 태그').fill('아직 추가하지 않은 태그');
+  await expect(page.getByRole('button', { name: '수정한 내용 승인·적용' })).toBeDisabled();
+  await expect(retry).toHaveCount(0);
+  await page.getByLabel('새 태그').fill('');
+  await expect(retry).toBeVisible();
+
+  await page.unroute('**/api/v1/analysis-proposals/*/apply');
+  await retry.click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.task-row').filter({ hasText: proposedTitle })).toBeVisible();
+});
+
+test('recovers from a stale proposal without offering the same apply retry', async ({
+  page,
+}, testInfo) => {
+  const marker = `stale-review-${Date.now()}-${testInfo.retry}`;
+  const original = `11.25 운영체제 과제 제출 ${marker}`;
+  const revised = `${original} revision 2`;
+
+  await registerIsolatedUser(page, testInfo);
+  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(original);
+  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await expect(page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' })).toBeVisible();
+
+  await advanceMemoRevisionOutOfBand(page, revised);
+  await page.getByRole('button', { name: '예, 이대로 적용' }).click();
+
+  await expect(page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '승인 다시 시도' })).toHaveCount(0);
+  await expect(page.getByText('메모 상태가 다른 곳에서 변경되었습니다.')).toBeVisible();
+  await expect(page.locator('.memo-card').filter({ hasText: revised })).toContainText('revision 2');
+  await expect(page.locator('.task-row')).toHaveCount(0);
+});
+
+test('raw memo survives review, apply, reload, and undo', async ({ page }, testInfo) => {
+  const marker = `primary-${Date.now()}-${testInfo.retry}`;
+  const rawMemo = `2026.11.25 운영체제 과제 제출 E2E ${marker}`;
+  const proposedTitle = `운영체제 과제 제출 E2E ${marker}`;
   const approvedTitle = `${proposedTitle} 수정`;
 
   await registerIsolatedUser(page, testInfo);
@@ -339,6 +500,7 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
   await expect(reviewHeading).toBeVisible();
   await expect(reviewHeading).toBeFocused();
   await expect(reviewHeading).toBeInViewport();
+  await expect(page.getByText('날짜 2026.11.25 → 2026-11-25')).toBeVisible();
   await page.reload();
   await expect(reviewHeading).toBeVisible();
   await expect(reviewHeading).toBeFocused();
@@ -351,11 +513,22 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
   await page.getByRole('button', { name: '검토 계속하기' }).click();
   await expect(reviewHeading).toBeFocused();
   await expect(reviewHeading).toBeInViewport();
+  await openProposalEditor(page);
+  await page.getByLabel('새 태그').fill('운영체제');
+  await page.getByRole('button', { name: '추가', exact: true }).click();
+  await expect(page.getByLabel('새 태그')).toHaveValue('');
   await page.getByLabel('대표 제목').fill(approvedTitle);
   await expect(page.getByLabel('항목 1 제목')).toHaveValue(approvedTitle);
   await page.getByLabel('마감 날짜').selectOption({ label: '날짜 직접 입력' });
   await page.getByLabel('확정 날짜').fill('2026-11-26');
-  await page.getByRole('button', { name: '선택한 항목 승인' }).click();
+  const applyEditedProposal = page.getByRole('button', { name: '수정한 내용 승인·적용' });
+  await page.getByLabel('새 태그').fill('아직 추가하지 않은 태그');
+  await expect(applyEditedProposal).toBeDisabled();
+  await expect(page.getByText('입력한 태그를 반영하려면 ‘추가’를 누르거나 입력을 비워 주세요.'))
+    .toBeVisible();
+  await page.getByLabel('새 태그').fill('');
+  await expect(applyEditedProposal).toBeEnabled();
+  await applyEditedProposal.click();
 
   const task = page.locator('.task-row').filter({ hasText: approvedTitle });
   await expect(task).toBeVisible();
@@ -391,15 +564,14 @@ test('UNKNOWN analysis requires an explicit type and manually confirmed item', a
   await expect(reviewHeading).toBeVisible();
   await expect(reviewHeading).toBeFocused();
   await expect(reviewHeading).toBeInViewport();
-  await expect(page.getByLabel('대표 유형')).toHaveValue('');
-  await expect(page.getByRole('button', { name: '선택한 항목 승인' })).toBeDisabled();
-  await expect(page.getByText('아직 생성할 항목이 없습니다.')).toBeVisible();
+  await expect(page.getByText('AI가 유형을 확정하지 못했어요.')).toBeVisible();
+  await expect(page.getByRole('button', { name: '예, 이대로 적용' })).toHaveCount(0);
+  await expect(page.getByLabel('대표 유형')).toHaveCount(0);
 
-  await page.getByLabel('대표 유형').selectOption('TASK');
-  await page.getByRole('button', { name: '항목 직접 추가' }).click();
+  await page.getByRole('button', { name: '할 일 유형 선택' }).click();
+  await expect(page.getByLabel('대표 유형')).toHaveValue('TASK');
   const manualTitle = page.getByLabel('항목 1 제목');
   await expect(manualTitle).toHaveValue(title);
-  await expect(manualTitle).toBeFocused();
   await expect(manualTitle).toBeInViewport();
   await page.getByRole('button', { name: '항목 직접 추가' }).click();
   const removableTitle = page.getByLabel('항목 2 제목');
@@ -407,8 +579,8 @@ test('UNKNOWN analysis requires an explicit type and manually confirmed item', a
   await removableTitle.fill('적용하지 않을 보조 항목');
   await page.getByRole('button', { name: '항목 2 제거' }).click();
   await expect(manualTitle).toBeFocused();
-  await expect(page.getByRole('button', { name: '선택한 항목 승인' })).toBeEnabled();
-  await page.getByRole('button', { name: '선택한 항목 승인' }).click();
+  await expect(page.getByRole('button', { name: '수정한 내용 승인·적용' })).toBeEnabled();
+  await page.getByRole('button', { name: '수정한 내용 승인·적용' }).click();
 
   await expect(page.locator('.task-row').filter({ hasText: title })).toBeVisible();
   await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
