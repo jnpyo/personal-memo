@@ -266,3 +266,4 @@ public static class FakeDocker
 }
 
 Write-Host 'Personal Memo Windows PowerShell UTF-8 and protected-stdin contracts are valid.'
+exit 0
