@@ -95,6 +95,12 @@ jobs:
       - name: Validate private ACL and command contracts
         shell: powershell
         run: .\scripts\personal\Test-PersonalMemoSourceContracts.ps1
+      - name: Validate Windows PowerShell UTF-8 and protected stdin
+        shell: powershell
+        run: .\scripts\personal\Test-PersonalMemoUtf8Capture.ps1
+      - name: Validate cross-process password-rotation lock
+        shell: powershell
+        run: .\scripts\personal\Test-PersonalMemoRotationLock.ps1
 
   backend:
     runs-on: ubuntu-latest

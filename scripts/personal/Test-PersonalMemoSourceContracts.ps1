@@ -118,6 +118,46 @@ foreach ($requiredBackupFragment in @(
         -Contract "backup privacy fragment $requiredBackupFragment"
 }
 
+$commonSource = Read-SourceContractFile -Path $commonScript
+$rotationSource = Read-SourceContractFile -Path (Join-Path $personalScripts 'Rotate-PersonalMemoDatabasePassword.ps1')
+foreach ($requiredRotationFragment in @(
+    "New-PersonalMemoHexSecret -ByteCount 32",
+    '[IO.File]::Replace($stagedPath, $layout.EnvFile, $rollbackPath, $true)',
+    '[IO.FileShare]::None',
+    'Invoke-PersonalMemoForwardOnlyPostgresInput',
+    "'up', '-d', '--no-build', '--force-recreate', '--wait', 'postgres', 'backend', 'frontend'",
+    'if (($alterSucceeded -or $alterInputMayHaveReachedServer) -and',
+    'Get-PersonalMemoPostgresVolumeName -ContainerId $postgresAfter',
+    "'http://127.0.0.1:5173/api/v1/health'"
+)) {
+    Assert-SourceContains `
+        -Source $rotationSource `
+        -Needle $requiredRotationFragment `
+        -Contract "database credential rotation fragment $requiredRotationFragment"
+}
+if ($rotationSource.Contains("'down'") -or $rotationSource.Contains("'--volumes'")) {
+    throw 'Database credential rotation must not stop the project or delete its canonical volume.'
+}
+foreach ($requiredProtectedInputFragment in @(
+    "'exec', '-i', `$ContainerId",
+    'New-Object Diagnostics.ProcessStartInfo',
+    '$startInfo.RedirectStandardError = $true',
+    '$process.StandardInput.Write($Sql)'
+)) {
+    Assert-SourceContains `
+        -Source $commonSource `
+        -Needle $requiredProtectedInputFragment `
+        -Contract "protected PostgreSQL input fragment $requiredProtectedInputFragment"
+}
+if ($rotationSource.Contains('2>&1') -or $commonSource.Contains('2>&1')) {
+    throw 'Secret-bearing PostgreSQL diagnostics must not enter PowerShell native error history.'
+}
+Assert-SourceOrder `
+    -Source $rotationSource `
+    -Earlier '$rotationLockStream = [IO.File]::Open(' `
+    -Later '$layoutArguments = @{ ProjectName = $ProjectName }' `
+    -Contract 'the cross-session rotation lock is acquired before reading the environment layout'
+
 $restoreSource = Read-SourceContractFile -Path (Join-Path $personalScripts 'Test-PersonalMemoRestore.ps1')
 foreach ($requiredRestoreFragment in @(
     'TRUNCATE TABLE spring_session CASCADE',
@@ -131,7 +171,6 @@ foreach ($requiredRestoreFragment in @(
         -Contract "restore invariant fragment $requiredRestoreFragment"
 }
 
-$commonSource = Read-SourceContractFile -Path $commonScript
 Assert-SourceContains `
     -Source $commonSource `
     -Needle "if (`$expectedTlsPort -cne '8443')" `

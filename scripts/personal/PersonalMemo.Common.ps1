@@ -132,8 +132,16 @@ function Invoke-PersonalMemoDocker {
 
     Assert-PersonalMemoCommand -Name 'docker'
     if ($Capture) {
-        $output = & docker @Arguments 2>$null
-        $exitCode = $LASTEXITCODE
+        # Docker writes UTF-8 on Windows. Windows PowerShell 5.1 otherwise decodes native stdout
+        # with the active console code page, which can corrupt non-ASCII Compose JSON.
+        $previousOutputEncoding = [Console]::OutputEncoding
+        try {
+            [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+            $output = & docker @Arguments 2>$null
+            $exitCode = $LASTEXITCODE
+        } finally {
+            [Console]::OutputEncoding = $previousOutputEncoding
+        }
         if ($exitCode -ne 0) {
             throw "Docker command failed with exit code $exitCode."
         }
@@ -159,6 +167,125 @@ function Invoke-PersonalMemoCompose {
     return Invoke-PersonalMemoDocker -Arguments $arguments -Capture:$Capture
 }
 
+function Invoke-PersonalMemoPostgresInput {
+    param(
+        [Parameter(Mandatory = $true)][string] $ContainerId,
+        [Parameter(Mandatory = $true)][PSCustomObject] $DatabaseIdentity,
+        [Parameter(Mandatory = $true)][string] $Sql,
+        [Parameter(Mandatory = $true)][ref] $InputMayHaveReachedServer
+    )
+
+    Assert-PersonalMemoCommand -Name 'docker'
+    if ($ContainerId -cnotmatch '^[a-f0-9]{12,64}$') {
+        throw 'Refusing an unexpected PostgreSQL container identifier.'
+    }
+    foreach ($identifier in @($DatabaseIdentity.Username, $DatabaseIdentity.Database)) {
+        if ([string] $identifier -cnotmatch '^[A-Za-z_][A-Za-z0-9_]{0,62}$') {
+            throw 'PostgreSQL database and role names must use safe identifier characters.'
+        }
+    }
+    $arguments = @(
+        'exec', '-i', $ContainerId,
+        'psql', '--no-psqlrc', '--quiet',
+        "--username=$($DatabaseIdentity.Username)",
+        "--dbname=$($DatabaseIdentity.Database)",
+        '--set=ON_ERROR_STOP=1'
+    )
+
+    # Use redirected .NET streams instead of PowerShell's native-error pipeline. Windows
+    # PowerShell 5.1 can otherwise turn stderr into a NativeCommandError that retains SQL text.
+    # The secret-bearing SQL reaches psql only through standard input and both output streams are
+    # drained without ever entering PowerShell's error history.
+    $dockerCommand = @(
+        Get-Command docker.exe -CommandType Application -ErrorAction Stop
+    )[0].Source
+    if (-not [IO.File]::Exists($dockerCommand)) {
+        throw 'The Docker executable path could not be resolved safely.'
+    }
+    $startInfo = New-Object Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $dockerCommand
+    $startInfo.Arguments = $arguments -join ' '
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $startInfo
+    $standardOutput = $null
+    $standardError = $null
+    $standardOutputTask = $null
+    $standardErrorTask = $null
+    $InputMayHaveReachedServer.Value = $false
+    try {
+        if (-not $process.Start()) {
+            throw 'The protected PostgreSQL process could not be started.'
+        }
+        $standardOutputTask = $process.StandardOutput.ReadToEndAsync()
+        $standardErrorTask = $process.StandardError.ReadToEndAsync()
+        $InputMayHaveReachedServer.Value = $true
+        $process.StandardInput.Write($Sql)
+        $process.StandardInput.Close()
+        $process.WaitForExit()
+        $standardOutput = $standardOutputTask.GetAwaiter().GetResult()
+        $standardError = $standardErrorTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) {
+            throw 'The protected PostgreSQL standard-input operation failed.'
+        }
+    } finally {
+        $standardOutput = $null
+        $standardError = $null
+        $standardOutputTask = $null
+        $standardErrorTask = $null
+        $process.Dispose()
+    }
+}
+
+function Invoke-PersonalMemoForwardOnlyPostgresInput {
+    param(
+        [Parameter(Mandatory = $true)][string] $ContainerId,
+        [Parameter(Mandatory = $true)][PSCustomObject] $DatabaseIdentity,
+        [Parameter(Mandatory = $true)][string] $Sql,
+        [Parameter(Mandatory = $true)][ref] $InputMayHaveReachedServer
+    )
+
+    $InputMayHaveReachedServer.Value = $false
+    $firstInputStarted = $false
+    try {
+        Invoke-PersonalMemoPostgresInput `
+            -ContainerId $ContainerId `
+            -DatabaseIdentity $DatabaseIdentity `
+            -Sql $Sql `
+            -InputMayHaveReachedServer ([ref] $firstInputStarted)
+        $InputMayHaveReachedServer.Value = $firstInputStarted
+        return
+    } catch {
+        $InputMayHaveReachedServer.Value = $firstInputStarted
+        if (-not $firstInputStarted) {
+            throw
+        }
+    }
+
+    # ALTER ROLE is idempotent for the same generated value. If the first result is ambiguous
+    # after stdin started, retry forward rather than restoring the exposed old credential.
+    $retryInputStarted = $false
+    try {
+        Invoke-PersonalMemoPostgresInput `
+            -ContainerId $ContainerId `
+            -DatabaseIdentity $DatabaseIdentity `
+            -Sql $Sql `
+            -InputMayHaveReachedServer ([ref] $retryInputStarted)
+        $InputMayHaveReachedServer.Value = $true
+    } catch {
+        $InputMayHaveReachedServer.Value = $firstInputStarted -or $retryInputStarted
+        throw (
+            'The PostgreSQL password update result is ambiguous after protected input started. ' +
+            'The new environment value must be retained and the operation retried forward.'
+        )
+    }
+}
+
 function Get-PersonalMemoObjectProperty {
     param(
         [Parameter(Mandatory = $true)] $Object,
@@ -170,6 +297,29 @@ function Get-PersonalMemoObjectProperty {
         return $null
     }
     return $property.Value
+}
+
+function ConvertFrom-PersonalMemoJson {
+    param(
+        [Parameter(Mandatory = $true)][string] $Json,
+        [Parameter(Mandatory = $true)][string] $Context
+    )
+
+    try {
+        return ConvertFrom-Json -InputObject $Json -ErrorAction Stop
+    } catch {
+        # Compose configuration can contain database and provider credentials. Never let
+        # ConvertFrom-Json include its raw input in a user-visible error record or retain that
+        # credential-bearing parser record in PowerShell's automatic error history.
+        $parserError = $_
+        for ($index = $Error.Count - 1; $index -ge 0; $index--) {
+            if ([Object]::ReferenceEquals($Error[$index].Exception, $parserError.Exception)) {
+                $Error.RemoveAt($index)
+            }
+        }
+        $parserError = $null
+        throw "$Context returned invalid JSON. Raw output was withheld because it may contain credentials."
+    }
 }
 
 function Test-PersonalMemoPrivateIPv4 {
@@ -192,7 +342,7 @@ function Assert-PersonalMemoComposeContract {
     param([Parameter(Mandatory = $true)][PSCustomObject] $Layout)
 
     $rawConfig = Invoke-PersonalMemoCompose -Layout $Layout -IncludePersonal -Capture -CommandArguments @('config', '--format', 'json')
-    $config = $rawConfig | ConvertFrom-Json
+    $config = ConvertFrom-PersonalMemoJson -Json $rawConfig -Context 'Personal Compose configuration'
     if ([string] $config.name -cne $Layout.ProjectName) {
         throw "Compose resolved an unexpected project name."
     }
@@ -296,7 +446,7 @@ function Assert-PersonalMemoRestoreComposeContract {
 
     Assert-PersonalMemoProjectName -ProjectName $Layout.ProjectName -RestoreProject
     $rawConfig = Invoke-PersonalMemoCompose -Layout $Layout -Capture -CommandArguments @('config', '--format', 'json')
-    $config = $rawConfig | ConvertFrom-Json
+    $config = ConvertFrom-PersonalMemoJson -Json $rawConfig -Context 'Restore Compose configuration'
     if ([string] $config.name -cne $Layout.ProjectName) {
         throw 'Restore Compose resolved an unexpected project name.'
     }

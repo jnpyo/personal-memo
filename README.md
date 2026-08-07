@@ -168,9 +168,15 @@ S24에는 `Documents\PersonalMemo\PrivateTls\personal-memo-ca.cer`만 복사해 
 
 ```powershell
 .\scripts\personal\Backup-PersonalMemo.ps1
+.\scripts\personal\Rotate-PersonalMemoDatabasePassword.ps1
 .\scripts\personal\Stop-PersonalMemo.ps1
 .\scripts\personal\Start-PersonalMemo.ps1
 ```
+
+database credential이 terminal, chat, screenshot 등에 노출됐을 때는 먼저 backup을 만든 뒤 rotation
+script를 실행합니다. 새 값은 출력·Docker argument·호스트 임시 environment로 전달하지 않으며,
+ignored `.env.personal`과 PostgreSQL role을 함께 갱신합니다. canonical volume은 보존하고 PostgreSQL·
+backend·frontend container를 재생성한 뒤 Nginx를 경유한 API health와 private ACL을 검증합니다.
 
 ### 선택적 Google 로그인
 

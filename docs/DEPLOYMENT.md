@@ -131,6 +131,7 @@ port forwarding은 하지 않는다.
 ```powershell
 .\scripts\personal\Get-PersonalMemoStatus.ps1
 .\scripts\personal\Backup-PersonalMemo.ps1
+.\scripts\personal\Rotate-PersonalMemoDatabasePassword.ps1
 .\scripts\personal\Stop-PersonalMemo.ps1
 ```
 
@@ -151,6 +152,17 @@ restore script는 생성 규칙이 고정된 별도 project와 volume만 사용�
 Flyway·session truncate·backend health·민감 원문을 출력하지 않는 row count를 확인한다. 또한
 initial-account gate singleton, claimed user와 `AVAILABLE` gate의 비공존, orphan local credential 부재를
 scalar query로 검증한다. 개인 canonical volume에 `down --volumes`를 실행하지 않는다.
+
+database credential이 console, chat, screenshot 등에 노출됐다면 먼저 backup과 checksum을 만든 뒤
+`Rotate-PersonalMemoDatabasePassword.ps1`을 실행한다. script는 CSPRNG로 새 값을 만들고 현재 user 전용
+임시 파일과 원자 교체를 사용해 `.env.personal`을 갱신한다. 새 값은 stdout, Docker argument, host 임시
+environment에 넣지 않고 PostgreSQL local-socket `psql`의 standard input으로만 role 변경을 전달한다.
+동시 회전은 `.env.personal` 옆의 current-user-only exclusive lock file로 Windows session을 가로질러
+거부한다. 이후 PostgreSQL·backend·frontend container를 재생성해 Nginx가
+새 backend address를 다시 해석하게 하며, exact canonical named volume이 그대로인지, container credential
+digest, backend database health, frontend를 경유한 API health가 모두 일치하는지 검증한다. role 변경
+입력이 시작된 뒤 결과가 불명확하면 같은 새 값으로 한 번 재시도하고 forward-only 상태를 유지한다.
+이 경우 노출된 이전 값으로 되돌리지 말고 script warning에 따라 회전을 다시 실행해 새 값으로 수렴시킨다.
 
 향후 서버 이전은 live Docker volume 복사가 아니라 `pg_dump`와 checksum을 새 server에 전달하고,
 별도 volume에 restore한 뒤 Flyway와 health/data 검증을 통과시키는 순서로 한다. application topology와
