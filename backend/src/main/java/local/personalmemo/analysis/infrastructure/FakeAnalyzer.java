@@ -7,6 +7,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import local.personalmemo.analysis.domain.AmbiguityReason;
 import local.personalmemo.analysis.domain.AnalysisProvenance;
@@ -27,11 +28,46 @@ import tools.jackson.databind.node.ObjectNode;
 @Component
 public class FakeAnalyzer implements LocalAnalyzer {
   private static final AnalysisProvenance PROVENANCE =
-      new AnalysisProvenance("fake-v3", "none", "none", "none");
+      new AnalysisProvenance("fake-v4", "none", "none", "none");
+  private static final String DETERMINISTIC_RULES_VERSION = "korean-rules-v2";
   private static final int MAX_DATE_CANDIDATES = 5;
   private static final int MAX_ITEM_CANDIDATES = 3;
   private static final Pattern OPERATING_SYSTEMS_ALIAS =
       Pattern.compile("(?<![A-Za-z0-9])os(?![A-Za-z0-9])", Pattern.CASE_INSENSITIVE);
+  private static final Pattern TECHNICAL_CONTEXT =
+      Pattern.compile(
+          "(?:API|DB|SQL|HTTP|캐시|서버|클라이언트|데이터|응답|요청|세션|토큰|권한|사용자별|인증|암호화|인터페이스|모듈|스키마)",
+          Pattern.CASE_INSENSITIVE);
+  private static final Pattern TECHNICAL_DECLARATION =
+      Pattern.compile(".*(?:해야\\s*함|되어야\\s*함|필요함|원칙임|규칙임)\\s*$");
+  private static final Pattern EVENT_CONTEXT =
+      Pattern.compile(
+          "(?<![\\p{L}\\p{N}])(?:회의|동창회|약속|행사|수업|시험|면접|공연|모임|진료|예약)(?=$|\\s|[은는이가을를에의와과도,.;!?])");
+  private static final Pattern UNRESOLVED_REFERENCE =
+      Pattern.compile(
+          "(?<![\\p{L}\\p{N}])(?:그거|그것|그걸|저거|저것|저걸|이걸|그때|(?:그|저)\\s+(?:문서|파일|자료|내용|건|일|것|거)|저번\\s*(?:것|거|자료|문서)|말한\\s+(?:거|것|그\\s+[가-힣A-Za-z0-9]+))(?=$|\\s|[은는이가을를에의와과도,.;!?])");
+  private static final Pattern ALTERNATIVE_CONNECTOR =
+      Pattern.compile("(?:^|\\s)(?:또는|혹은|아니면)(?:\\s|$)");
+  private static final List<ActionRule> ACTION_RULES =
+      List.of(
+          actionRule("장보기", "장보기(?=\\s*[:：]|\\s*$)"),
+          actionRule("전화하기", "전화\\s*하기"),
+          actionRule("찾아보기", "찾아보(?:기|고)"),
+          actionRule("다시 보기", "다시\\s*보기"),
+          actionRule("올리기", "올리기"),
+          actionRule("만들기", "만들기"),
+          actionRule("잡기", "잡기"),
+          actionRule("마무리", "마무리(?:하기|해야\\s*함)?(?=\\s*$)"),
+          actionRule("제출", "제출(?:하기|하고|해야\\s*함)?"),
+          actionRule("확인", "확인(?:하기|하고|해야\\s*함)?"),
+          actionRule("읽기", "읽(?:기|고)"),
+          actionRule("요약", "요약(?:하기|하고|해야\\s*함)?"),
+          actionRule("검토", "검토(?:하기|하고|해야\\s*함)?(?=\\s*(?:또는|혹은|아니면|$))"),
+          actionRule("결정", "결정(?:하기|하고|해야\\s*함)?(?=\\s*$)"),
+          actionRule("정리", "정리(?:하기|하고|해야\\s*함)?"),
+          actionRule("준비", "준비(?:하기|하고|해야\\s*함)?"),
+          actionRule("보기", "보기(?=\\s*$)"),
+          actionRule("하기", "하기"));
 
   private final ObjectMapper json;
   private final KoreanDateParser dateParser = new KoreanDateParser();
@@ -46,12 +82,16 @@ public class FakeAnalyzer implements LocalAnalyzer {
     return PROVENANCE;
   }
 
+  public String deterministicRulesVersion() {
+    return DETERMINISTIC_RULES_VERSION;
+  }
+
   @Override
   public ObjectNode analyze(
       UUID memoId, int revision, String content, Instant baseInstant, String timeZone) {
     List<ParsedDate> detectedDates = dateParser.parse(content, baseInstant, timeZone);
     List<ParsedDate> dates = detectedDates.stream().limit(MAX_DATE_CANDIDATES).toList();
-    AnalysisShape shape = classify(content);
+    AnalysisShape shape = classify(content, detectedDates);
     LinkedHashSet<AmbiguityReason> signals = new LinkedHashSet<>();
     shape.signals().stream().sorted(Comparator.comparingInt(Enum::ordinal)).forEach(signals::add);
     if (detectedDates.size() > MAX_DATE_CANDIDATES || shape.items().size() > MAX_ITEM_CANDIDATES) {
@@ -90,7 +130,7 @@ public class FakeAnalyzer implements LocalAnalyzer {
         "providerMetadata",
         json.createObjectNode()
             .put("analyzerVersion", PROVENANCE.analyzerVersion())
-            .put("deterministicRulesVersion", "korean-fixtures-v1")
+            .put("deterministicRulesVersion", DETERMINISTIC_RULES_VERSION)
             .put("routingPolicyVersion", ambiguityGate.version())
             .put("promptVersion", PROVENANCE.promptVersion())
             .put("localModelVersion", PROVENANCE.localModelVersion())
@@ -104,7 +144,7 @@ public class FakeAnalyzer implements LocalAnalyzer {
     return proposal;
   }
 
-  private AnalysisShape classify(String content) {
+  private AnalysisShape classify(String content, List<ParsedDate> dates) {
     String compact = content.replaceAll("\\s+", " ").strip();
 
     if (looksLikePromptInjection(compact)) {
@@ -182,13 +222,53 @@ public class FakeAnalyzer implements LocalAnalyzer {
       return shape(
           List.of("UNKNOWN"), List.of(), Set.of(AmbiguityReason.MISSING_ACTION), null, 0.52);
     }
-    if (hasTaskAction(compact)) {
+    List<DetectedAction> actions = detectActions(compact);
+    if (actions.isEmpty() && dates.isEmpty() && looksLikeTechnicalInformation(compact)) {
       return shape(
-          List.of("TASK"),
-          List.of(new ItemShape("TASK", compact, taskAction(compact), taskObject(compact))),
+          List.of("INFORMATION"),
+          List.of(new ItemShape("INFORMATION", compact, null, compact)),
           Set.of(),
           null,
-          0.96);
+          0.93);
+    }
+
+    if (!actions.isEmpty()) {
+      LinkedHashSet<AmbiguityReason> signals = new LinkedHashSet<>();
+      if (hasUnresolvedReference(compact)) {
+        signals.add(AmbiguityReason.UNRESOLVED_REFERENCE);
+      }
+      boolean alternative = ALTERNATIVE_CONNECTOR.matcher(compact).find();
+      if (actions.size() > 1 || alternative) {
+        signals.add(AmbiguityReason.MULTI_INTENT);
+      }
+      DetectedAction primaryAction = actions.getFirst();
+      return shape(
+          alternative ? List.of("TASK", "INFORMATION") : List.of("TASK"),
+          List.of(
+              new ItemShape(
+                  "TASK",
+                  compact,
+                  primaryAction.canonicalName(),
+                  taskObject(compact, primaryAction))),
+          signals,
+          null,
+          alternative ? 0.82 : 0.94);
+    }
+    if (!dates.isEmpty() && EVENT_CONTEXT.matcher(compact).find()) {
+      return shape(
+          List.of("EVENT"),
+          List.of(new ItemShape("EVENT", compact, null, compact)),
+          Set.of(),
+          null,
+          0.94);
+    }
+    if (hasUnresolvedReference(compact)) {
+      return shape(
+          List.of("UNKNOWN"),
+          List.of(),
+          Set.of(AmbiguityReason.UNRESOLVED_REFERENCE, AmbiguityReason.MISSING_ACTION),
+          null,
+          0.5);
     }
     return shape(
         List.of("RECORD"),
@@ -202,23 +282,49 @@ public class FakeAnalyzer implements LocalAnalyzer {
     return content.contains("이전 지시를 무시") || content.contains("모든 메모를 삭제");
   }
 
-  private boolean hasTaskAction(String content) {
-    return List.of("제출", "올리기", "확인", "찾아보고", "정리", "준비", "하기").stream()
-        .anyMatch(content::contains);
+  private boolean looksLikeTechnicalInformation(String content) {
+    return TECHNICAL_CONTEXT.matcher(content).find()
+        && TECHNICAL_DECLARATION.matcher(content).matches();
   }
 
-  private String taskAction(String content) {
-    if (content.contains("제출")) return "제출";
-    if (content.contains("올리기")) return "올리기";
-    if (content.contains("확인")) return "확인";
-    if (content.contains("정리")) return "정리";
-    if (content.contains("준비")) return "준비";
-    return "하기";
+  private boolean hasUnresolvedReference(String content) {
+    return UNRESOLVED_REFERENCE.matcher(content).find();
   }
 
-  private String taskObject(String content) {
-    String object = content.replace(taskAction(content), " ").replaceAll("\\s+", " ").strip();
+  private List<DetectedAction> detectActions(String content) {
+    List<DetectedAction> actions = new ArrayList<>();
+    for (ActionRule rule : ACTION_RULES) {
+      Matcher matcher = rule.pattern().matcher(content);
+      while (matcher.find()) {
+        boolean overlaps =
+            actions.stream()
+                .anyMatch(
+                    existing ->
+                        matcher.start() < existing.endOffset()
+                            && existing.startOffset() < matcher.end());
+        if (!overlaps) {
+          actions.add(new DetectedAction(rule.canonicalName(), matcher.start(), matcher.end()));
+        }
+      }
+    }
+    actions.sort(Comparator.comparingInt(DetectedAction::startOffset));
+    return List.copyOf(actions);
+  }
+
+  private String taskObject(String content, DetectedAction action) {
+    String object =
+        (content.substring(0, action.startOffset()) + " " + content.substring(action.endOffset()))
+            .replaceAll("^[\\s:：,\\-]+", "")
+            .replaceAll("[\\s:：,\\-]+$", "")
+            .replaceAll("\\s+", " ")
+            .strip();
     return object.isBlank() ? null : bounded(object, 200);
+  }
+
+  private static ActionRule actionRule(String canonicalName, String expression) {
+    return new ActionRule(
+        canonicalName,
+        Pattern.compile("(?<![\\p{L}\\p{N}])(?:" + expression + ")(?=$|\\s|[,.;!?:：])"));
   }
 
   private AnalysisShape shape(
@@ -370,4 +476,8 @@ public class FakeAnalyzer implements LocalAnalyzer {
       double titleConfidence) {}
 
   private record ItemShape(String kind, String title, String action, String object) {}
+
+  private record ActionRule(String canonicalName, Pattern pattern) {}
+
+  private record DetectedAction(String canonicalName, int startOffset, int endOffset) {}
 }

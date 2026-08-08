@@ -57,11 +57,13 @@ class FakeAnalyzerTest {
 
     assertThat(result.path("schemaVersion").asText()).isEqualTo("1");
     assertThat(result.path("memoId").asText()).isEqualTo(memoId.toString());
-    assertThat(analyzer.version()).isEqualTo("fake-v3");
+    assertThat(analyzer.version()).isEqualTo("fake-v4");
     assertThat(analyzer.provenance().promptVersion()).isEqualTo("none");
     assertThat(analyzer.provenance().localModelVersion()).isEqualTo("none");
     assertThat(analyzer.provenance().embeddingModelVersion()).isEqualTo("none");
-    assertThat(result.at("/providerMetadata/analyzerVersion").asText()).isEqualTo("fake-v3");
+    assertThat(result.at("/providerMetadata/analyzerVersion").asText()).isEqualTo("fake-v4");
+    assertThat(result.at("/providerMetadata/deterministicRulesVersion").asText())
+        .isEqualTo("korean-rules-v2");
     assertThat(result.at("/providerMetadata/promptVersion").asText()).isEqualTo("none");
     assertThat(result.at("/providerMetadata/localModelVersion").asText()).isEqualTo("none");
     assertThat(result.at("/providerMetadata/embeddingModelVersion").asText()).isEqualTo("none");
@@ -158,6 +160,101 @@ class FakeAnalyzerTest {
     assertThat(result.path("dateCandidates")).hasSize(5);
     assertThat(result.path("ambiguityReasons").toString()).contains("CANDIDATE_LIMIT_EXCEEDED");
     assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("CLOUD_ENRICH");
+  }
+
+  @Test
+  void classifiesAGeneralTechnicalRequirementAsInformation() {
+    var result = analyze("세션 토큰은 서버에만 보관해야 함");
+
+    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("INFORMATION");
+    assertThat(result.path("ambiguityReasons")).isEmpty();
+    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("LOCAL_REVIEW");
+  }
+
+  @Test
+  void classifiesADatedGatheringAsAnEventWithoutInventingATask() {
+    var result = analyze("9월 18일 연구 모임");
+
+    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("EVENT");
+    assertThat(result.at("/itemCandidates/0/kind").asText()).isEqualTo("EVENT");
+    assertThat(result.path("ambiguityReasons").toString()).contains("MISSING_YEAR", "MISSING_TIME");
+    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("LOCAL_REVIEW");
+  }
+
+  @Test
+  void escalatesAReferencedTaskUsingAGeneralDemonstrativeRule() {
+    var result = analyze("선배가 말한 그 파일 다시 보기");
+
+    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("TASK");
+    assertThat(result.path("ambiguityReasons").toString())
+        .contains("UNRESOLVED_REFERENCE")
+        .doesNotContain("MISSING_OBJECT");
+    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("CLOUD_ENRICH");
+  }
+
+  @Test
+  void detectsMultipleActionsWithoutDependingOnAChallengeSentence() {
+    var result = analyze("책 읽고 핵심을 요약하고 도표 만들기");
+
+    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("TASK");
+    assertThat(result.path("ambiguityReasons").toString()).contains("MULTI_INTENT");
+    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("CLOUD_ENRICH");
+  }
+
+  @Test
+  void treatsACompactShoppingListAsOneTask() {
+    var result = analyze("장보기: 사과, 생수");
+
+    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("TASK");
+    assertThat(result.at("/itemCandidates/0/action").asText()).isEqualTo("장보기");
+    assertThat(result.at("/itemCandidates/0/object").asText()).isEqualTo("사과, 생수");
+    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("LOCAL_REVIEW");
+  }
+
+  @Test
+  void keepsAlternativeDecisionTypesReviewable() {
+    var result = analyze("계약서 검토 혹은 수정 방향 결정");
+
+    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("TASK");
+    assertThat(result.at("/typeCandidates/1/value").asText()).isEqualTo("INFORMATION");
+    assertThat(result.path("ambiguityReasons").toString()).contains("MULTI_INTENT");
+    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("CLOUD_ENRICH");
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "보기 좋은 풍경 기록",
+        "장보기 기록",
+        "새 전화기 비교",
+        "숫자 더하기 연습",
+        "제출용 확인서 양식",
+        "여행 준비물 목록",
+        "회의 요약본 공유",
+        "책상 정리함 구매",
+        "10월 3일 회의록"
+      })
+  void avoidsActionSubstringsThatAreNotCommands(String content) {
+    var result = analyze(content);
+
+    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("RECORD");
+    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("LOCAL_REVIEW");
+  }
+
+  @Test
+  void doesNotTreatAPrefixInsideDiaryAsAnUnresolvedReference() {
+    var result = analyze("그 일기 다시 보기");
+
+    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("TASK");
+    assertThat(result.path("ambiguityReasons").toString()).doesNotContain("UNRESOLVED_REFERENCE");
+    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("LOCAL_REVIEW");
+  }
+
+  @Test
+  void explicitDatedActionWinsOverATechnicalRequirementShape() {
+    var result = analyze("2026.08.09 서버 로그 확인해야 함");
+
+    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("TASK");
   }
 
   private ObjectNode analyze(String content) {

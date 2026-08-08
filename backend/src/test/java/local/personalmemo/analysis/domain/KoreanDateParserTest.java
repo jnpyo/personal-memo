@@ -70,6 +70,110 @@ class KoreanDateParserTest {
   }
 
   @Test
+  void resolvesAnyNextWeekWeekdayWithAnExplicitKoreanTime() {
+    var result = parser.parse("다음주 금요일 오전 9시 20분 상담", BASE, SEOUL).getFirst();
+
+    assertThat(result.surfaceText()).isEqualTo("다음주 금요일 오전 9시 20분");
+    assertThat(result.value()).isEqualTo("2026-08-14T09:20:00+09:00");
+    assertThat(result.precision()).isEqualTo(DatePrecision.RELATIVE_EXACT);
+    assertThat(result.timeSpecified()).isTrue();
+    assertThat(result.ambiguityReasons()).isEmpty();
+  }
+
+  @Test
+  void resolvesAnExplicitKoreanTimeBeforeATimeParticle() {
+    var result = parser.parse("다음 주 금요일 오후 3시에 방문", BASE, SEOUL).getFirst();
+
+    assertThat(result.value()).isEqualTo("2026-08-14T15:00:00+09:00");
+    assertThat(result.precision()).isEqualTo(DatePrecision.RELATIVE_EXACT);
+    assertThat(result.timeSpecified()).isTrue();
+  }
+
+  @Test
+  void resolvesAnyNextWeekWeekdayAsDateOnlyWhenTimeIsAbsent() {
+    var result = parser.parse("다음 주 목요일까지 검수", BASE, SEOUL).getFirst();
+
+    assertThat(result.value()).isEqualTo("2026-08-13");
+    assertThat(result.precision()).isEqualTo(DatePrecision.DATE_ONLY);
+    assertThat(result.timeSpecified()).isFalse();
+  }
+
+  @Test
+  void keepsWeekendAndEventRelativeDeadlinesImprecise() {
+    var result = parser.parse("이번 주말 무렵 정리하고 다음 면접 전까지 제출", BASE, SEOUL);
+
+    assertThat(result).hasSize(2);
+    assertThat(result.get(0).surfaceText()).isEqualTo("이번 주말 무렵");
+    assertThat(result.get(0).precision()).isEqualTo(DatePrecision.APPROXIMATE);
+    assertThat(result.get(1).surfaceText()).isEqualTo("다음 면접 전까지");
+    assertThat(result.get(1).precision()).isEqualTo(DatePrecision.UNKNOWN);
+    assertThat(result)
+        .allSatisfy(
+            candidate -> {
+              assertThat(candidate.value()).isNull();
+              assertThat(candidate.ambiguityReasons())
+                  .containsExactly(AmbiguityReason.IMPRECISE_DATE);
+            });
+  }
+
+  @Test
+  void approximateRelativeTimeNeverBecomesAnExactInstant() {
+    var result = parser.parse("다음 주 금요일 오후 3시쯤 방문", BASE, SEOUL).getFirst();
+
+    assertThat(result.surfaceText()).isEqualTo("다음 주 금요일 오후 3시쯤");
+    assertThat(result.value()).isNull();
+    assertThat(result.precision()).isEqualTo(DatePrecision.APPROXIMATE);
+    assertThat(result.ambiguityReasons()).containsExactly(AmbiguityReason.IMPRECISE_DATE);
+  }
+
+  @Test
+  void invalidRelativeClockDoesNotFallBackToTheShorterDateRule() {
+    var result = parser.parse("다음 주 금요일 오후 14시 방문", BASE, SEOUL).getFirst();
+
+    assertThat(result.surfaceText()).isEqualTo("다음 주 금요일 오후 14시");
+    assertThat(result.value()).isNull();
+    assertThat(result.precision()).isEqualTo(DatePrecision.UNKNOWN);
+  }
+
+  @Test
+  void neverTruncatesUnsupportedOrMalformedRelativeTimesIntoExactInstants() {
+    var result =
+        List.of("다음 주 금요일 오후 3시 123분 방문", "다음 주 금요일 오후 3시반 방문", "다음 주 금요일 오후 3시 반 방문").stream()
+            .map(content -> parser.parse(content, BASE, SEOUL).getFirst())
+            .toList();
+
+    assertThat(result)
+        .allSatisfy(
+            candidate -> {
+              assertThat(candidate.value()).isNull();
+              assertThat(candidate.precision()).isEqualTo(DatePrecision.UNKNOWN);
+              assertThat(candidate.ambiguityReasons())
+                  .containsExactly(AmbiguityReason.IMPRECISE_DATE);
+            });
+  }
+
+  @Test
+  void treatsRelativeTimeHedgesAsApproximateInsteadOfExact() {
+    var result =
+        List.of("정도", "전후").stream()
+            .map(hedge -> parser.parse("다음 주 금요일 오후 3시 " + hedge + " 방문", BASE, SEOUL).getFirst())
+            .toList();
+
+    assertThat(result)
+        .allSatisfy(
+            candidate -> {
+              assertThat(candidate.value()).isNull();
+              assertThat(candidate.precision()).isEqualTo(DatePrecision.APPROXIMATE);
+            });
+  }
+
+  @Test
+  void avoidsBareWeekendAndEmbeddedNextWeekFalsePositives() {
+    assertThat(parser.parse("주말 분위기의 음악 기록", BASE, SEOUL)).isEmpty();
+    assertThat(parser.parse("다다음 주 금요일 일정", BASE, SEOUL)).isEmpty();
+  }
+
+  @Test
   void neverInventsAnExactValueForApproximateExpressions() {
     var result = parser.parse("다음 주쯤 하고 다음 달에 확인", BASE, SEOUL);
 

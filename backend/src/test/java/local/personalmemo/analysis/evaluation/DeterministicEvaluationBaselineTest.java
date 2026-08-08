@@ -65,6 +65,7 @@ class DeterministicEvaluationBaselineTest {
     validateCases(holdout, "HOLDOUT");
     assertUniqueIdsAndContent(regression, holdout);
     assertHoldoutAvoidsFixtureSpecificBranches(holdout);
+    assertRuleSourcesDoNotCopyHoldoutPhrases(holdout);
 
     assertResourceMatchesRepositoryCopy(REGRESSION_RESOURCE, "fixtures/korean-memo-cases.json");
     assertResourceMatchesRepositoryCopy(
@@ -100,6 +101,7 @@ class DeterministicEvaluationBaselineTest {
 
     assertThat(regression.schemaValidCount()).isEqualTo(regression.caseCount());
     assertThat(regression.wrongLocalCount()).isZero();
+    assertThat(report.path("deterministicRulesVersion").asText()).isEqualTo("korean-rules-v2");
     assertThat(report.at("/gates/regression/passed").asBoolean()).isTrue();
     assertThat(report.at("/gates/holdout/enforced").asBoolean()).isFalse();
     assertThat(holdout.caseCount()).isEqualTo(12);
@@ -196,6 +198,7 @@ class DeterministicEvaluationBaselineTest {
             .put("reportVersion", "1")
             .put("datasetVersion", "1")
             .put("analyzerVersion", analyzer.version())
+            .put("deterministicRulesVersion", analyzer.deterministicRulesVersion())
             .put("routingPolicyVersion", ambiguityGate.version())
             .put("containsRawMemoContent", false);
     ObjectNode splits = report.putObject("splits");
@@ -258,6 +261,33 @@ class DeterministicEvaluationBaselineTest {
     }
   }
 
+  private void assertRuleSourcesDoNotCopyHoldoutPhrases(JsonNode holdout) throws Exception {
+    String ruleSources =
+        Files.readString(
+                backendPath(
+                    "src/main/java/local/personalmemo/analysis/infrastructure/FakeAnalyzer.java"))
+            + Files.readString(
+                backendPath(
+                    "src/main/java/local/personalmemo/analysis/domain/KoreanDateParser.java"));
+    for (JsonNode fixture : holdout) {
+      String content = fixture.path("content").asText().replaceAll("\\s+", " ").strip();
+      assertThat(ruleSources)
+          .as(
+              "analyzer must not copy the full visible challenge case %s",
+              fixture.path("id").asText())
+          .doesNotContain(content);
+      String[] words = content.split(" ");
+      for (int index = 0; index + 2 < words.length; index++) {
+        String phrase = String.join(" ", words[index], words[index + 1], words[index + 2]);
+        assertThat(ruleSources)
+            .as(
+                "analyzer must use general rules, not a three-token branch for %s",
+                fixture.path("id").asText())
+            .doesNotContain(phrase);
+      }
+    }
+  }
+
   private void assertResourceMatchesRepositoryCopy(String resource, String relativePath)
       throws Exception {
     JsonNode bundled = readResource(resource);
@@ -275,6 +305,18 @@ class DeterministicEvaluationBaselineTest {
       return fromRoot;
     }
     throw new IllegalStateException("Repository file is missing: " + relativePath);
+  }
+
+  private Path backendPath(String relativePath) {
+    Path fromBackend = Path.of(relativePath);
+    if (Files.exists(fromBackend)) {
+      return fromBackend;
+    }
+    Path fromRoot = Path.of("backend", relativePath);
+    if (Files.exists(fromRoot)) {
+      return fromRoot;
+    }
+    throw new IllegalStateException("Backend file is missing: " + relativePath);
   }
 
   private JsonNode fixtures(String resource) throws Exception {

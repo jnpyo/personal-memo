@@ -34,8 +34,23 @@ public final class KoreanDateParser {
       Pattern.compile("(?<!\\d)(\\d{1,2})월\\s*(\\d{1,2})일");
   private static final Pattern DAY_ONLY_DEADLINE =
       Pattern.compile("(?<![\\d월])([012]?\\d|3[01])일까지");
-  private static final Pattern NEXT_WEEK_TUESDAY = Pattern.compile("다음\\s*주\\s*화요일(?:까지)?");
-  private static final Pattern APPROXIMATE_NEXT_WEEK = Pattern.compile("다음\\s*주쯤");
+  private static final Pattern NEXT_WEEK_DAY_TIME =
+      Pattern.compile(
+          "(?<![\\p{L}\\p{N}])다음\\s*주\\s*([월화수목금토일])요일\\s*(오전|오후)\\s*(\\d{1,2})시(?:\\s*(\\d+)분)?(?:\\s*(?:에|부터|까지))?(?=$|\\s|[,.;!?])");
+  private static final Pattern APPROXIMATE_NEXT_WEEK_DAY_TIME =
+      Pattern.compile(
+          "(?<![\\p{L}\\p{N}])다음\\s*주\\s*([월화수목금토일])요일\\s*(?:오전|오후)\\s*\\d{1,2}시(?:\\s*\\d+분)?\\s*(?:쯤|경|무렵|정도|전후)");
+  private static final Pattern UNSUPPORTED_NEXT_WEEK_DAY_TIME =
+      Pattern.compile(
+          "(?<![\\p{L}\\p{N}])다음\\s*주\\s*([월화수목금토일])요일\\s*(?:오전|오후)\\s*\\d{1,2}시\\s*반(?:\\s*(?:에|부터|까지))?");
+  private static final Pattern NEXT_WEEK_DAY =
+      Pattern.compile("(?<![\\p{L}\\p{N}])다음\\s*주\\s*([월화수목금토일])요일(?!\\s*(?:오전|오후))(?:까지)?");
+  private static final Pattern APPROXIMATE_NEXT_WEEK =
+      Pattern.compile("(?<![\\p{L}\\p{N}])다음\\s*주쯤");
+  private static final Pattern APPROXIMATE_WEEKEND =
+      Pattern.compile("(?<![\\p{L}\\p{N}])(?:(?:이번|다음)\\s*)?주말(?:쯤|\\s*(?:경|무렵)|에)");
+  private static final Pattern EVENT_RELATIVE_DEADLINE =
+      Pattern.compile("(?<![\\p{L}\\p{N}])다음\\s*(?:회의|수업|약속|행사|미팅|발표|시험|면접|진료|면담|상담)\\s*전(?:까지)?");
   private static final Pattern APPROXIMATE_NEXT_MONTH = Pattern.compile("다음\\s*달(?:에)?");
   private static final Pattern YESTERDAY = Pattern.compile("어제");
 
@@ -82,16 +97,46 @@ public final class KoreanDateParser {
         matcher -> parseDayOnlyDeadline(matcher, baseDate));
     collect(
         content,
-        NEXT_WEEK_TUESDAY,
+        APPROXIMATE_NEXT_WEEK_DAY_TIME,
         candidates,
-        RulePriority.NEXT_WEEK_TUESDAY,
-        matcher -> parseNextWeekTuesday(matcher, baseDate));
+        RulePriority.APPROXIMATE_NEXT_WEEK_DAY_TIME,
+        matcher -> approximate(matcher));
+    collect(
+        content,
+        UNSUPPORTED_NEXT_WEEK_DAY_TIME,
+        candidates,
+        RulePriority.UNSUPPORTED_NEXT_WEEK_DAY_TIME,
+        this::unknown);
+    collect(
+        content,
+        NEXT_WEEK_DAY_TIME,
+        candidates,
+        RulePriority.NEXT_WEEK_DAY_TIME,
+        matcher -> parseNextWeekDayTime(matcher, baseDate, timeZone));
+    collect(
+        content,
+        NEXT_WEEK_DAY,
+        candidates,
+        RulePriority.NEXT_WEEK_DAY,
+        matcher -> parseNextWeekDay(matcher, baseDate));
     collect(
         content,
         APPROXIMATE_NEXT_WEEK,
         candidates,
         RulePriority.APPROXIMATE_NEXT_WEEK,
         matcher -> approximate(matcher));
+    collect(
+        content,
+        APPROXIMATE_WEEKEND,
+        candidates,
+        RulePriority.APPROXIMATE_WEEKEND,
+        matcher -> approximate(matcher));
+    collect(
+        content,
+        EVENT_RELATIVE_DEADLINE,
+        candidates,
+        RulePriority.EVENT_RELATIVE_DEADLINE,
+        this::unknown);
     collect(
         content,
         APPROXIMATE_NEXT_MONTH,
@@ -221,9 +266,37 @@ public final class KoreanDateParser {
     }
   }
 
-  private ParsedDate parseNextWeekTuesday(Matcher matcher, LocalDate baseDate) {
-    LocalDate monday = baseDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-    LocalDate date = monday.plusWeeks(1).with(TemporalAdjusters.nextOrSame(DayOfWeek.TUESDAY));
+  private ParsedDate parseNextWeekDayTime(Matcher matcher, LocalDate baseDate, ZoneId timeZone) {
+    try {
+      int twelveHour = Integer.parseInt(matcher.group(3));
+      int minute = matcher.group(4) == null ? 0 : Integer.parseInt(matcher.group(4));
+      if (twelveHour < 1 || twelveHour > 12) {
+        return unknown(matcher);
+      }
+      int hour = twelveHour % 12 + ("오후".equals(matcher.group(2)) ? 12 : 0);
+      LocalDateTime localDateTime =
+          LocalDateTime.of(
+              nextWeekDay(baseDate, dayOfWeek(matcher.group(1))), LocalTime.of(hour, minute));
+      List<ZoneOffset> validOffsets = timeZone.getRules().getValidOffsets(localDateTime);
+      if (validOffsets.size() != 1) {
+        return unknown(matcher);
+      }
+      ZonedDateTime interpreted =
+          ZonedDateTime.ofStrict(localDateTime, validOffsets.getFirst(), timeZone);
+      return candidate(
+          matcher,
+          interpreted.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+          DatePrecision.RELATIVE_EXACT,
+          true,
+          0.97,
+          EnumSet.noneOf(AmbiguityReason.class));
+    } catch (DateTimeException | NumberFormatException exception) {
+      return unknown(matcher);
+    }
+  }
+
+  private ParsedDate parseNextWeekDay(Matcher matcher, LocalDate baseDate) {
+    LocalDate date = nextWeekDay(baseDate, dayOfWeek(matcher.group(1)));
     return candidate(
         matcher,
         date.toString(),
@@ -231,6 +304,24 @@ public final class KoreanDateParser {
         false,
         0.96,
         EnumSet.noneOf(AmbiguityReason.class));
+  }
+
+  private LocalDate nextWeekDay(LocalDate baseDate, DayOfWeek dayOfWeek) {
+    LocalDate monday = baseDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+    return monday.plusWeeks(1).with(TemporalAdjusters.nextOrSame(dayOfWeek));
+  }
+
+  private DayOfWeek dayOfWeek(String koreanDay) {
+    return switch (koreanDay) {
+      case "월" -> DayOfWeek.MONDAY;
+      case "화" -> DayOfWeek.TUESDAY;
+      case "수" -> DayOfWeek.WEDNESDAY;
+      case "목" -> DayOfWeek.THURSDAY;
+      case "금" -> DayOfWeek.FRIDAY;
+      case "토" -> DayOfWeek.SATURDAY;
+      case "일" -> DayOfWeek.SUNDAY;
+      default -> throw new DateTimeException("Unsupported Korean weekday");
+    };
   }
 
   private ParsedDate parseYesterday(Matcher matcher, LocalDate baseDate) {
@@ -352,8 +443,15 @@ public final class KoreanDateParser {
             new RulePattern(MONTH_AND_DAY, RulePriority.MONTH_AND_DAY),
             new RulePattern(KOREAN_MONTH_AND_DAY, RulePriority.KOREAN_MONTH_AND_DAY),
             new RulePattern(DAY_ONLY_DEADLINE, RulePriority.DAY_ONLY_DEADLINE),
-            new RulePattern(NEXT_WEEK_TUESDAY, RulePriority.NEXT_WEEK_TUESDAY),
+            new RulePattern(
+                APPROXIMATE_NEXT_WEEK_DAY_TIME, RulePriority.APPROXIMATE_NEXT_WEEK_DAY_TIME),
+            new RulePattern(
+                UNSUPPORTED_NEXT_WEEK_DAY_TIME, RulePriority.UNSUPPORTED_NEXT_WEEK_DAY_TIME),
+            new RulePattern(NEXT_WEEK_DAY_TIME, RulePriority.NEXT_WEEK_DAY_TIME),
+            new RulePattern(NEXT_WEEK_DAY, RulePriority.NEXT_WEEK_DAY),
             new RulePattern(APPROXIMATE_NEXT_WEEK, RulePriority.APPROXIMATE_NEXT_WEEK),
+            new RulePattern(APPROXIMATE_WEEKEND, RulePriority.APPROXIMATE_WEEKEND),
+            new RulePattern(EVENT_RELATIVE_DEADLINE, RulePriority.EVENT_RELATIVE_DEADLINE),
             new RulePattern(APPROXIMATE_NEXT_MONTH, RulePriority.APPROXIMATE_NEXT_MONTH),
             new RulePattern(YESTERDAY, RulePriority.YESTERDAY))) {
       Matcher matcher = rule.pattern().matcher(content);
@@ -371,8 +469,13 @@ public final class KoreanDateParser {
     MONTH_AND_DAY(30),
     KOREAN_MONTH_AND_DAY(40),
     DAY_ONLY_DEADLINE(50),
-    NEXT_WEEK_TUESDAY(60),
+    APPROXIMATE_NEXT_WEEK_DAY_TIME(52),
+    UNSUPPORTED_NEXT_WEEK_DAY_TIME(53),
+    NEXT_WEEK_DAY_TIME(55),
+    NEXT_WEEK_DAY(60),
     APPROXIMATE_NEXT_WEEK(70),
+    APPROXIMATE_WEEKEND(75),
+    EVENT_RELATIVE_DEADLINE(78),
     APPROXIMATE_NEXT_MONTH(80),
     YESTERDAY(90);
 

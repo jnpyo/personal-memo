@@ -327,7 +327,7 @@ Content-Type: application/json
 GET /api/v1/analysis-proposals/{proposalId}
 ```
 
-`schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`, `tagCandidates`, `itemCandidates`, `relationCandidates`, `ambiguityReasons`, `providerMetadata`를 포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag나 task를 생성하지 않는다. 현재 Fake analyzer의 필수 provenance 값은 `fake-v3`, `none`, `none`, `none`, `field-policy-v1`이며 `toolCalls`는 `0`이다.
+`schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`, `tagCandidates`, `itemCandidates`, `relationCandidates`, `ambiguityReasons`, `providerMetadata`를 포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag나 task를 생성하지 않는다. 현재 Fake analyzer의 필수 provenance 값은 `fake-v4`, `none`, `none`, `none`, `field-policy-v1`이며 `toolCalls`는 `0`이다. 추가 metadata의 `deterministicRulesVersion`은 `korean-rules-v2`다.
 
 ### Recover proposals awaiting review
 
@@ -369,7 +369,8 @@ Recovery query는 `REVIEW_REQUIRED`와 `POSTPONED`를 지원한다. `limit` 기�
     "relationCandidates": [],
     "ambiguityReasons": [],
     "providerMetadata": {
-      "analyzerVersion": "fake-v3",
+      "analyzerVersion": "fake-v4",
+      "deterministicRulesVersion": "korean-rules-v2",
       "promptVersion": "none",
       "localModelVersion": "none",
       "embeddingModelVersion": "none",

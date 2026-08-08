@@ -17,6 +17,8 @@ The repository now implements the model-free portion of Milestone 2:
 - `FakeAnalyzer` and a no-network, no-tool, mutation-free `FakeCloudAnalysisGateway`;
 - Draft 2020-12 contract, domain, and owner-reference validation before routing and again after enrichment;
 - server-side reconstruction of field-level routing signals instead of trusting only an analyzer summary;
+- general Korean action/reference/event rules plus all-weekday relative date/time parsing, while
+  approximate weekends and event-relative deadlines remain null-valued review candidates;
 - server-owned analyzer, prompt, local-model, embedding-model, and routing-policy provenance for both `LOCAL` and `HYBRID` runs while every result remains `REVIEW_REQUIRED`;
 - required, bounded proposal metadata and UTF-8 payload limits before anything is persisted;
 - explicit user resolution of `UNKNOWN` types and partial item application.
@@ -151,9 +153,12 @@ top-1/top-2 conflict merely because their scores are close.
 - object/date with no clear action
 - several actions mixed in one memo
 
-The current deterministic thresholds belong to routing policy `field-policy-v1`; changing a
-threshold or structural rule requires a new policy version. Runtime configuration and
-user-specific thresholds remain a later milestone.
+The current deterministic gate thresholds and structured-proposal reconstruction rules belong to
+routing policy `field-policy-v1`; changing a gate threshold, cloud-signal set, or reconstruction
+rule requires a new policy version. Lexical classification, reference extraction, and date parsing
+are separately identified by `fake-v4` and `korean-rules-v2`; changing those inputs does not rename
+an otherwise unchanged gate. Runtime configuration and user-specific thresholds remain a later
+milestone.
 
 The server unions these derivable signals with the analyzer-declared `ambiguityReasons`. Nested
 date reasons must also appear in the proposal summary, and structural omissions such as a new tag,
@@ -274,7 +279,8 @@ The version-1 result should contain fields conceptually equivalent to:
   "relationCandidates": [],
   "ambiguityReasons": [],
   "providerMetadata": {
-    "analyzerVersion": "fake-v3",
+    "analyzerVersion": "fake-v4",
+    "deterministicRulesVersion": "korean-rules-v2",
     "promptVersion": "none",
     "localModelVersion": "none",
     "embeddingModelVersion": "none",
@@ -341,8 +347,12 @@ expected:
 
 Track precision of high-confidence local routing separately from overall accuracy. The primary safety metric is the rate of wrong local decisions that were presented as unambiguous.
 
-The initial `fake-v3` report keeps the regression safety gate green, but the visible challenge split reports
-9 wrong-local cases out of 12, 0.583333 route accuracy, 0.25 top-type accuracy, and 0.25 signal
-recall. The challenge split is report-only at this checkpoint: these measurements are a baseline for improving
-general rules, not a reason to relabel gold data or connect a real LLM. The generated JSON report
-contains case identifiers and aggregate labels only, never fixture or personal memo text.
+The initial `fake-v3` report kept the regression safety gate green but exposed 9 wrong-local cases
+out of 12 in the visible challenge split. `fake-v4` generalizes weekday/time, approximate-date,
+reference, action, event, and multi-intent rules without copying a challenge sentence; the current
+visible challenge report is schema-valid 12/12 with 0 wrong-local, exact routes for all 12 cases,
+correct preferred top-1 types for all 12, and exact signal sets for all 12. This remains a visible
+synthetic challenge, not a blind or
+general Korean accuracy claim, and remains report-only. The generated JSON report contains case
+identifiers and aggregate labels only, never fixture or personal memo text. Exact date values and
+item boundaries are still protected by focused tests rather than scored by this report.

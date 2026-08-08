@@ -48,7 +48,7 @@ publishing raw evaluation text.
 ## Metrics
 
 Metrics are reported separately for regression, the visible challenge (`holdout`) split, and the combined set, keyed by
-`analyzerVersion` and `routingPolicyVersion`.
+`analyzerVersion`, `deterministicRulesVersion`, and `routingPolicyVersion`.
 
 - **Schema-valid rate**: proposals accepted by the version-1 proposal JSON Schema.
 - **Route confusion**: expected/actual `LOCAL_REVIEW` and `CLOUD_ENRICH` counts and accuracy.
@@ -60,6 +60,27 @@ Metrics are reported separately for regression, the visible challenge (`holdout`
 
 This version does not yet score title quality, exact date values, item boundaries, relations, or tag
 ranking. Those labels must be added before their metrics are used for a model decision.
+
+## Current observed checkpoint
+
+The first `fake-v3` challenge baseline reported 9 wrong-local cases, route accuracy `0.583333`,
+preferred-type accuracy `0.25`, and signal recall `0.25`. `fake-v4` / `korean-rules-v2` replaces the
+missing fallback behavior with general action, reference, event, weekday/time, and approximate-date
+rules. It is protected by different-wording unit cases, negative substring/date cases, and a source
+check that rejects copied full challenge sentences or three-token challenge branches.
+
+The current deterministic report is:
+
+- regression: schema-valid 12/12, wrong-local 0, route exact 12/12, preferred top-1 type
+  correct 12/12, and signal-set exact 12/12;
+- visible challenge: schema-valid 12/12, wrong-local 0, route exact 12/12, preferred top-1
+  type correct 12/12, and signal-set exact 12/12.
+
+These values only show that the documented synthetic cases are now covered without known phrase
+copies. They do not estimate general Korean accuracy, and the challenge split remains visible and
+report-only. In particular, exact relative-date values and item boundaries are not part of these
+aggregate metrics; focused parser/analyzer tests cover the current rules until the fixture contract
+gains complete date and item gold.
 
 ## Automated gates
 
