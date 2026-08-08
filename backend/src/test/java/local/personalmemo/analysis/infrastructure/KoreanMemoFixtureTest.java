@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -22,9 +21,6 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 class KoreanMemoFixtureTest {
-  private static final Instant BASE_INSTANT = Instant.parse("2026-08-05T02:00:00Z");
-  private static final String TIME_ZONE = "Asia/Seoul";
-
   private final ObjectMapper json = new ObjectMapper();
   private final FakeAnalyzer analyzer = new FakeAnalyzer(json);
   private final DeterministicAmbiguityGate ambiguityGate = new DeterministicAmbiguityGate();
@@ -40,10 +36,16 @@ class KoreanMemoFixtureTest {
       assertThat(fixture.path("id").asText()).isNotBlank();
       assertThat(ids.add(fixture.path("id").asText())).isTrue();
       assertThat(fixture.path("content").asText()).isNotBlank();
-      assertThat(fixture.path("expectedRoute").asText())
-          .isIn("LOCAL_REVIEW", "CLOUD_ENRICH", "USER_INPUT_NEEDED", "PENDING_OFFLINE");
+      assertThat(fixture.path("datasetVersion").asText()).isEqualTo("1");
+      assertThat(fixture.path("split").asText()).isEqualTo("REGRESSION");
+      assertThat(fixture.path("baseInstant").asText()).isNotBlank();
+      assertThat(fixture.path("timeZone").asText()).isNotBlank();
+      assertThat(fixture.path("expectedRoute").asText()).isIn("LOCAL_REVIEW", "CLOUD_ENRICH");
+      assertThat(fixture.path("analyzerExpectedRoute").asText())
+          .isIn("LOCAL_REVIEW", "CLOUD_ENRICH");
       assertThat(fixture.path("expectedTypes").isArray()).isTrue();
       assertThat(fixture.path("expectedSignals").isArray()).isTrue();
+      assertThat(fixture.path("analyzerExpectedSignals").isArray()).isTrue();
     }
   }
 
@@ -58,24 +60,25 @@ class KoreanMemoFixtureTest {
   private void verifyFixture(JsonNode fixture) {
     UUID memoId = UUID.randomUUID();
     String content = fixture.path("content").asText();
-    JsonNode proposal = analyzer.analyze(memoId, 3, content, BASE_INSTANT, TIME_ZONE);
+    JsonNode proposal =
+        analyzer.analyze(
+            memoId,
+            3,
+            content,
+            java.time.Instant.parse(fixture.path("baseInstant").asText()),
+            fixture.path("timeZone").asText());
 
     validator.validate(proposal, memoId, 3, content.length());
-    boolean hasOwnerNeutralTagCandidate = hasOwnerNeutralTagCandidate(proposal);
-    String expectedAnalyzerRoute =
-        hasOwnerNeutralTagCandidate ? "CLOUD_ENRICH" : fixture.path("expectedRoute").asText();
+    String expectedAnalyzerRoute = fixture.path("analyzerExpectedRoute").asText();
     assertThat(proposal.at("/providerMetadata/route").asText()).isEqualTo(expectedAnalyzerRoute);
     assertThat(ambiguityGate.route(ambiguityGate.routingSignals(proposal)).name())
         .isEqualTo(expectedAnalyzerRoute);
     assertThat(textValues(proposal.path("typeCandidates"), "value"))
         .containsExactlyElementsOf(textValues(fixture.path("expectedTypes"), null));
 
-    List<String> actualSignals = textValues(proposal.path("ambiguityReasons"), null);
-    List<String> expectedSignals =
-        new ArrayList<>(textValues(fixture.path("expectedSignals"), null));
-    if (hasOwnerNeutralTagCandidate && !expectedSignals.contains("NEW_TOPIC")) {
-      expectedSignals.add("NEW_TOPIC");
-    }
+    List<String> actualSignals =
+        ambiguityGate.routingSignals(proposal).stream().map(Enum::name).toList();
+    List<String> expectedSignals = textValues(fixture.path("analyzerExpectedSignals"), null);
     assertThat(actualSignals).containsExactlyInAnyOrderElementsOf(expectedSignals);
     assertThat(proposal.path("itemCandidates")).hasSizeLessThanOrEqualTo(3);
 
@@ -136,15 +139,6 @@ class KoreanMemoFixtureTest {
     assertThat(tag.path("canonicalName").asText()).isEqualTo("운영체제");
     assertThat(tag.path("matchedAlias").asText()).isEqualTo("OS");
     assertThat(tag.path("isNewProposal").asBoolean()).isTrue();
-  }
-
-  private boolean hasOwnerNeutralTagCandidate(JsonNode proposal) {
-    for (JsonNode tag : proposal.path("tagCandidates")) {
-      if (tag.path("existingTagId").isNull() && tag.path("isNewProposal").asBoolean()) {
-        return true;
-      }
-    }
-    return false;
   }
 
   private void assertNoTaskItems(JsonNode proposal) {

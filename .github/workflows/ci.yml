@@ -116,6 +116,13 @@ jobs:
         working-directory: backend
         env:
           RUN_POSTGRES_INTEGRATION_TESTS: 'true'
+      - name: Upload deterministic evaluation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: deterministic-evaluation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: backend/target/evaluation/deterministic-baseline.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload backend test reports
         if: failure()
         uses: actions/upload-artifact@v4

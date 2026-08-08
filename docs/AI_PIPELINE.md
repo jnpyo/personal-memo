@@ -11,7 +11,8 @@ The first implementation must support a mock analyzer. Real model selection come
 The repository now implements the model-free portion of Milestone 2:
 
 - a revision-context Korean date parser with explicit `UNKNOWN` fallback;
-- a versioned 12-case Korean memo fixture suite;
+- versioned 12-case regression and 12-case visible synthetic challenge Korean memo suites, a fixture contract,
+  and a raw-content-free deterministic baseline report;
 - an enum-based ambiguity gate that routes to `LOCAL_REVIEW` or `CLOUD_ENRICH`;
 - `FakeAnalyzer` and a no-network, no-tool, mutation-free `FakeCloudAnalysisGateway`;
 - Draft 2020-12 contract, domain, and owner-reference validation before routing and again after enrichment;
@@ -327,7 +328,9 @@ The algorithm discovers cluster candidates; a cloud model may propose a human-re
 
 ## Evaluation
 
-Create a versioned dataset of rough Korean notes with expected:
+The executable baseline and provider-entry gate are specified in [EVALUATION.md](EVALUATION.md).
+The current version has 12 regression cases and a 12-case visible synthetic challenge split with
+expected:
 
 - type candidates
 - explicit/ambiguous date interpretation
@@ -337,3 +340,9 @@ Create a versioned dataset of rough Korean notes with expected:
 - escalation decision
 
 Track precision of high-confidence local routing separately from overall accuracy. The primary safety metric is the rate of wrong local decisions that were presented as unambiguous.
+
+The initial `fake-v3` report keeps the regression safety gate green, but the visible challenge split reports
+9 wrong-local cases out of 12, 0.583333 route accuracy, 0.25 top-type accuracy, and 0.25 signal
+recall. The challenge split is report-only at this checkpoint: these measurements are a baseline for improving
+general rules, not a reason to relabel gold data or connect a real LLM. The generated JSON report
+contains case identifiers and aggregate labels only, never fixture or personal memo text.

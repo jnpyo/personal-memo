@@ -3,8 +3,10 @@ package local.personalmemo.integrity;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -146,6 +148,61 @@ class IdempotencyIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void concurrentApplyWithTheSameKeyAndBodyReturnsOneApplication() throws Exception {
+    UUID proposalId = createProposal("concurrent-apply-same-key");
+
+    List<org.springframework.test.web.servlet.MvcResult> results =
+        runConcurrently(
+            () -> applyProposal(proposalId, "concurrent-apply-same-key", 1, "동시 적용 한 번", null),
+            () -> applyProposal(proposalId, "concurrent-apply-same-key", 1, "동시 적용 한 번", null));
+
+    assertThat(results)
+        .allSatisfy(result -> assertThat(result.getResponse().getStatus()).isEqualTo(200));
+    assertThat(response(results.get(1)).path("applicationId").asText())
+        .isEqualTo(response(results.get(0)).path("applicationId").asText());
+    assertSingleAppliedResourceSet("concurrent-apply-same-key");
+  }
+
+  @Test
+  void concurrentApplyWithTheSameKeyAndDifferentBodiesRejectsTheLoser() throws Exception {
+    UUID proposalId = createProposal("concurrent-apply-key-reuse");
+
+    List<org.springframework.test.web.servlet.MvcResult> results =
+        runConcurrently(
+            () -> applyProposal(proposalId, "concurrent-apply-key-reuse", 1, "동시 적용 첫 본문", null),
+            () -> applyProposal(proposalId, "concurrent-apply-key-reuse", 1, "동시 적용 다른 본문", null));
+
+    assertOneSuccessAndOneConflict(results, "IDEMPOTENCY_KEY_REUSED");
+    assertSingleAppliedResourceSet("concurrent-apply-key-reuse");
+  }
+
+  @Test
+  void concurrentApplyWithDifferentKeysCannotApplyOneProposalTwice() throws Exception {
+    UUID proposalId = createProposal("concurrent-apply-different-keys");
+
+    List<org.springframework.test.web.servlet.MvcResult> results =
+        runConcurrently(
+            () -> applyProposal(proposalId, "concurrent-apply-first-key", 1, "동시 적용 제안", null),
+            () -> applyProposal(proposalId, "concurrent-apply-second-key", 1, "동시 적용 제안", null));
+
+    assertOneSuccessAndOneConflict(results, "PROPOSAL_NOT_APPLICABLE");
+    assertThat(
+            db.sql(
+                    "select count(*) from idempotency_records "
+                        + "where operation='ANALYSIS_APPLY' and idempotency_key in (:first,:second)")
+                .param("first", "concurrent-apply-first-key")
+                .param("second", "concurrent-apply-second-key")
+                .query(Long.class)
+                .single())
+        .isEqualTo(1);
+    assertThat(db.sql("select count(*) from analysis_applications").query(Long.class).single())
+        .isEqualTo(1);
+    assertThat(db.sql("select count(*) from memo_items").query(Long.class).single()).isEqualTo(1);
+    assertThat(db.sql("select count(*) from task_details").query(Long.class).single()).isEqualTo(1);
+    assertThat(db.sql("select count(*) from item_tags").query(Long.class).single()).isEqualTo(1);
+  }
+
+  @Test
   void duplicateUndoReturnsOriginalResultWithoutTouchingRawMemo() throws Exception {
     UUID memoId = UUID.randomUUID();
     createMemo(memoId, "create-for-undo-idempotency", "11.25 OS과제 제출");
@@ -175,6 +232,69 @@ class IdempotencyIntegrationTest extends PostgresIntegrationTestSupport {
                 .query(Long.class)
                 .single())
         .isEqualTo(1);
+  }
+
+  private UUID createProposal(String keyPrefix) throws Exception {
+    UUID memoId = UUID.randomUUID();
+    createMemo(memoId, keyPrefix + "-create", "11.25 OS과제 제출");
+    return UUID.fromString(
+        response(startAnalysis(memoId, keyPrefix + "-start", 1)).path("proposalId").asText());
+  }
+
+  private List<org.springframework.test.web.servlet.MvcResult> runConcurrently(
+      Callable<org.springframework.test.web.servlet.MvcResult> firstCall,
+      Callable<org.springframework.test.web.servlet.MvcResult> secondCall)
+      throws Exception {
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch go = new CountDownLatch(1);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var first =
+          executor.submit(
+              () -> {
+                ready.countDown();
+                go.await();
+                return firstCall.call();
+              });
+      var second =
+          executor.submit(
+              () -> {
+                ready.countDown();
+                go.await();
+                return secondCall.call();
+              });
+      assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+      go.countDown();
+      return List.of(first.get(15, TimeUnit.SECONDS), second.get(15, TimeUnit.SECONDS));
+    }
+  }
+
+  private void assertOneSuccessAndOneConflict(
+      List<org.springframework.test.web.servlet.MvcResult> results, String expectedConflictCode)
+      throws Exception {
+    assertThat(results.stream().map(result -> result.getResponse().getStatus()).sorted().toList())
+        .containsExactly(200, 409);
+    var conflict =
+        results.stream()
+            .filter(result -> result.getResponse().getStatus() == 409)
+            .findFirst()
+            .orElseThrow();
+    assertThat(response(conflict).path("code").asText()).isEqualTo(expectedConflictCode);
+  }
+
+  private void assertSingleAppliedResourceSet(String key) {
+    assertThat(
+            db.sql(
+                    "select count(*) from idempotency_records "
+                        + "where operation='ANALYSIS_APPLY' and idempotency_key=:key")
+                .param("key", key)
+                .query(Long.class)
+                .single())
+        .isEqualTo(1);
+    assertThat(db.sql("select count(*) from analysis_applications").query(Long.class).single())
+        .isEqualTo(1);
+    assertThat(db.sql("select count(*) from memo_items").query(Long.class).single()).isEqualTo(1);
+    assertThat(db.sql("select count(*) from task_details").query(Long.class).single()).isEqualTo(1);
+    assertThat(db.sql("select count(*) from item_tags").query(Long.class).single()).isEqualTo(1);
   }
 
   private void assertIdempotencyConflict(org.springframework.test.web.servlet.MvcResult result)

@@ -71,7 +71,8 @@
 
 - local 가입·로그인, CSRF, session fixation 방지, owner 격리, 명시적 Google 연결/해제를 검증하는 통합 테스트. Google 경로는 mocked OIDC claim으로 검증하며 실제 provider credential이나 Google network를 사용하지 않음
 - 날짜 처리, DST·윤일·잘못된 시각, 모호성 gate, 태그 정규화, 제안 편집, 그래프 변환, 재시도 identity 단위 테스트
-- 12개 versioned 한국어 memo fixture와 prompt-injection/no-tool 경계 테스트
+- 12개 regression + 12개 visible synthetic challenge 한국어 memo fixture, fixture JSON Schema, content-free
+  평가 report와 prompt-injection/no-tool 경계 테스트
 - Testcontainers PostgreSQL + MockMvc 통합 테스트
 - primary flow, 중복 요청, owner 격리, stale revision, apply rollback, memo lifecycle/recovery, task 상태/overdue, undo 원문 보존 검증
 - Playwright의 모바일 viewport에서 보류·새로고침·승인·그래프·되돌리기와 설치 가능한 오프라인 app shell 검증
@@ -289,7 +290,7 @@ docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.p
 - 자동 태그 병합·분리, 의미 검색, 노드 압축
 - Neo4j, Kafka, Redis, 별도 AI 마이크로서비스
 
-local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 적용되며 잠금 중 추가 시도로 만료가 연장되지 않습니다. 만료 뒤 정상 로그인하면 실패 기록을 초기화합니다. 다음 단계는 공개 배포 전 email 검증·비밀번호 재설정·IP와 edge의 abuse 방어 같은 account hardening과, owner-scoped tag/alias 후보 조회 및 Fake cloud의 field-level 요청·실패 상태(`USER_INPUT_NEEDED`, `PENDING_OFFLINE`)를 더 구체화하는 것입니다. 실제 AI provider와 로컬 모델 연결은 현재 기본 결정에 따라 보류하며, 별도 승인과 평가·비용·개인정보 경계가 준비되기 전에는 도입하지 않습니다.
+local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 적용되며 잠금 중 추가 시도로 만료가 연장되지 않습니다. 만료 뒤 정상 로그인하면 실패 기록을 초기화합니다. 결정론적 평가 기준선은 현재 regression wrong-local 0을 보장하지만 visible challenge split에서는 12건 중 9건을 잘못된 `LOCAL_REVIEW`로 분류했습니다. 이 공개 합성 set은 blind 정확도 추정치가 아닙니다. 따라서 다음 분석 단계는 gold를 바꾸는 것이 아니라 일반화된 규칙과 owner-scoped review-outcome 집계를 보완한 뒤, Fake cloud의 field-level 실패 상태와 async 수명주기를 구현하는 것입니다. 실제 AI provider와 로컬 모델 연결은 현재 기본 결정에 따라 보류하며, 별도 승인과 평가·비용·개인정보 경계가 준비되기 전에는 도입하지 않습니다.
 
 ## 문서
 
@@ -299,6 +300,7 @@ local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 �
 - [OpenAPI 3.1 명세](docs/openapi.yaml)
 - [현재 데이터 모델](docs/DATA_MODEL.md)
 - [AI 안전 경계](docs/AI_PIPELINE.md)
+- [분석 평가 기준선과 실제 LLM 진입 조건](docs/EVALUATION.md)
 - [배포 및 운영 가이드](docs/DEPLOYMENT.md)
 - [마일스톤](docs/ROADMAP.md)
 - [ADR](docs/adr)

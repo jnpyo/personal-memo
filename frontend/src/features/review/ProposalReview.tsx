@@ -134,7 +134,7 @@ export function ProposalReview({
   const canApply = isValid && !hasPendingTag;
   const [retryOperation, retryProposalId] = retryScope?.split(':') ?? [];
   const retryMatchesReview = retryProposalId === review.proposalId;
-  const canShowRetry = retryMatchesReview && (
+  const canShowRetry = !busy && retryMatchesReview && (
     (retryOperation === 'apply' && canApply && (step === 'CONFIRM' || step === 'EDIT')) ||
     (retryOperation === 'postpone' && !hasPendingTag && step !== 'REJECT_CONFIRM') ||
     (retryOperation === 'reject' && step === 'REJECT_CONFIRM')

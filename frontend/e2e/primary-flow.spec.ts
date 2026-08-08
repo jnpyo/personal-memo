@@ -429,6 +429,16 @@ test('keeps an apply failure and its retry action inside the proposal popup', as
 }, testInfo) => {
   const marker = `apply-retry-${Date.now()}-${testInfo.retry}`;
   const proposedTitle = `OS과제 제출 E2E ${marker}`;
+  const applyAttempts: Array<{ idempotencyKey: string | undefined; body: string | null }> = [];
+
+  page.on('request', (request) => {
+    if (/\/api\/v1\/analysis-proposals\/[^/]+\/apply$/.test(new URL(request.url()).pathname)) {
+      applyAttempts.push({
+        idempotencyKey: request.headers()['idempotency-key'],
+        body: request.postData(),
+      });
+    }
+  });
 
   await registerIsolatedUser(page, testInfo);
   await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
@@ -461,6 +471,41 @@ test('keeps an apply failure and its retry action inside the proposal popup', as
   await retry.click();
   await expect(dialog).toHaveCount(0);
   await expect(page.locator('.task-row').filter({ hasText: proposedTitle })).toBeVisible();
+  expect(applyAttempts).toHaveLength(2);
+  expect(applyAttempts[0].idempotencyKey).toBeTruthy();
+  expect(applyAttempts[1]).toEqual(applyAttempts[0]);
+});
+
+test('discards a failed apply retry when the proposal is postponed', async ({ page }, testInfo) => {
+  const marker = `apply-postpone-${Date.now()}-${testInfo.retry}`;
+  const proposedTitle = `OS과제 제출 E2E ${marker}`;
+  let applyRequests = 0;
+
+  await registerIsolatedUser(page, testInfo);
+  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
+    .fill(`11.25 ${proposedTitle}`);
+  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+
+  await page.route('**/api/v1/analysis-proposals/*/apply', async (route) => {
+    applyRequests += 1;
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 'INTERNAL_ERROR', message: 'simulated apply failure' }),
+    });
+  });
+
+  const dialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
+  await page.getByRole('button', { name: '예, 이대로 적용' }).click();
+  await expect(dialog.getByRole('button', { name: '승인 다시 시도' })).toBeVisible();
+
+  await dialog.getByRole('button', { name: '나중에 검토' }).click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '승인 다시 시도' })).toHaveCount(0);
+  await expect(page.getByText('제안을 보류했습니다. 승인 전이므로 생성된 항목은 없습니다.')).toBeVisible();
+  await expect(page.locator('.task-row').filter({ hasText: proposedTitle })).toHaveCount(0);
+  expect(applyRequests).toBe(1);
 });
 
 test('recovers from a stale proposal without offering the same apply retry', async ({

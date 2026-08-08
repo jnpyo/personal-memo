@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://personal-memo.local/schemas/korean-memo-evaluation-case-v1.json",
+  "title": "KoreanMemoEvaluationCaseV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "datasetVersion",
+    "split",
+    "content",
+    "baseInstant",
+    "timeZone",
+    "expectedRoute",
+    "expectedTypes",
+    "expectedSignals",
+    "notes"
+  ],
+  "dependentRequired": {
+    "analyzerExpectedRoute": ["analyzerExpectedSignals"],
+    "analyzerExpectedSignals": ["analyzerExpectedRoute"]
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "split": { "const": "REGRESSION" } },
+        "required": ["split"]
+      },
+      "then": {
+        "required": ["analyzerExpectedRoute", "analyzerExpectedSignals"]
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            { "required": ["analyzerExpectedRoute"] },
+            { "required": ["analyzerExpectedSignals"] }
+          ]
+        }
+      }
+    }
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "datasetVersion": {
+      "const": "1"
+    },
+    "split": {
+      "enum": ["REGRESSION", "HOLDOUT"]
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "baseInstant": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "timeZone": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "expectedRoute": {
+      "$ref": "#/$defs/route"
+    },
+    "analyzerExpectedRoute": {
+      "$ref": "#/$defs/route"
+    },
+    "expectedTypes": {
+      "$ref": "#/$defs/types"
+    },
+    "expectedSignals": {
+      "$ref": "#/$defs/signals"
+    },
+    "analyzerExpectedSignals": {
+      "$ref": "#/$defs/signals"
+    },
+    "notes": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    }
+  },
+  "$defs": {
+    "route": {
+      "enum": ["LOCAL_REVIEW", "CLOUD_ENRICH"]
+    },
+    "types": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["TASK", "EVENT", "INFORMATION", "IDEA", "RECORD", "UNKNOWN"]
+      }
+    },
+    "signals": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "LOW_TYPE_MARGIN",
+          "LOW_TAG_SIMILARITY",
+          "TAG_CONFLICT",
+          "NEW_TOPIC",
+          "MISSING_YEAR",
+          "MISSING_TIME",
+          "IMPRECISE_DATE",
+          "CONFLICTING_DATES",
+          "UNRESOLVED_REFERENCE",
+          "MISSING_ACTION",
+          "MISSING_OBJECT",
+          "MULTI_INTENT",
+          "CANDIDATE_LIMIT_EXCEEDED",
+          "LOCAL_CLOUD_CONFLICT"
+        ]
+      }
+    }
+  }
+}

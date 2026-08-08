@@ -1,8 +1,8 @@
 # Repository instructions
 
 These instructions replace earlier repository guidance. Read `CODEX_HANDOFF.md`, every document under
-`docs/`, `contracts/analysis-proposal.schema.json`, and `fixtures/korean-memo-cases.json` before a
-new milestone or architectural change.
+`docs/`, every JSON Schema under `contracts/`, and every JSON evaluation fixture under `fixtures/`
+before a new milestone or architectural change.
 
 ## Current product boundary
 

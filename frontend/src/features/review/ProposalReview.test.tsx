@@ -43,17 +43,23 @@ const taskProposal: Proposal = {
   providerMetadata: {},
 };
 
-function renderProposal(proposal: Proposal): string {
+function renderProposal(
+  proposal: Proposal,
+  options: { busy?: boolean; retryScope?: string } = {},
+): string {
   return renderToStaticMarkup(
     <ProposalReview
       review={createReviewDraft('proposal-1', proposal)}
-      busy={false}
+      busy={options.busy ?? false}
       onChange={vi.fn()}
       onApply={vi.fn()}
       onPostpone={vi.fn()}
       onReject={vi.fn()}
       onTransientDirtyChange={vi.fn()}
-      feedback={null}
+      feedback={options.retryScope ? { kind: 'error', message: '적용 실패' } : null}
+      retryScope={options.retryScope}
+      retryLabel="승인 다시 시도"
+      onRetry={vi.fn()}
       onDismissFeedback={vi.fn()}
     />,
   );
@@ -95,5 +101,15 @@ describe('proposal review dialog', () => {
     expect(markup).toContain('유형은 맞아요');
     expect(markup).not.toContain('AI 추천으로 돌아가기');
     expect(markup).not.toContain('예, 이대로 적용');
+  });
+
+  it('does not expose a retry while another proposal operation is in flight', () => {
+    const markup = renderProposal(taskProposal, {
+      busy: true,
+      retryScope: 'apply:proposal-1',
+    });
+
+    expect(markup).toContain('적용 실패');
+    expect(markup).not.toContain('승인 다시 시도');
   });
 });

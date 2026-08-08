@@ -157,16 +157,19 @@ export function useMemoWorkspace(ownerId: string) {
     setRetryAction((current) => (!scope || current?.scope === scope ? null : current));
   }
 
-  function clearProposalRetry(proposalId: string) {
+  function clearProposalRetries(proposalId: string, keepScope?: string) {
+    const proposalScopes = [
+      `apply:${proposalId}`,
+      `postpone:${proposalId}`,
+      `reject:${proposalId}`,
+    ];
     setRetryAction((current) => {
       if (!current) return null;
-      const proposalScopes = [
-        `apply:${proposalId}`,
-        `postpone:${proposalId}`,
-        `reject:${proposalId}`,
-      ];
-      return proposalScopes.includes(current.scope) ? null : current;
+      return proposalScopes.includes(current.scope) && current.scope !== keepScope ? null : current;
     });
+    proposalScopes
+      .filter((scope) => scope !== keepScope)
+      .forEach((scope) => retryIdentities.current.clear(scope));
   }
 
   function fail(error: unknown, scope: string, label: string, retry: () => void) {
@@ -261,11 +264,12 @@ export function useMemoWorkspace(ownerId: string) {
   function changeReview(nextReview: ReviewDraft) {
     setReview(nextReview);
     setHasUnsavedReview(true);
-    clearProposalRetry(nextReview.proposalId);
+    clearProposalRetries(nextReview.proposalId);
   }
 
   async function applyReview(snapshot: ReviewDraft) {
     const scope = `apply:${snapshot.proposalId}`;
+    clearProposalRetries(snapshot.proposalId, scope);
     const body = buildApplyRequest(snapshot, timeZone.current);
     const fingerprint = JSON.stringify(body);
     const idempotencyKey = retryIdentities.current.keyFor(scope, fingerprint);
@@ -279,17 +283,15 @@ export function useMemoWorkspace(ownerId: string) {
       setReview(null);
       setHasUnsavedReview(false);
       setContent('');
-      clearRetry(scope);
+      clearProposalRetries(snapshot.proposalId);
       setFeedback({ kind: 'success', message: '승인한 태그와 할 일을 생성했습니다.' });
       await Promise.all([refreshWorkspace(), refreshMemos(), refreshRecovery()]);
-      retryIdentities.current.clear(scope);
     } catch (error) {
       if (
         error instanceof ApiError &&
         (error.code === 'STALE_MEMO_REVISION' || error.status === 409)
       ) {
-        clearRetry(scope);
-        retryIdentities.current.clear(scope);
+        clearProposalRetries(snapshot.proposalId);
         setFeedback({ kind: 'error', message: errorMessage(error) });
         await Promise.all([refreshMemos(), refreshRecovery()]);
       } else {
@@ -308,6 +310,7 @@ export function useMemoWorkspace(ownerId: string) {
     if (!review) return;
     const snapshot = review;
     const scope = `postpone:${snapshot.proposalId}`;
+    clearProposalRetries(snapshot.proposalId, scope);
     const idempotencyKey = retryIdentities.current.keyFor(scope, snapshot.proposalId);
     setBusyAction(scope);
     clearRetry(scope);
@@ -316,12 +319,12 @@ export function useMemoWorkspace(ownerId: string) {
       await api.postponeProposal(snapshot.proposalId, idempotencyKey);
       setReview(null);
       setHasUnsavedReview(false);
+      clearProposalRetries(snapshot.proposalId);
       setFeedback({
         kind: 'info',
         message: '제안을 보류했습니다. 승인 전이므로 생성된 항목은 없습니다.',
       });
       await Promise.all([refreshMemos(), refreshRecovery()]);
-      retryIdentities.current.clear(scope);
     } catch (error) {
       fail(error, scope, '보류 다시 시도', () => void postponeCurrentReview());
     } finally {
@@ -333,6 +336,7 @@ export function useMemoWorkspace(ownerId: string) {
     if (!review) return;
     const snapshot = review;
     const scope = `reject:${snapshot.proposalId}`;
+    clearProposalRetries(snapshot.proposalId, scope);
     const idempotencyKey = retryIdentities.current.keyFor(scope, snapshot.proposalId);
     setBusyAction(scope);
     clearRetry(scope);
@@ -341,12 +345,12 @@ export function useMemoWorkspace(ownerId: string) {
       await api.rejectProposal(snapshot.proposalId, idempotencyKey);
       setReview(null);
       setHasUnsavedReview(false);
+      clearProposalRetries(snapshot.proposalId);
       setFeedback({
         kind: 'info',
         message: '제안을 거절했습니다. 원본 메모는 그대로 보존됩니다.',
       });
       await Promise.all([refreshMemos(), refreshRecovery()]);
-      retryIdentities.current.clear(scope);
     } catch (error) {
       fail(error, scope, '거절 다시 시도', () => void rejectCurrentReview());
     } finally {
