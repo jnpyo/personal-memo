@@ -70,6 +70,7 @@ public class AnalysisApplicationService {
     ProposalRun proposal = findProposalRun(proposalId, true);
     requireSameProposalIdentity(observedProposal, proposal);
     ensureApplicable(proposal, memo, selection.expectedMemoRevision());
+    rejectUnsupportedRelationCandidates(proposal);
 
     UUID applicationId = UUID.randomUUID();
     Timestamp now = Timestamp.from(Instant.now());
@@ -466,7 +467,12 @@ public class AnalysisApplicationService {
             select r.id as run_id,
                    r.memo_id,
                    r.memo_revision,
-                   r.status
+                   r.status,
+                   case
+                     when jsonb_typeof(p.proposal_json -> 'relationCandidates') = 'array'
+                       then jsonb_array_length(p.proposal_json -> 'relationCandidates') > 0
+                     else true
+                   end as has_relation_candidates
               from analysis_proposals p
               join analysis_runs r
                 on r.id = p.analysis_run_id
@@ -485,7 +491,8 @@ public class AnalysisApplicationService {
   private void requireSameProposalIdentity(ProposalRun observed, ProposalRun locked) {
     if (!observed.runId().equals(locked.runId())
         || !observed.memoId().equals(locked.memoId())
-        || observed.memoRevision() != locked.memoRevision()) {
+        || observed.memoRevision() != locked.memoRevision()
+        || observed.hasRelationCandidates() != locked.hasRelationCandidates()) {
       throw DomainException.conflict(
           "PROPOSAL_CHANGED", "The analysis proposal changed while it was being applied.");
     }
@@ -496,7 +503,8 @@ public class AnalysisApplicationService {
         resultSet.getObject("run_id", UUID.class),
         resultSet.getObject("memo_id", UUID.class),
         resultSet.getInt("memo_revision"),
-        resultSet.getString("status"));
+        resultSet.getString("status"),
+        resultSet.getBoolean("has_relation_candidates"));
   }
 
   private ApplicationRecord findApplicationForUpdate(UUID applicationId) {
@@ -550,6 +558,14 @@ public class AnalysisApplicationService {
     }
   }
 
+  private void rejectUnsupportedRelationCandidates(ProposalRun proposal) {
+    if (proposal.hasRelationCandidates()) {
+      throw DomainException.conflict(
+          "PROPOSAL_RELATIONS_UNSUPPORTED",
+          "Relation candidates require explicit relation selection, which is not supported yet.");
+    }
+  }
+
   private String write(Object value) {
     try {
       return json.writeValueAsString(value);
@@ -562,7 +578,8 @@ public class AnalysisApplicationService {
 
   private record UndoRequest(UUID applicationId) {}
 
-  private record ProposalRun(UUID runId, UUID memoId, int memoRevision, String status) {}
+  private record ProposalRun(
+      UUID runId, UUID memoId, int memoRevision, String status, boolean hasRelationCandidates) {}
 
   private record ApplicationRecord(
       UUID id, String status, UUID memoId, int memoRevision, UUID runId) {}

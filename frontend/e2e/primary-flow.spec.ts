@@ -417,11 +417,39 @@ test('applies the complete AI recommendation only after an explicit yes', async 
   await expect(page.getByLabel('대표 제목')).toHaveCount(0);
   await expect(page.locator('.task-row').filter({ hasText: proposedTitle })).toHaveCount(0);
 
-  await page.getByRole('button', { name: '예, 이대로 적용' }).click();
+  let releaseOutcomeRefresh = () => {};
+  let outcomeRefreshStarted = false;
+  const heldOutcomeRefresh = new Promise<void>((resolve) => {
+    releaseOutcomeRefresh = resolve;
+  });
+  await page.route('**/api/v1/analysis-review-outcomes/summary?days=14', async (route) => {
+    outcomeRefreshStarted = true;
+    await heldOutcomeRefresh;
+    await route.continue();
+  });
+
+  try {
+    await page.getByRole('button', { name: '예, 이대로 적용' }).click();
+
+    await expect.poll(() => outcomeRefreshStarted).toBe(true);
+    await expect(page.getByRole('button', { name: '마지막 적용 되돌리기' })).toBeEnabled({
+      timeout: 5_000,
+    });
+  } finally {
+    releaseOutcomeRefresh();
+  }
 
   await expect(dialog).toHaveCount(0);
   await expect(page.locator('.task-row').filter({ hasText: proposedTitle })).toBeVisible();
   await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
+  const reviewOutcomes = page.locator('.review-outcome-section');
+  await expect(reviewOutcomes).toContainText('AI의 정답률이나 정확도를 뜻하지');
+  await expect(
+    reviewOutcomes
+      .locator('.review-outcome-metric')
+      .filter({ hasText: '제안 그대로 적용' })
+      .locator('dd'),
+  ).toHaveText('1');
 });
 
 test('keeps an apply failure and its retry action inside the proposal popup', async ({
@@ -578,6 +606,9 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
   const task = page.locator('.task-row').filter({ hasText: approvedTitle });
   await expect(task).toBeVisible();
   await expect(task).toContainText('2026. 11. 26.');
+  await expect(
+    page.locator('.review-outcome-metric').filter({ hasText: '수정 후 적용' }).locator('dd'),
+  ).toHaveText('1');
   const graphNode = page.locator('.graph-node__content').filter({ hasText: approvedTitle });
   await graphNode.scrollIntoViewIfNeeded();
   await expect(graphNode).toBeVisible();
@@ -589,6 +620,9 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
 
   await expect(task).toHaveCount(0);
   await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
+  await expect(
+    page.locator('.review-outcome-metric').filter({ hasText: '되돌림' }).locator('dd'),
+  ).toHaveText('1');
 });
 
 test('UNKNOWN analysis requires an explicit type and manually confirmed item', async ({ page }, testInfo) => {

@@ -595,6 +595,16 @@ class AuthenticationIntegrationTest {
     assertThat(blockedRead.getResponse().getStatus()).isEqualTo(409);
     assertThat(body(blockedRead).path("code").asText()).isEqualTo("SESSION_OWNER_CHANGED");
 
+    MvcResult blockedReviewOutcomeRead =
+        mvc.perform(
+                get("/api/v1/analysis-review-outcomes/summary")
+                    .cookie(secondSession)
+                    .header(EXPECTED_OWNER_HEADER, firstOwnerId))
+            .andReturn();
+    assertThat(blockedReviewOutcomeRead.getResponse().getStatus()).isEqualTo(409);
+    assertThat(body(blockedReviewOutcomeRead).path("code").asText())
+        .isEqualTo("SESSION_OWNER_CHANGED");
+
     UUID memoId = UUID.randomUUID();
     String idempotencyKey = "cross-account-create-" + memoId;
     MvcResult blockedWrite =

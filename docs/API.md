@@ -52,7 +52,7 @@ owner-scoped API는 선택적인 `X-Expected-Owner-Id` header를 지원한다. �
 | 영역 | 경로 |
 | --- | --- |
 | memo와 분석 시작 | `/memos/**` |
-| 분석 제안과 application | `/analysis-proposals/**`, `/analysis-applications/**` |
+| 분석 제안, application, 검토 결과 집계 | `/analysis-proposals/**`, `/analysis-applications/**`, `/analysis-review-outcomes/**` |
 | task와 graph | `/tasks/**`, `/graph/**` |
 | 계정 및 session 작업 | `POST /auth/logout`, `POST /auth/google/link-intent`, `DELETE /auth/identities/google` |
 
@@ -418,7 +418,7 @@ Content-Type: application/json
 
 한 요청에는 최대 10개 tag와 1–3개 item을 선택할 수 있다. `DATE_ONLY`는 `YYYY-MM-DD`, `EXACT_TIME`은 offset을 포함한 ISO 8601 timestamp여야 한다. 기존 tag도 현재 owner 소유인지 검증한다.
 
-검증과 application, item, task, tag link 생성은 한 transaction이다. 한 항목이라도 유효하지 않으면 아무 canonical record도 적용하지 않는다. 성공 응답:
+검증과 application, item, task, tag link 생성은 한 transaction이다. 한 항목이라도 유효하지 않으면 아무 canonical record도 적용하지 않는다. 현재 Apply DTO와 canonical schema는 relation 선택·저장·application 단위 undo를 아직 표현하지 않는다. 따라서 저장된 proposal의 `relationCandidates`가 비어 있지 않으면 관계를 조용히 누락하지 않고 transaction write 전에 `409 PROPOSAL_RELATIONS_UNSUPPORTED`로 fail-closed한다. 이때 application, item, task, tag link, relation은 하나도 생성하지 않으며 원본 memo revision은 그대로 보존한다. 성공 응답:
 
 ```json
 {
@@ -427,7 +427,7 @@ Content-Type: application/json
 }
 ```
 
-이미 적용되었거나 stale인 proposal은 `409`이며, 분석 provider가 이 endpoint를 직접 호출하는 계약은 없다.
+이미 적용되었거나 stale인 proposal, 아직 지원하지 않는 relation 후보가 있는 proposal은 `409`이며, 분석 provider가 이 endpoint를 직접 호출하는 계약은 없다.
 
 ### Reject or postpone
 
@@ -484,6 +484,89 @@ GET /api/v1/analysis-applications/latest
 ```
 
 application이 있으면 `applicationId`와 현재 `APPLIED` 또는 `UNDONE` status를 반환한다. 다른 owner의 더 최근 application은 결과에 영향을 주지 않는다.
+
+### Read owner-scoped review outcome summary
+
+```http
+GET /api/v1/analysis-review-outcomes/summary?days=14
+X-Expected-Owner-Id: 018f4fad-e9a9-7a01-a4d1-936938a8a1e8
+```
+
+`days` 기본값은 14이며 1–90의 정수만 허용한다. cohort는 server current instant를 끝으로 하는 rolling 24시간 구간이고, `analysis_proposals.created_at`이 `[fromInclusive, toExclusive)`에 들어오는 현재 authenticated owner의 proposal만 포함한다. review·reject·postpone 시각 기준 집계가 아니다. 정수가 아니거나 범위를 벗어난 값은 `422 VALIDATION_FAILED`다.
+
+서버는 최신순 proposal을 1,001개까지 읽어 명시적인 1,000개 cap을 검사한다. 1,001번째 proposal이 있으면 일부 1,000개를 전체처럼 반환하지 않고 `422 REVIEW_OUTCOME_WINDOW_TOO_LARGE`를 반환한다. 사용자는 더 짧은 `days`로 다시 조회할 수 있다. 성공 응답에는 `Cache-Control: no-store`가 포함된다.
+
+```json
+{
+  "schemaVersion": "1",
+  "comparisonPolicyVersion": "review-default-v1",
+  "cohort": {
+    "basis": "PROPOSAL_CREATED_AT",
+    "days": 14,
+    "fromInclusive": "2026-07-25T03:00:00Z",
+    "toExclusive": "2026-08-08T03:00:00Z",
+    "maxProposals": 1000
+  },
+  "proposals": {
+    "total": 4,
+    "withApplication": 3,
+    "currentStates": {
+      "queued": 0,
+      "running": 0,
+      "reviewRequired": 1,
+      "currentPostponed": 1,
+      "failed": 0,
+      "stale": 0,
+      "applied": 2,
+      "rejected": 0,
+      "other": 0
+    }
+  },
+  "latestApplications": {
+    "none": 1,
+    "applied": 2,
+    "undone": 1
+  },
+  "outcomes": {
+    "exact": 1,
+    "corrected": 1,
+    "userResolved": 1,
+    "unclassifiable": 0,
+    "correctedFields": {
+      "type": 0,
+      "title": 1,
+      "tags": 0,
+      "items": 0,
+      "due": 0
+    }
+  },
+  "byAnalysisVersion": [
+    {
+      "route": "LOCAL",
+      "analyzerVersion": "fake-v4",
+      "promptVersion": "none",
+      "localModelVersion": "none",
+      "embeddingModelVersion": "none",
+      "routingPolicyVersion": "field-policy-v1",
+      "proposals": { "total": 4, "withApplication": 3, "currentStates": { "queued": 0, "running": 0, "reviewRequired": 1, "currentPostponed": 1, "failed": 0, "stale": 0, "applied": 2, "rejected": 0, "other": 0 } },
+      "latestApplications": { "none": 1, "applied": 2, "undone": 1 },
+      "outcomes": { "exact": 1, "corrected": 1, "userResolved": 1, "unclassifiable": 0, "correctedFields": { "type": 0, "title": 1, "tags": 0, "items": 0, "due": 0 } }
+    }
+  ]
+}
+```
+
+세 counter 영역은 서로 다른 질문에 답하며 상호 배타적인 하나의 정확도 표로 합치면 안 된다.
+
+- `proposals.currentStates`는 현재 mutable `analysis_runs.status` 분포다. 그 합은 `proposals.total`이다. `currentPostponed`는 **현재** `POSTPONED`인 제안만 뜻한다. 보류 뒤 적용·거절된 과거 이력은 현재 schema에 별도 event로 남지 않는다.
+- `latestApplications`는 proposal마다 `(applied_at DESC, id DESC)`로 고른 최신 application 상태다. `none + applied + undone = proposals.total`이다. undo 뒤 새 idempotency key로 재적용하면 새 application이 최신이 되며, 이 값은 모든 apply/undo event 횟수가 아니다.
+- `outcomes`는 application이 있는 proposal의 최신 `selection_json`을 versioned default-review projection과 의미상 비교한다. `exact + corrected + userResolved + unclassifiable = proposals.withApplication`이다. `correctedFields`는 한 `CORRECTED` selection에서 여러 field가 동시에 증가할 수 있는 비배타적 세부 집계다.
+
+`exact`는 “제안 그대로 적용”을 뜻할 뿐 AI의 정답·정확도를 뜻하지 않는다. `corrected`는 바로 적용 가능한 기본 선택을 수정한 경우, `userResolved`는 동점/`UNKNOWN` 유형 또는 item 부재처럼 기본 선택만으로 적용할 수 없어 사용자가 보완한 경우다. relation 후보, 지원하지 않는/손상된 과거 JSON, revision 불일치처럼 현재 비교 정책이 안전하게 재구성할 수 없는 application은 `unclassifiable`이다. 거절에는 교정 target이 저장되지 않으므로 거절 건수도 정답 label이 아니다.
+
+`byAnalysisVersion`은 provider metadata의 임의 문자열이 아니라 `analysis_runs`의 server-owned `route`, analyzer·prompt·local-model·embedding-model·routing-policy provenance로만 같은 counter를 나눈다. 각 counter를 version group 전체에서 합하면 top-level 값과 일치한다.
+
+응답은 aggregate counter와 provenance version만 포함한다. memo body·title, raw proposal/selection JSON, memo/proposal/application/task/tag/relation identifier는 반환하거나 일반 로그에 기록하지 않는다. 이 read-only endpoint는 clickstream을 추가로 수집하지 않으며 owner는 query/header가 아니라 authenticated server principal에서 결정한다. session이 없으면 `401`, stale owner snapshot이면 `409 SESSION_OWNER_CHANGED`다.
 
 ## Task
 

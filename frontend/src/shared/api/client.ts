@@ -1,8 +1,10 @@
 import { toApiError } from './errors';
 import { decodeProposal, decodeProposalSummaries } from './proposalDecoder';
 import type { ExpectedProposalIdentity } from './proposalDecoder';
+import { decodeReviewOutcomeSummary } from './reviewOutcomeDecoder';
 import type {
   AnalysisRun,
+  AnalysisReviewOutcomeSummary,
   ApplicationResult,
   ApplyProposalRequest,
   AuthCapabilities,
@@ -93,6 +95,11 @@ function isSessionScoped(url: string): boolean {
 
 function isOwnerScoped(url: string): boolean {
   return !AUTHENTICATION_PROBE_PATHS.has(url) && !SESSION_INDEPENDENT_PATHS.has(url);
+}
+
+function normalizedReviewOutcomeDays(days: number): number {
+  if (!Number.isFinite(days)) return 14;
+  return Math.min(Math.max(Math.trunc(days), 1), 90);
 }
 
 function combineSignals(primary: AbortSignal, secondary?: AbortSignal | null): AbortSignal {
@@ -402,6 +409,14 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
 
     latestApplication: () =>
       request<LatestApplication>('/api/v1/analysis-applications/latest'),
+
+    reviewOutcomeSummary: async (days = 14): Promise<AnalysisReviewOutcomeSummary> =>
+      decodeReviewOutcomeSummary(
+        await request<unknown>(
+          `/api/v1/analysis-review-outcomes/summary?days=${normalizedReviewOutcomeDays(days)}`,
+          { cache: 'no-store' },
+        ),
+      ),
 
     apply: (proposalId: string, body: ApplyProposalRequest, idempotencyKey: string) =>
       request<ApplicationResult>(`/api/v1/analysis-proposals/${proposalId}/apply`, {

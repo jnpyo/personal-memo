@@ -86,6 +86,7 @@ final class ActiveAccountFilter extends OncePerRequestFilter {
     return path.startsWith("/api/v1/memos")
         || path.startsWith("/api/v1/analysis-proposals")
         || path.startsWith("/api/v1/analysis-applications")
+        || path.startsWith("/api/v1/analysis-review-outcomes")
         || path.startsWith("/api/v1/tasks")
         || path.startsWith("/api/v1/graph")
         || path.equals("/api/v1/auth/logout")

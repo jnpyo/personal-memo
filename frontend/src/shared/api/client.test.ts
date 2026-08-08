@@ -5,6 +5,7 @@ import {
   SESSION_OWNER_CHANGED_EVENT,
   SessionScopeChangedError,
 } from './client';
+import { ReviewOutcomeContractError } from './reviewOutcomeDecoder';
 import type { MemoView } from './types';
 
 const memo: MemoView = {
@@ -58,6 +59,44 @@ function validProposal() {
     relationCandidates: [],
     ambiguityReasons: [],
     providerMetadata: {},
+  };
+}
+
+function validReviewOutcomeSummary() {
+  return {
+    schemaVersion: '1',
+    comparisonPolicyVersion: 'review-default-v1',
+    cohort: {
+      basis: 'PROPOSAL_CREATED_AT',
+      days: 14,
+      fromInclusive: '2026-07-25T00:00:00Z',
+      toExclusive: '2026-08-08T00:00:00Z',
+      maxProposals: 1_000,
+    },
+    proposals: {
+      total: 0,
+      withApplication: 0,
+      currentStates: {
+        queued: 0,
+        running: 0,
+        reviewRequired: 0,
+        currentPostponed: 0,
+        failed: 0,
+        stale: 0,
+        applied: 0,
+        rejected: 0,
+        other: 0,
+      },
+    },
+    latestApplications: { none: 0, applied: 0, undone: 0 },
+    outcomes: {
+      exact: 0,
+      corrected: 0,
+      userResolved: 0,
+      unclassifiable: 0,
+      correctedFields: { type: 0, title: 0, tags: 0, items: 0, due: 0 },
+    },
+    byAnalysisVersion: [],
   };
 }
 
@@ -257,6 +296,54 @@ describe('memo API client', () => {
         [EXPECTED_OWNER_ID_HEADER]: 'user-a',
       },
     });
+  });
+
+  it('loads an uncached owner-scoped review summary without CSRF or idempotency headers', async () => {
+    const { client, fetchMock, applicationFetch } = testClient(validReviewOutcomeSummary());
+    client.setSessionOwner('user-a');
+
+    await client.reviewOutcomeSummary(14);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(applicationFetch).toHaveBeenCalledWith(
+      '/api/v1/analysis-review-outcomes/summary?days=14',
+      {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        signal: expect.any(AbortSignal),
+        headers: {
+          'Content-Type': 'application/json',
+          [EXPECTED_OWNER_ID_HEADER]: 'user-a',
+        },
+      },
+    );
+  });
+
+  it('bounds the review summary window to the server contract', async () => {
+    const { client, applicationFetch } = testClient(validReviewOutcomeSummary());
+    client.setSessionOwner('user-a');
+
+    await client.reviewOutcomeSummary(0);
+    await client.reviewOutcomeSummary(120);
+    await client.reviewOutcomeSummary(14.9);
+    await client.reviewOutcomeSummary(Number.NaN);
+
+    expect(applicationFetch.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v1/analysis-review-outcomes/summary?days=1',
+      '/api/v1/analysis-review-outcomes/summary?days=90',
+      '/api/v1/analysis-review-outcomes/summary?days=14',
+      '/api/v1/analysis-review-outcomes/summary?days=14',
+    ]);
+  });
+
+  it('rejects an unsupported review summary contract before it reaches the workspace', async () => {
+    const unsupported = { ...validReviewOutcomeSummary(), schemaVersion: '2' };
+    const { client } = testClient(unsupported);
+    client.setSessionOwner('user-a');
+
+    await expect(client.reviewOutcomeSummary()).rejects.toBeInstanceOf(
+      ReviewOutcomeContractError,
+    );
   });
 
   it('invalidates local scope and emits a dedicated event on server owner mismatch', async () => {

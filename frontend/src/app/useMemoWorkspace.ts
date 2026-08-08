@@ -6,7 +6,13 @@ import {
   RetryIdentityStore,
   type CaptureAttempt,
 } from '../shared/api/retryIdentity';
-import type { GraphProjection, MemoView, Task, TaskStatus } from '../shared/api/types';
+import type {
+  AnalysisReviewOutcomeSummary,
+  GraphProjection,
+  MemoView,
+  Task,
+  TaskStatus,
+} from '../shared/api/types';
 import type { Feedback } from '../shared/ui/FeedbackBanner';
 import {
   canSubmitMemo,
@@ -56,6 +62,10 @@ export function useMemoWorkspace(ownerId: string) {
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [memosLoading, setMemosLoading] = useState(true);
   const [memosError, setMemosError] = useState<string | null>(null);
+  const [reviewOutcomeSummary, setReviewOutcomeSummary] =
+    useState<AnalysisReviewOutcomeSummary | null>(null);
+  const [reviewOutcomeLoading, setReviewOutcomeLoading] = useState(true);
+  const [reviewOutcomeError, setReviewOutcomeError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
@@ -63,6 +73,7 @@ export function useMemoWorkspace(ownerId: string) {
 
   const captureAttempt = useRef<CaptureAttempt | null>(null);
   const retryIdentities = useRef(new RetryIdentityStore());
+  const reviewOutcomeRequest = useRef(0);
   const timeZone = useRef(browserTimeZone());
   const capturePolicy = deriveCapturePolicy(recoveryLoading, recoveryError);
 
@@ -107,6 +118,20 @@ export function useMemoWorkspace(ownerId: string) {
     }
   }, []);
 
+  const refreshReviewOutcomes = useCallback(async () => {
+    const request = ++reviewOutcomeRequest.current;
+    setReviewOutcomeLoading(true);
+    setReviewOutcomeError(null);
+    try {
+      const summary = await api.reviewOutcomeSummary(14);
+      if (reviewOutcomeRequest.current === request) setReviewOutcomeSummary(summary);
+    } catch (error) {
+      if (reviewOutcomeRequest.current === request) setReviewOutcomeError(errorMessage(error));
+    } finally {
+      if (reviewOutcomeRequest.current === request) setReviewOutcomeLoading(false);
+    }
+  }, []);
+
   const refreshRecovery = useCallback(async () => {
     setRecoveryLoading(true);
     setRecoveryError(null);
@@ -140,7 +165,14 @@ export function useMemoWorkspace(ownerId: string) {
     void refreshWorkspace();
     void refreshMemos();
     void refreshRecovery();
-  }, [checkConnection, refreshMemos, refreshRecovery, refreshWorkspace]);
+    void refreshReviewOutcomes();
+  }, [
+    checkConnection,
+    refreshMemos,
+    refreshRecovery,
+    refreshReviewOutcomes,
+    refreshWorkspace,
+  ]);
 
   useEffect(() => {
     const handleOffline = () => setConnection('offline');
@@ -223,6 +255,7 @@ export function useMemoWorkspace(ownerId: string) {
       setFeedback({ kind: 'success', message: '원문은 보존되었습니다. 제안을 수정하거나 승인해 주세요.' });
       captureAttempt.current = null;
       clearRetry(scope);
+      void refreshReviewOutcomes();
       await refreshMemos();
     } catch (error) {
       fail(error, scope, '저장 다시 시도', () => void runCapture(attempt, policy));
@@ -285,6 +318,7 @@ export function useMemoWorkspace(ownerId: string) {
       setContent('');
       clearProposalRetries(snapshot.proposalId);
       setFeedback({ kind: 'success', message: '승인한 태그와 할 일을 생성했습니다.' });
+      void refreshReviewOutcomes();
       await Promise.all([refreshWorkspace(), refreshMemos(), refreshRecovery()]);
     } catch (error) {
       if (
@@ -293,6 +327,7 @@ export function useMemoWorkspace(ownerId: string) {
       ) {
         clearProposalRetries(snapshot.proposalId);
         setFeedback({ kind: 'error', message: errorMessage(error) });
+        void refreshReviewOutcomes();
         await Promise.all([refreshMemos(), refreshRecovery()]);
       } else {
         fail(error, scope, '승인 다시 시도', () => void applyReview(snapshot));
@@ -324,6 +359,7 @@ export function useMemoWorkspace(ownerId: string) {
         kind: 'info',
         message: '제안을 보류했습니다. 승인 전이므로 생성된 항목은 없습니다.',
       });
+      void refreshReviewOutcomes();
       await Promise.all([refreshMemos(), refreshRecovery()]);
     } catch (error) {
       fail(error, scope, '보류 다시 시도', () => void postponeCurrentReview());
@@ -350,6 +386,7 @@ export function useMemoWorkspace(ownerId: string) {
         kind: 'info',
         message: '제안을 거절했습니다. 원본 메모는 그대로 보존됩니다.',
       });
+      void refreshReviewOutcomes();
       await Promise.all([refreshMemos(), refreshRecovery()]);
     } catch (error) {
       fail(error, scope, '거절 다시 시도', () => void rejectCurrentReview());
@@ -380,6 +417,7 @@ export function useMemoWorkspace(ownerId: string) {
         kind: 'success',
         message: `revision ${memo.currentRevision + 1}를 저장했습니다. 이전 분석 결과는 자동으로 오래된 제안이 됩니다.`,
       });
+      void refreshReviewOutcomes();
       await Promise.all([refreshMemos(), refreshRecovery()]);
       retryIdentities.current.clear(scope);
       return true;
@@ -425,6 +463,7 @@ export function useMemoWorkspace(ownerId: string) {
         kind: 'success',
         message: '메모를 휴지통으로 옮겼습니다. 원문과 revision 기록은 삭제하지 않았습니다.',
       });
+      void refreshReviewOutcomes();
       await Promise.all([refreshMemos(), refreshWorkspace(), refreshRecovery()]);
       retryIdentities.current.clear(scope);
     } catch (error) {
@@ -485,6 +524,7 @@ export function useMemoWorkspace(ownerId: string) {
         kind: 'success',
         message: '최신 원문은 그대로 두고 별도의 분석 제안을 열었습니다.',
       });
+      void refreshReviewOutcomes();
       await refreshMemos();
       retryIdentities.current.clear(scope);
     } catch (error) {
@@ -508,6 +548,7 @@ export function useMemoWorkspace(ownerId: string) {
         kind: 'success',
         message: '마지막 적용을 되돌렸습니다. 원본 메모는 삭제하지 않았습니다.',
       });
+      void refreshReviewOutcomes();
       await Promise.all([refreshWorkspace(), refreshMemos(), refreshRecovery()]);
       retryIdentities.current.clear(scope);
     } catch (error) {
@@ -560,6 +601,9 @@ export function useMemoWorkspace(ownerId: string) {
     recoveryError,
     memosLoading,
     memosError,
+    reviewOutcomeSummary,
+    reviewOutcomeLoading,
+    reviewOutcomeError,
     pendingMemoScope:
       busyAction?.startsWith('update:') ||
       busyAction?.startsWith('trash:') ||
@@ -581,6 +625,7 @@ export function useMemoWorkspace(ownerId: string) {
     refreshWorkspace,
     refreshMemos,
     refreshRecovery,
+    refreshReviewOutcomes,
     changeContent,
     captureMemo,
     changeReview,

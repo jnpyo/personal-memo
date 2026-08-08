@@ -16,6 +16,7 @@ import { MemoLibrary } from '../features/memos/MemoLibrary';
 import { PwaUpdateManager } from '../features/pwa/PwaUpdateManager';
 import { PostponedReview } from '../features/review/PostponedReview';
 import { ProposalReview } from '../features/review/ProposalReview';
+import { ReviewOutcomeSummary } from '../features/review/ReviewOutcomeSummary';
 import {
   confirmReviewDiscard,
   hasUnsavedWorkspaceChanges,
@@ -346,6 +347,13 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         pendingTaskId={workspace.pendingTaskId}
         onRetry={workspace.refreshWorkspace}
         onStatusChange={workspace.updateTaskStatus}
+      />
+
+      <ReviewOutcomeSummary
+        summary={workspace.reviewOutcomeSummary}
+        loading={workspace.reviewOutcomeLoading}
+        error={workspace.reviewOutcomeError}
+        onRetry={workspace.refreshReviewOutcomes}
       />
 
       {workspace.applicationId && (

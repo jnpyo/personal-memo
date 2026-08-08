@@ -21,7 +21,9 @@ The repository now implements the model-free portion of Milestone 2:
   approximate weekends and event-relative deadlines remain null-valued review candidates;
 - server-owned analyzer, prompt, local-model, embedding-model, and routing-policy provenance for both `LOCAL` and `HYBRID` runs while every result remains `REVIEW_REQUIRED`;
 - required, bounded proposal metadata and UTF-8 payload limits before anything is persisted;
-- explicit user resolution of `UNKNOWN` types and partial item application.
+- explicit user resolution of `UNKNOWN` types and partial item application;
+- a raw-content-free, owner-scoped review outcome summary derived read-only from stored proposals
+  and latest validated selections.
 
 No real local model or cloud provider is connected. The roadmap's real-provider adapter remains deferred by the project decision until explicitly authorized.
 
@@ -300,10 +302,55 @@ The backend:
 
 1. re-checks owner and memo revision;
 2. validates selected tags and dates;
-3. creates application event;
-4. writes derived items, task records, and relations in one transaction;
-5. records provenance for each derived value;
-6. commits the transaction; after success, the client refetches the task and graph projections.
+3. fails closed with `PROPOSAL_RELATIONS_UNSUPPORTED` when `relationCandidates` is non-empty,
+   because explicit relation selection, canonical relation persistence, and relation undo are not
+   implemented yet;
+4. creates the application event only after that boundary passes;
+5. writes the currently supported derived items, task records, tags, and tag links in one
+   transaction;
+6. records provenance for each derived value;
+7. commits the transaction; after success, the client refetches the task and graph projections.
+
+The fail-closed relation boundary prevents a future analyzer from making a run appear `APPLIED`
+while silently dropping proposed relationships. It creates no partial canonical records and does not
+alter the raw memo. Relation application remains a separate vertical slice with its own selection
+contract, persistence, ownership constraints, and application-scoped undo.
+
+## Read-only review outcome evidence
+
+`GET /analysis-review-outcomes/summary` derives a rolling owner-scoped aggregate without giving the
+analyzer, cloud gateway, or an Agent any write capability. The query is based on
+`analysis_proposals.created_at`, reads only the authenticated owner's rows, selects the latest
+application per proposal, and returns aggregate counts and server-owned run provenance. It does not
+return or log memo text, titles, raw proposal/selection JSON, or domain identifiers and does not add a
+general clickstream.
+
+The endpoint keeps three independent dimensions:
+
+- current mutable run state, including current `POSTPONED`, `APPLIED`, `REJECTED`, and `STALE`;
+- latest application state (`NONE`, `APPLIED`, or `UNDONE`), including undo followed by reapply;
+- semantic comparison of the latest validated selection with a versioned reconstruction of the
+  default review draft (`EXACT`, `CORRECTED`, `USER_RESOLVED`, or `UNCLASSIFIABLE`).
+
+`EXACT` means only that the user applied the default selection without a semantic change. It is not
+an AI correctness label. `CORRECTED` records changed type/title/tag/item/due fields;
+`USER_RESOLVED` records a proposal that lacked a directly applicable default, such as a tied or
+`UNKNOWN` type or no item; `UNCLASSIFIABLE` is the fail-closed bucket for unsupported relations,
+unknown historical shapes, inconsistent revisions, or other comparisons the current policy cannot
+prove. Reject and postpone state also must not be treated as corrected gold labels: rejected runs do
+not store a corrected target, and a later transition overwrites the current `POSTPONED` state.
+
+The server reads a 1,001st row only to enforce a hard 1,000-proposal cardinality bound. It returns an
+explicit error instead of publishing a silent partial aggregate. This row cap is not a serialized-byte
+or JVM-heap bound: the current query materializes proposal and selection JSON for the bounded cohort.
+Before public multi-owner expansion, add a fail-closed byte guard for historical JSON and process
+classification in tested batches or a bounded stream. Results are grouped by server-owned route and
+analyzer/prompt/local-model/embedding-model/routing-policy provenance and are served with
+`Cache-Control: no-store`.
+
+This evidence makes personal review behavior observable, but it does not open the real-LLM gate.
+Complete date/item gold, a separately held blind set, provider privacy/consent/cost/failure
+boundaries, and the remaining criteria in [EVALUATION.md](EVALUATION.md) are still required.
 
 ## Personalization without fine-tuning
 

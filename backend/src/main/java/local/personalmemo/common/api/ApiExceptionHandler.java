@@ -11,6 +11,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -44,6 +45,16 @@ public class ApiExceptionHandler {
         "VALIDATION_FAILED",
         "One or more request fields are invalid.",
         fieldErrors);
+  }
+
+  @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+  ResponseEntity<ErrorResponse> argumentTypeValidation(
+      MethodArgumentTypeMismatchException exception) {
+    return response(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        "VALIDATION_FAILED",
+        "One or more request fields are invalid.",
+        List.of(new ApiFieldError(exception.getName(), "must be a valid value")));
   }
 
   @ExceptionHandler(HttpMessageNotReadableException.class)

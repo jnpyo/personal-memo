@@ -2,7 +2,7 @@ openapi: 3.1.0
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 info:
   title: Personal Memo API
-  version: 0.3.1
+  version: 0.4.0
   description: >-
     Server-session 인증, Milestone 1의 AI-free vertical slice와 외부 모델 없는 결정론적 분석 계약입니다.
     분석 결과는 제안이며, canonical 태그와 할 일은 사용자 승인 endpoint를
@@ -508,7 +508,10 @@ paths:
       summary: Apply only the user's reviewed selection
       description: >-
         Validates owner, current memo revision, tags, items, and due values, then
-        creates the application and all derived records in one transaction.
+        creates the application and all currently supported derived records in one transaction.
+        A proposal with a non-empty relationCandidates array fails closed with
+        PROPOSAL_RELATIONS_UNSUPPORTED until explicit relation selection, canonical relation
+        persistence, and application-scoped undo are implemented. No partial application occurs.
       parameters:
         - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -537,7 +540,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/OwnerOrDomainConflict"
+          $ref: "#/components/responses/ApplyConflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
@@ -663,6 +666,158 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/OwnerOrDomainConflict"
+
+  /analysis-review-outcomes/summary:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Analysis]
+      operationId: getAnalysisReviewOutcomeSummary
+      summary: Read an owner-scoped aggregate of recent proposal review outcomes
+      description: >-
+        Returns aggregate counters only for proposals owned by the authenticated server principal.
+        The rolling cohort is selected by analysis_proposals.created_at in the half-open interval
+        [fromInclusive, toExclusive). The server reads at most 1,001 rows to enforce a hard 1,000
+        proposal cap and returns 422 rather than a partial summary when the cap is exceeded. Current
+        run state, latest application state, and comparison of the latest stored selection are
+        independent dimensions. EXACT means only that the user applied the reconstructed default
+        review selection without a semantic edit; it is not an AI correctness or accuracy label.
+        The response never contains memo text, titles, proposal/application identifiers, raw
+        proposal JSON, or selection JSON. This endpoint is read-only and does not collect a general
+        clickstream.
+      parameters:
+        - name: days
+          in: query
+          required: false
+          description: Rolling number of 24-hour periods ending at the server's current instant.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 90
+            default: 14
+      responses:
+        "200":
+          description: Owner-scoped, raw-content-free review outcome aggregate.
+          headers:
+            Cache-Control:
+              description: Prevents storage or reuse of this owner-specific aggregate.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisReviewOutcomeSummary"
+              examples:
+                recentReviewOutcomes:
+                  value:
+                    schemaVersion: "1"
+                    comparisonPolicyVersion: review-default-v1
+                    cohort:
+                      basis: PROPOSAL_CREATED_AT
+                      days: 14
+                      fromInclusive: 2026-07-25T03:00:00Z
+                      toExclusive: 2026-08-08T03:00:00Z
+                      maxProposals: 1000
+                    proposals:
+                      total: 4
+                      withApplication: 3
+                      currentStates:
+                        queued: 0
+                        running: 0
+                        reviewRequired: 1
+                        currentPostponed: 1
+                        failed: 0
+                        stale: 0
+                        applied: 2
+                        rejected: 0
+                        other: 0
+                    latestApplications:
+                      none: 1
+                      applied: 2
+                      undone: 1
+                    outcomes:
+                      exact: 1
+                      corrected: 1
+                      userResolved: 1
+                      unclassifiable: 0
+                      correctedFields:
+                        type: 0
+                        title: 1
+                        tags: 0
+                        items: 0
+                        due: 0
+                    byAnalysisVersion:
+                      - route: LOCAL
+                        analyzerVersion: fake-v4
+                        promptVersion: none
+                        localModelVersion: none
+                        embeddingModelVersion: none
+                        routingPolicyVersion: field-policy-v1
+                        proposals:
+                          total: 4
+                          withApplication: 3
+                          currentStates:
+                            queued: 0
+                            running: 0
+                            reviewRequired: 1
+                            currentPostponed: 1
+                            failed: 0
+                            stale: 0
+                            applied: 2
+                            rejected: 0
+                            other: 0
+                        latestApplications:
+                          none: 1
+                          applied: 2
+                          undone: 1
+                        outcomes:
+                          exact: 1
+                          corrected: 1
+                          userResolved: 1
+                          unclassifiable: 0
+                          correctedFields:
+                            type: 0
+                            title: 1
+                            tags: 0
+                            items: 0
+                            due: 0
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          description: >-
+            days is not an integer or is outside 1 through 90, or the selected owner/time window
+            contains more than 1,000 proposals. The latter returns
+            REVIEW_OUTCOME_WINDOW_TOO_LARGE and no partial aggregate.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidDays:
+                  value:
+                    code: VALIDATION_FAILED
+                    message: One or more request fields are invalid.
+                    fieldErrors:
+                      - field: summary.days
+                        message: must be greater than or equal to 1
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+                malformedDays:
+                  value:
+                    code: VALIDATION_FAILED
+                    message: One or more request fields are invalid.
+                    fieldErrors:
+                      - field: days
+                        message: must be a valid value
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+                proposalCapExceeded:
+                  value:
+                    code: REVIEW_OUTCOME_WINDOW_TOO_LARGE
+                    message: The selected window contains more than 1000 analysis proposals.
+                    fieldErrors: []
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
 
   /tasks:
     parameters:
@@ -866,6 +1021,29 @@ components:
               value:
                 code: SESSION_OWNER_CHANGED
                 message: The authenticated account changed before this request was sent.
+                fieldErrors: []
+                correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+    ApplyConflict:
+      description: >-
+        The owner snapshot, revision, proposal lifecycle, tag identity, or idempotency state
+        conflicts with the request. A validated proposal with non-empty relationCandidates also
+        returns PROPOSAL_RELATIONS_UNSUPPORTED until explicit relation selection, persistence, and
+        undo are supported; no application or derived record is created.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            sessionOwnerChanged:
+              value:
+                code: SESSION_OWNER_CHANGED
+                message: The authenticated account changed before this request was sent.
+                fieldErrors: []
+                correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+            relationsUnsupported:
+              value:
+                code: PROPOSAL_RELATIONS_UNSUPPORTED
+                message: Relation candidates require explicit relation selection, which is not supported yet.
                 fieldErrors: []
                 correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
     Forbidden:
@@ -1283,6 +1461,203 @@ components:
               format: uuid
             status:
               enum: [APPLIED, UNDONE]
+    ReviewOutcomeCount:
+      type: integer
+      minimum: 0
+      maximum: 1000
+    ReviewOutcomeCurrentStates:
+      type: object
+      additionalProperties: false
+      description: >-
+        Current mutable analysis_runs states. These counters sum to proposals.total.
+        currentPostponed is only the current POSTPONED state; a proposal later applied or rejected
+        does not preserve an earlier postponement event in this schema.
+      required:
+        [queued, running, reviewRequired, currentPostponed, failed, stale, applied, rejected, other]
+      properties:
+        queued:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        running:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        reviewRequired:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        currentPostponed:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        failed:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        stale:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        applied:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        rejected:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        other:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+    ReviewOutcomeProposalCounters:
+      type: object
+      additionalProperties: false
+      required: [total, withApplication, currentStates]
+      properties:
+        total:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        withApplication:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        currentStates:
+          $ref: "#/components/schemas/ReviewOutcomeCurrentStates"
+    ReviewOutcomeLatestApplications:
+      type: object
+      additionalProperties: false
+      description: >-
+        For each proposal, the latest analysis_application ordered by applied_at DESC then id DESC.
+        none, applied, and undone sum to proposals.total. Undo followed by a new application uses
+        the newer application; this is not a count of every apply or undo event.
+      required: [none, applied, undone]
+      properties:
+        none:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        applied:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        undone:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+    ReviewOutcomeCorrectedFields:
+      type: object
+      additionalProperties: false
+      description: >-
+        Non-exclusive field counters within CORRECTED outcomes. Each value is less than or equal to
+        outcomes.corrected, and one corrected selection may increment multiple fields.
+      required: [type, title, tags, items, due]
+      properties:
+        type:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        title:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        tags:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        items:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        due:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+    ReviewOutcomeCounters:
+      type: object
+      additionalProperties: false
+      description: >-
+        Comparison of the latest stored selection for every proposal with an application. EXACT,
+        CORRECTED, USER_RESOLVED, and UNCLASSIFIABLE sum to proposals.withApplication and are
+        independent of current run state and APPLIED/UNDONE state. EXACT means unchanged selection,
+        not AI correctness. A non-empty relation proposal is UNCLASSIFIABLE because relations are
+        outside the current apply contract.
+      required: [exact, corrected, userResolved, unclassifiable, correctedFields]
+      properties:
+        exact:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        corrected:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        userResolved:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        unclassifiable:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        correctedFields:
+          $ref: "#/components/schemas/ReviewOutcomeCorrectedFields"
+    ReviewOutcomeCohort:
+      type: object
+      additionalProperties: false
+      description: Rolling proposal-created-at cohort represented as a half-open UTC interval.
+      required: [basis, days, fromInclusive, toExclusive, maxProposals]
+      properties:
+        basis:
+          const: PROPOSAL_CREATED_AT
+        days:
+          type: integer
+          minimum: 1
+          maximum: 90
+        fromInclusive:
+          type: string
+          format: date-time
+        toExclusive:
+          type: string
+          format: date-time
+        maxProposals:
+          type: integer
+          const: 1000
+    ReviewOutcomeAnalysisVersion:
+      type: object
+      additionalProperties: false
+      description: >-
+        Counters grouped only by server-owned run route and provenance. Summing each counter across
+        this array reproduces the corresponding top-level counter.
+      required:
+        - route
+        - analyzerVersion
+        - promptVersion
+        - localModelVersion
+        - embeddingModelVersion
+        - routingPolicyVersion
+        - proposals
+        - latestApplications
+        - outcomes
+      properties:
+        route:
+          type: string
+          enum: [MOCK, LOCAL, CLOUD, HYBRID]
+        analyzerVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+        promptVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+        localModelVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+        embeddingModelVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+        routingPolicyVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+        proposals:
+          $ref: "#/components/schemas/ReviewOutcomeProposalCounters"
+        latestApplications:
+          $ref: "#/components/schemas/ReviewOutcomeLatestApplications"
+        outcomes:
+          $ref: "#/components/schemas/ReviewOutcomeCounters"
+    AnalysisReviewOutcomeSummary:
+      type: object
+      additionalProperties: false
+      description: >-
+        Owner-scoped aggregate only. It contains no raw memo/proposal/selection content and no memo,
+        proposal, application, task, tag, or relation identifiers. The three counter dimensions are
+        intentionally independent and must not be presented as an AI accuracy score.
+      required:
+        - schemaVersion
+        - comparisonPolicyVersion
+        - cohort
+        - proposals
+        - latestApplications
+        - outcomes
+        - byAnalysisVersion
+      properties:
+        schemaVersion:
+          const: "1"
+        comparisonPolicyVersion:
+          const: review-default-v1
+        cohort:
+          $ref: "#/components/schemas/ReviewOutcomeCohort"
+        proposals:
+          $ref: "#/components/schemas/ReviewOutcomeProposalCounters"
+        latestApplications:
+          $ref: "#/components/schemas/ReviewOutcomeLatestApplications"
+        outcomes:
+          $ref: "#/components/schemas/ReviewOutcomeCounters"
+        byAnalysisVersion:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/ReviewOutcomeAnalysisVersion"
     ReviewDispositionView:
       type: object
       additionalProperties: false

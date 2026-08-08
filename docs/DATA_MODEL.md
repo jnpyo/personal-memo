@@ -1,6 +1,6 @@
 # Data model — authenticated deterministic-analysis MVP
 
-이 문서는 현재 Flyway `V1`–`V10`이 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다.
+이 문서는 현재 Flyway `V1`–`V11`이 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다. `V11`은 owner별 proposal의 최신 application을 bounded read로 찾는 review-outcome 조회 인덱스만 추가하며 새 analytics/event table이나 raw-content 복제본을 만들지 않는다.
 
 ## Invariants
 
@@ -215,6 +215,24 @@ FK (memo_id, memo_revision, owner_id) -> memo_revisions(memo_id, revision, owner
 
 `selection_json`은 model output 전체를 실행 명령으로 보관하는 필드가 아니라, 사용자가 실제로 승인한 selection의 audit/provenance다.
 
+Owner-scoped review-outcome summary는 새 canonical data를 저장하지 않고 `analysis_proposals`,
+`analysis_runs`, `analysis_applications`를 read-only로 결합한다. cohort는
+`analysis_proposals.created_at`의 rolling half-open interval이며, proposal마다
+`analysis_applications`를 `(applied_at DESC, id DESC)`로 정렬해 최신 row 하나를 고른다. 같은
+proposal을 undo한 뒤 새 idempotency key로 다시 적용하면 새 application이 최신이 된다.
+
+현재 lifecycle schema의 시간·이력 한계도 명시적으로 유지한다.
+
+- `applied_at`과 `undone_at`은 application의 적용·되돌림 시각을 보존한다.
+- `analysis_runs.status`는 현재 상태이며 reject/postpone transition timestamp나 append-only
+  history가 아니다.
+- 따라서 현재 `POSTPONED` 수는 알 수 있지만, 보류 뒤 적용·거절된 과거 보류 event 수는
+  이 schema만으로 복원할 수 없다.
+- idempotency record의 `created_at`은 retry 안전성을 위한 operational provenance이므로 review
+  event analytics로 재해석하지 않는다.
+- proposal/selection JSON에는 title 등 개인 내용이 있을 수 있으므로 summary service 안에서만
+  비교하고 응답·일반 로그에는 raw JSON, memo text, domain identifier를 내보내지 않는다.
+
 ## Confirmed domain
 
 ### `memo_items`
@@ -381,6 +399,7 @@ memos + memo_items + task_details
 - `task_details(status, due_local_date)`
 - partial `tags(created_by_application_id)`
 - `analysis_proposals(owner_id, created_at DESC)`
+- `analysis_applications(owner_id, proposal_id, applied_at DESC, id DESC)` (`V11`, proposal별 최신 application 조회)
 - `task_details(owner_id, status, due_at_utc, due_local_date)`
 - `item_tags(owner_id, tag_id)`
 - owner/operation/key primary key on idempotency records

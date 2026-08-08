@@ -107,17 +107,25 @@ aggregate metrics or manually de-identified, separately approved examples. A con
 substitute for de-identification and is also excluded from the baseline report.
 
 The current database preserves the original proposal and the applied `selection_json`, so applied
-type/title/tag/item changes can later be compared locally. A rejected run records the terminal state
-but not a corrected target, and the UI's “아니오, 다른 경우 보기” click is not a semantic rejection.
-Do not treat those events as equivalent labels. Before drawing product conclusions, add a
-server-derived, owner-scoped review-outcome summary without collecting a general clickstream.
+type/title/tag/item changes can be compared locally. The owner-scoped review-outcome summary now
+reconstructs the current review default and reports aggregate `EXACT`, `CORRECTED`,
+`USER_RESOLVED`, and `UNCLASSIFIABLE` evidence without returning memo text, selections, or IDs.
+It also keeps current proposal state and latest application state separate. A rejected run records
+the terminal state but not a corrected target, and the UI's “아니오, 다른 경우 보기” click is not a
+semantic rejection. Do not treat those events as equivalent labels, and do not describe `EXACT` as
+AI accuracy: it only means that the latest stored application selection matched the review default
+under the versioned comparison policy. That latest application may now be `UNDONE`, so `EXACT` alone
+is not a count of currently retained accepts. The independent outcome and application-state totals
+also do not reveal their intersection. Product conclusions still require enough owner-authorized
+cases and a separately reviewed blind evaluation set.
 
 ## Gate before a real LLM
 
 A real provider remains blocked until all of the following are true:
 
-1. At least 1–2 weeks and roughly 50–100 personally reviewed memos exist; exact accepts, corrected
-   applies, rejects, postponements, and undo must be distinguishable without exposing memo text.
+1. At least 1–2 weeks and roughly 50–100 personally reviewed memos exist; exact and corrected
+   outcomes must be distinguishable by latest `APPLIED` versus `UNDONE` state, while rejects and
+   postponements remain separate, without exposing memo text.
 2. The representative evaluation set is expanded beyond fixture-specific rules, date/item/tag gold
    is complete for the provider task, and the wrong-local safety threshold is approved from measured
    results rather than chosen after seeing provider output.

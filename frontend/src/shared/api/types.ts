@@ -179,6 +179,72 @@ export type LatestApplication = {
   status: 'NONE' | 'APPLIED' | 'UNDONE';
 };
 
+export type ReviewOutcomeCurrentStates = {
+  queued: number;
+  running: number;
+  reviewRequired: number;
+  currentPostponed: number;
+  failed: number;
+  stale: number;
+  applied: number;
+  rejected: number;
+  other: number;
+};
+
+export type ReviewOutcomeProposalCounters = {
+  total: number;
+  withApplication: number;
+  currentStates: ReviewOutcomeCurrentStates;
+};
+
+export type ReviewOutcomeLatestApplications = {
+  none: number;
+  applied: number;
+  undone: number;
+};
+
+export type ReviewOutcomeCounters = {
+  exact: number;
+  corrected: number;
+  userResolved: number;
+  unclassifiable: number;
+  correctedFields: {
+    type: number;
+    title: number;
+    tags: number;
+    items: number;
+    due: number;
+  };
+};
+
+export type ReviewOutcomeAnalysisVersion = {
+  route: 'MOCK' | 'LOCAL' | 'CLOUD' | 'HYBRID';
+  analyzerVersion: string;
+  promptVersion: string;
+  localModelVersion: string;
+  embeddingModelVersion: string;
+  routingPolicyVersion: string;
+  proposals: ReviewOutcomeProposalCounters;
+  latestApplications: ReviewOutcomeLatestApplications;
+  outcomes: ReviewOutcomeCounters;
+};
+
+export type AnalysisReviewOutcomeSummary = {
+  schemaVersion: '1';
+  comparisonPolicyVersion: 'review-default-v1';
+  cohort: {
+    basis: 'PROPOSAL_CREATED_AT';
+    days: number;
+    fromInclusive: string;
+    toExclusive: string;
+    maxProposals: number;
+  };
+  proposals: ReviewOutcomeProposalCounters;
+  latestApplications: ReviewOutcomeLatestApplications;
+  outcomes: ReviewOutcomeCounters;
+  byAnalysisVersion: ReviewOutcomeAnalysisVersion[];
+};
+
 export type ProposalSummary = {
   proposalId: string;
   status: 'REVIEW_REQUIRED' | 'POSTPONED';
