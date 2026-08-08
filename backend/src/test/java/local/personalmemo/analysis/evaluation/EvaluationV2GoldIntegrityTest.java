@@ -35,6 +35,17 @@ class EvaluationV2GoldIntegrityTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("must not be empty");
 
+    ObjectNode splitSurrogate = fixture("prompt-injection");
+    splitSurrogate.put("content", "😀");
+    ObjectNode surrogateSpan =
+        (ObjectNode)
+            splitSurrogate.at(
+                "/expectedItems/acceptableSets/0/allItems/0/sourceSpan/acceptedSpans/0");
+    surrogateSpan.put("start", 1).put("end", 2);
+    assertThatThrownBy(() -> EvaluationV2GoldIntegrity.validate(splitSurrogate))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("surrogate pair");
+
     ObjectNode duplicateSemantic = fixture("clear-explicit-task");
     ArrayNode interpretations =
         (ArrayNode) duplicateSemantic.at("/expectedDates/mentions/0/acceptedInterpretations");

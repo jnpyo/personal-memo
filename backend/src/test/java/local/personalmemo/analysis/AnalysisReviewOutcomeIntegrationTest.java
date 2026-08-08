@@ -97,7 +97,7 @@ class AnalysisReviewOutcomeIntegrationTest extends PostgresIntegrationTestSuppor
     assertThat(result.getResponse().getStatus()).isEqualTo(200);
     assertThat(result.getResponse().getHeader("Cache-Control")).contains("no-store");
     assertThat(body.path("schemaVersion").asText()).isEqualTo("1");
-    assertThat(body.path("comparisonPolicyVersion").asText()).isEqualTo("review-default-v1");
+    assertThat(body.path("comparisonPolicyVersion").asText()).isEqualTo("review-default-v2");
     assertThat(body.at("/cohort/basis").asText()).isEqualTo("PROPOSAL_CREATED_AT");
     assertThat(body.at("/cohort/days").asInt()).isEqualTo(14);
     assertThat(body.at("/cohort/maxProposals").asInt()).isEqualTo(1000);
@@ -267,8 +267,12 @@ class AnalysisReviewOutcomeIntegrationTest extends PostgresIntegrationTestSuppor
     }
     body.put("selectedTags", tags);
 
-    JsonNode preferredDue = preferredDue(proposal.path("dateCandidates"));
-    boolean dueAssigned = false;
+    long taskCount =
+        java.util.stream.StreamSupport.stream(proposal.path("itemCandidates").spliterator(), false)
+            .filter(candidate -> "TASK".equals(candidate.path("kind").asText()))
+            .count();
+    JsonNode dates = proposal.path("dateCandidates");
+    JsonNode preferredDue = taskCount == 1 && dates.size() == 1 ? dates.get(0) : null;
     List<Map<String, Object>> items = new ArrayList<>();
     int index = 0;
     for (JsonNode candidate : proposal.path("itemCandidates")) {
@@ -276,7 +280,7 @@ class AnalysisReviewOutcomeIntegrationTest extends PostgresIntegrationTestSuppor
       String kind = candidate.path("kind").asText();
       item.put("kind", kind);
       item.put("title", index++ == 0 ? title : candidate.path("title").asText().strip());
-      if ("TASK".equals(kind) && preferredDue != null && !dueAssigned) {
+      if ("TASK".equals(kind) && preferredDue != null) {
         Map<String, Object> due = new LinkedHashMap<>();
         due.put("surfaceText", preferredDue.path("surfaceText").asText());
         due.put(
@@ -286,7 +290,6 @@ class AnalysisReviewOutcomeIntegrationTest extends PostgresIntegrationTestSuppor
         due.put("timeZone", "Asia/Seoul");
         due.put("timeSpecified", preferredDue.path("timeSpecified").asBoolean());
         item.put("due", due);
-        dueAssigned = true;
       } else {
         item.put("due", null);
       }
@@ -300,19 +303,6 @@ class AnalysisReviewOutcomeIntegrationTest extends PostgresIntegrationTestSuppor
     }
     body.put("items", items);
     return body;
-  }
-
-  private JsonNode preferredDue(JsonNode candidates) {
-    JsonNode first = null;
-    for (JsonNode candidate : candidates) {
-      if (first == null) {
-        first = candidate;
-      }
-      if ("DATE_ONLY".equals(candidate.path("precision").asText())) {
-        return candidate;
-      }
-    }
-    return first;
   }
 
   private Map<String, Object> resolvedApplication() {

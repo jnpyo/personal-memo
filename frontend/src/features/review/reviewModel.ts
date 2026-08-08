@@ -73,7 +73,13 @@ export function isValidDue(due: DateCandidate | null): boolean {
 
 export function usableDateCandidates(proposal: Proposal): DateCandidate[] {
   return proposal.dateCandidates
-    .filter(isValidDue)
+    .filter(
+      (candidate) =>
+        isValidDue(candidate) &&
+        (candidate.precision === 'DATE_ONLY' ||
+          candidate.precision === 'EXACT_TIME' ||
+          candidate.precision === 'RELATIVE_EXACT'),
+    )
     .map(cloneDate)
     .sort((left, right) => {
       if (left.precision === right.precision) return 0;
@@ -93,29 +99,39 @@ export function createCustomDateOnly(): DateCandidate {
 }
 
 export function createReviewDraft(proposalId: string, proposal: Proposal): ReviewDraft {
-  const preferredDue = usableDateCandidates(proposal)[0] ?? null;
-  let assignedPreferredDue = false;
   const selectedType = preferredItemKind(proposal);
   const validItems = proposal.itemCandidates.filter((item) => isItemKind(item.kind));
 
-  const draft: ReviewDraft = {
+  const baseDraft: ReviewDraft = {
     proposalId,
     proposal,
     title: proposal.suggestedTitle.value,
     selectedType,
     tags: proposal.tagCandidates.map((tag) => ({ ...tag })),
     items: validItems.map((item, index) => {
-      const shouldAssignDue = item.kind === 'TASK' && preferredDue && !assignedPreferredDue;
-      if (shouldAssignDue) assignedPreferredDue = true;
       return {
         ...item,
         title: index === 0 ? proposal.suggestedTitle.value : item.title,
         sourceSpan: item.sourceSpan ? { ...item.sourceSpan } : item.sourceSpan,
-        due: shouldAssignDue ? cloneDate(preferredDue) : null,
+        due: null,
       };
     }),
   };
-  return selectedType ? changeSelectedType(draft, selectedType) : draft;
+  const projectedDraft = selectedType ? changeSelectedType(baseDraft, selectedType) : baseDraft;
+  const usableDates = usableDateCandidates(proposal);
+  const unambiguousDue =
+    projectedDraft.items.length === 1 &&
+    projectedDraft.items[0].kind === 'TASK' &&
+    usableDates.length === 1
+      ? usableDates[0]
+      : null;
+  return {
+    ...projectedDraft,
+    items: projectedDraft.items.map((item) => ({
+      ...item,
+      due: item.kind === 'TASK' && unambiguousDue ? cloneDate(unambiguousDue) : null,
+    })),
+  };
 }
 
 export function changeSelectedType(review: ReviewDraft, selectedType: ItemKind): ReviewDraft {

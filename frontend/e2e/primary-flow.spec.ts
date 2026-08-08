@@ -316,7 +316,7 @@ test('keeps unsaved proposal edits when another tab discovers the same owner', a
   await registerIsolatedUser(page, testInfo);
 
   await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
-    .fill(`11.25 운영체제 과제 ${marker}`);
+    .fill(`11.25 운영체제 과제 ${marker} 제출`);
   await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
   await expect(page.getByRole('heading', { name: 'AI 제안을 확인해 주세요' })).toBeVisible();
   await openProposalEditor(page);
@@ -339,7 +339,7 @@ test('keeps receiver edits mounted while another tab logout remains unconfirmed'
   const editedTitle = `${marker} 보존할 수정 제목`;
   await registerIsolatedUser(page, testInfo);
   await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
-    .fill(`11.25 운영체제 과제 ${marker}`);
+    .fill(`11.25 운영체제 과제 ${marker} 제출`);
   await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
   await openProposalEditor(page);
   await page.getByLabel('대표 제목').fill(editedTitle);
@@ -405,8 +405,8 @@ test('uses unmarked Google login state and marked explicit-link state without co
 
 test('applies the complete AI recommendation only after an explicit yes', async ({ page }, testInfo) => {
   const marker = `yes-${Date.now()}-${testInfo.retry}`;
-  const rawMemo = `11.25 OS과제 제출 E2E ${marker}`;
-  const proposedTitle = `OS과제 제출 E2E ${marker}`;
+  const rawMemo = `11.25 OS과제 E2E ${marker} 제출`;
+  const proposedTitle = `OS과제 E2E ${marker} 제출`;
 
   await registerIsolatedUser(page, testInfo);
   await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(rawMemo);
@@ -456,7 +456,7 @@ test('keeps an apply failure and its retry action inside the proposal popup', as
   page,
 }, testInfo) => {
   const marker = `apply-retry-${Date.now()}-${testInfo.retry}`;
-  const proposedTitle = `OS과제 제출 E2E ${marker}`;
+  const proposedTitle = `OS과제 E2E ${marker} 제출`;
   const applyAttempts: Array<{ idempotencyKey: string | undefined; body: string | null }> = [];
 
   page.on('request', (request) => {
@@ -506,7 +506,7 @@ test('keeps an apply failure and its retry action inside the proposal popup', as
 
 test('discards a failed apply retry when the proposal is postponed', async ({ page }, testInfo) => {
   const marker = `apply-postpone-${Date.now()}-${testInfo.retry}`;
-  const proposedTitle = `OS과제 제출 E2E ${marker}`;
+  const proposedTitle = `OS과제 E2E ${marker} 제출`;
   let applyRequests = 0;
 
   await registerIsolatedUser(page, testInfo);
@@ -560,8 +560,8 @@ test('recovers from a stale proposal without offering the same apply retry', asy
 
 test('raw memo survives review, apply, reload, and undo', async ({ page }, testInfo) => {
   const marker = `primary-${Date.now()}-${testInfo.retry}`;
-  const rawMemo = `2026.11.25 운영체제 과제 제출 E2E ${marker}`;
-  const proposedTitle = `운영체제 과제 제출 E2E ${marker}`;
+  const rawMemo = `2026.11.25 운영체제 과제 E2E ${marker} 제출`;
+  const proposedTitle = `운영체제 과제 E2E ${marker} 제출`;
   const approvedTitle = `${proposedTitle} 수정`;
 
   await registerIsolatedUser(page, testInfo);

@@ -48,7 +48,8 @@ class DeterministicEvaluationBaselineTest {
   private final ObjectMapper json = new ObjectMapper();
   private final FakeAnalyzer analyzer = new FakeAnalyzer(json);
   private final DeterministicAmbiguityGate ambiguityGate = new DeterministicAmbiguityGate();
-  private final EvaluationV2Evaluator evaluator = new EvaluationV2Evaluator(json);
+  private final EvaluationV2Evaluator evaluator =
+      new EvaluationV2Evaluator(json, analyzer.provenance(), ambiguityGate.version());
   private final Schema caseSchema = loadCaseSchema();
 
   @Test
@@ -109,6 +110,8 @@ class DeterministicEvaluationBaselineTest {
     assertThat(regression.legacyWrongLocalCount()).isZero();
     assertThat(regression.inventedPreciseDateCaseCount()).isZero();
     assertThat(regression.localOverflowCount()).isZero();
+    assertThat(regression.missingOverflowSignalCount()).isZero();
+    assertThat(regression.unresolvedFieldHallucinationCount()).isZero();
     assertThat(regression.regressionHardGatePassed()).isTrue();
     assertThat(report.at("/gates/regression/passed").asBoolean()).isTrue();
     assertThat(report.at("/gates/regression/semanticFalseConfidentLocalEnforced").asBoolean())
@@ -137,7 +140,7 @@ class DeterministicEvaluationBaselineTest {
             content,
             Instant.parse(fixture.path("baseInstant").asText()),
             fixture.path("timeZone").asText());
-    return evaluator.evaluate(fixture, proposal, memoId, revision, content.length());
+    return evaluator.evaluate(fixture, proposal, memoId, revision, content);
   }
 
   private void assertContentFreeReport(
@@ -192,6 +195,13 @@ class DeterministicEvaluationBaselineTest {
             regression.inventedPreciseDateCaseCount() + challenge.inventedPreciseDateCaseCount());
     assertThat(all.localOverflowCount())
         .isEqualTo(regression.localOverflowCount() + challenge.localOverflowCount());
+    assertThat(all.missingOverflowSignalCount())
+        .isEqualTo(
+            regression.missingOverflowSignalCount() + challenge.missingOverflowSignalCount());
+    assertThat(all.unresolvedFieldHallucinationCount())
+        .isEqualTo(
+            regression.unresolvedFieldHallucinationCount()
+                + challenge.unresolvedFieldHallucinationCount());
     assertThat(all.dateSemantics().truePositive())
         .isEqualTo(
             regression.dateSemantics().truePositive() + challenge.dateSemantics().truePositive());
@@ -236,13 +246,19 @@ class DeterministicEvaluationBaselineTest {
   }
 
   private void assertRuleSourcesDoNotCopyChallengePhrases(JsonNode challenge) throws Exception {
-    String ruleSources =
-        Files.readString(
-                backendPath(
-                    "src/main/java/local/personalmemo/analysis/infrastructure/FakeAnalyzer.java"))
-            + Files.readString(
-                backendPath(
-                    "src/main/java/local/personalmemo/analysis/domain/KoreanDateParser.java"));
+    Path analysisSources = backendPath("src/main/java/local/personalmemo/analysis");
+    StringBuilder productionSources = new StringBuilder();
+    try (var paths = Files.walk(analysisSources)) {
+      for (Path source :
+          paths
+              .filter(Files::isRegularFile)
+              .filter(path -> path.getFileName().toString().endsWith(".java"))
+              .sorted()
+              .toList()) {
+        productionSources.append(Files.readString(source));
+      }
+    }
+    String ruleSources = productionSources.toString();
     for (JsonNode fixture : challenge) {
       String content = fixture.path("content").asText().replaceAll("\\s+", " ").strip();
       assertThat(ruleSources)

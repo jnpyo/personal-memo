@@ -712,7 +712,7 @@ paths:
                 recentReviewOutcomes:
                   value:
                     schemaVersion: "1"
-                    comparisonPolicyVersion: review-default-v1
+                    comparisonPolicyVersion: review-default-v2
                     cohort:
                       basis: PROPOSAL_CREATED_AT
                       days: 14
@@ -749,7 +749,7 @@ paths:
                         due: 0
                     byAnalysisVersion:
                       - route: LOCAL
-                        analyzerVersion: fake-v4
+                        analyzerVersion: fake-v5
                         promptVersion: none
                         localModelVersion: none
                         embeddingModelVersion: none
@@ -1644,7 +1644,7 @@ components:
         schemaVersion:
           const: "1"
         comparisonPolicyVersion:
-          const: review-default-v1
+          const: review-default-v2
         cohort:
           $ref: "#/components/schemas/ReviewOutcomeCohort"
         proposals:

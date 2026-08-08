@@ -161,6 +161,16 @@ final class EvaluationV2GoldIntegrity {
   private static void validateSpan(EvaluationSpan span, String content, String subject) {
     require(span.end() > span.start(), subject + " must not be empty.");
     require(span.end() <= content.length(), subject + " exceeds UTF-16 content bounds.");
+    require(
+        !splitsSurrogatePair(content, span.start()) && !splitsSurrogatePair(content, span.end()),
+        subject + " must not split a UTF-16 surrogate pair.");
+  }
+
+  private static boolean splitsSurrogatePair(String content, int offset) {
+    return offset > 0
+        && offset < content.length()
+        && Character.isHighSurrogate(content.charAt(offset - 1))
+        && Character.isLowSurrogate(content.charAt(offset));
   }
 
   private static void validateRawBoundarySignals(JsonNode fixture) {

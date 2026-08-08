@@ -16,6 +16,7 @@ import {
   isValidReviewDraft,
   preferredItemKind,
   removeReviewItem,
+  usableDateCandidates,
 } from './reviewModel';
 
 function proposalItem(
@@ -77,19 +78,75 @@ const proposal: Proposal = {
 };
 
 describe('review model', () => {
-  it('clones editable data and assigns the preferred date to only one task', () => {
+  it('clones editable data without guessing between multiple task and date candidates', () => {
     const draft = createReviewDraft('proposal-1', proposal);
 
-    expect(draft.items[0].due).toMatchObject({
-      value: '2026-11-25',
-      precision: 'DATE_ONLY',
-    });
+    expect(draft.items[0].due).toBeNull();
     expect(draft.items[1].due).toBeNull();
 
     draft.tags[0].canonicalName = '수정';
     draft.items[0].title = '수정';
     expect(proposal.tagCandidates[0].canonicalName).toBe(' 운영체제 ');
     expect(proposal.itemCandidates[0].title).toBe(' 과제 제출 ');
+  });
+
+  it('automatically assigns a due only when one task and one usable date are unambiguous', () => {
+    const singleTaskAndDate: Proposal = {
+      ...proposal,
+      dateCandidates: [proposal.dateCandidates[1]],
+      itemCandidates: [proposal.itemCandidates[0]],
+    };
+
+    const draft = createReviewDraft('proposal-unambiguous-due', singleTaskAndDate);
+
+    expect(draft.items[0].due).toMatchObject({
+      value: '2026-11-25',
+      precision: 'DATE_ONLY',
+    });
+  });
+
+  it('projects the preferred type before deciding whether the sole task gets a due', () => {
+    const conflictProposal: Proposal = {
+      ...proposal,
+      typeCandidates: [{ value: 'TASK', score: 0.9 }],
+      dateCandidates: [proposal.dateCandidates[1]],
+      itemCandidates: [proposalItem('item-conflict', 'INFORMATION', '검토할 자료')],
+    };
+
+    const draft = createReviewDraft('proposal-conflict', conflictProposal);
+
+    expect(draft.items).toHaveLength(1);
+    expect(draft.items[0].kind).toBe('TASK');
+    expect(draft.items[0].due).toMatchObject({ value: '2026-11-25', precision: 'DATE_ONLY' });
+  });
+
+  it('does not bind one date when another item is present or the date is imprecise', () => {
+    const mixedProposal: Proposal = {
+      ...proposal,
+      dateCandidates: [proposal.dateCandidates[1]],
+      itemCandidates: [
+        proposalItem('item-task', 'TASK', '발표 준비'),
+        proposalItem('item-event', 'EVENT', '회의'),
+      ],
+    };
+    const approximateProposal: Proposal = {
+      ...proposal,
+      dateCandidates: [
+        {
+          surfaceText: '주말쯤',
+          value: null,
+          precision: 'APPROXIMATE',
+          timeSpecified: false,
+          confidence: 0.5,
+          ambiguityReasons: ['IMPRECISE_DATE'],
+        },
+      ],
+      itemCandidates: [proposalItem('item-task', 'TASK', '병원 예약 잡기')],
+    };
+
+    expect(createReviewDraft('proposal-mixed', mixedProposal).items[0].due).toBeNull();
+    expect(createReviewDraft('proposal-approximate', approximateProposal).items[0].due).toBeNull();
+    expect(usableDateCandidates(approximateProposal)).toEqual([]);
   });
 
   it('keeps the representative title and first canonical item in sync', () => {
@@ -242,13 +299,7 @@ describe('review model', () => {
       {
         kind: 'TASK',
         title: '운영체제 과제',
-        due: {
-          surfaceText: '11.25',
-          value: '2026-11-25',
-          precision: 'DATE_ONLY',
-          timeSpecified: false,
-          timeZone: 'Asia/Seoul',
-        },
+        due: null,
       },
     ]);
   });

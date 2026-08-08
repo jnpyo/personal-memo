@@ -30,7 +30,7 @@ import tools.jackson.databind.node.ObjectNode;
 @PostgresIntegration
 class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
   private static final AnalysisProvenance FAKE_PROVENANCE =
-      new AnalysisProvenance("fake-v4", "none", "none", "none");
+      new AnalysisProvenance("fake-v5", "none", "none", "none");
 
   @MockitoBean private LocalAnalyzer localAnalyzer;
   @MockitoBean private CloudAnalysisGateway cloudGateway;
@@ -135,6 +135,25 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
         .isEqualTo("fake-cloud-v1");
     assertThat(response(proposal).at("/providerMetadata/cloudToolCalls").asInt()).isZero();
     assertThat(response(proposal).at("/providerMetadata/cloudMutationCalls").asInt()).isZero();
+    assertCanonicalDataWasNotChanged();
+  }
+
+  @Test
+  void actionlessEventAlternativeKeepsItsItemTypeAcrossTheValidatedCloudRoute() throws Exception {
+    UUID memoId = UUID.randomUUID();
+    createMemo(memoId, "route-event-alternative-create", "10월 3일 회의 또는 동창회");
+
+    var started = startAnalysis(memoId, "route-event-alternative-start", 1);
+    UUID runId = UUID.fromString(response(started).path("id").asText());
+    UUID proposalId = UUID.fromString(response(started).path("proposalId").asText());
+    var proposal = mvc.perform(get("/api/v1/analysis-proposals/{id}", proposalId)).andReturn();
+
+    assertThat(started.getResponse().getStatus()).isEqualTo(200);
+    assertRun(runId, "HYBRID");
+    assertThat(response(proposal).at("/typeCandidates/0/value").asText()).isEqualTo("EVENT");
+    assertThat(response(proposal).at("/itemCandidates/0/kind").asText()).isEqualTo("EVENT");
+    assertThat(response(proposal).path("ambiguityReasons").toString()).contains("MULTI_INTENT");
+    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
     assertCanonicalDataWasNotChanged();
   }
 
@@ -476,7 +495,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
             .single();
     assertThat(state.route()).isEqualTo(expectedRoute);
     assertThat(state.status()).isEqualTo("REVIEW_REQUIRED");
-    assertThat(state.analyzerVersion()).isEqualTo("fake-v4");
+    assertThat(state.analyzerVersion()).isEqualTo("fake-v5");
     assertThat(state.promptVersion()).isEqualTo("none");
     assertThat(state.localModelVersion()).isEqualTo("none");
     assertThat(state.embeddingModelVersion()).isEqualTo("none");

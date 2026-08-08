@@ -11,6 +11,7 @@ import java.util.Set;
 import java.util.UUID;
 import local.personalmemo.analysis.domain.AnalysisProposalSchemaValidator;
 import local.personalmemo.analysis.domain.AnalysisProposalValidator;
+import local.personalmemo.analysis.domain.AnalysisProvenance;
 import local.personalmemo.analysis.domain.DeterministicAmbiguityGate;
 import local.personalmemo.analysis.infrastructure.Draft202012AnalysisProposalSchemaValidator;
 import tools.jackson.databind.JsonNode;
@@ -22,14 +23,23 @@ final class EvaluationV2Evaluator {
   private final AnalysisProposalSchemaValidator schemaValidator =
       new Draft202012AnalysisProposalSchemaValidator();
   private final AnalysisProposalValidator domainValidator = new AnalysisProposalValidator();
+  private final AnalysisProvenance expectedProvenance;
+  private final String expectedRoutingPolicyVersion;
 
-  EvaluationV2Evaluator(ObjectMapper ignored) {}
+  EvaluationV2Evaluator(
+      ObjectMapper ignored,
+      AnalysisProvenance expectedProvenance,
+      String expectedRoutingPolicyVersion) {
+    this.expectedProvenance = Objects.requireNonNull(expectedProvenance, "expectedProvenance");
+    this.expectedRoutingPolicyVersion =
+        Objects.requireNonNull(expectedRoutingPolicyVersion, "expectedRoutingPolicyVersion");
+  }
 
   CaseEvaluation evaluate(
-      JsonNode fixture, ObjectNode proposal, UUID memoId, int memoRevision, int contentLength) {
+      JsonNode fixture, ObjectNode proposal, UUID memoId, int memoRevision, String content) {
     EvaluationCaseGold gold = EvaluationV2GoldIntegrity.validate(fixture);
     boolean schemaValid = validatesSchema(proposal);
-    boolean domainValid = validatesDomain(proposal, memoId, memoRevision, contentLength);
+    boolean domainValid = validatesDomain(proposal, memoId, memoRevision, content);
 
     List<String> actualTypes = textValues(proposal.path("typeCandidates"), "value");
     boolean topTypeCorrect = topTypeCorrect(proposal.path("typeCandidates"), gold.expectedTypes());
@@ -55,6 +65,7 @@ final class EvaluationV2Evaluator {
 
     boolean overflowExpected = gold.dates().overflow() || gold.items().overflow();
     boolean overflowSignal = actualSignals.contains("CANDIDATE_LIMIT_EXCEEDED");
+    boolean missingOverflowSignal = overflowExpected && !overflowSignal;
     boolean localOverflow = "LOCAL_REVIEW".equals(actualRoute) && overflowExpected;
     boolean semanticFalseConfidentLocal =
         "LOCAL_REVIEW".equals(actualRoute)
@@ -85,6 +96,7 @@ final class EvaluationV2Evaluator {
         items,
         overflowExpected,
         overflowSignal,
+        missingOverflowSignal,
         localOverflow,
         semanticFalseConfidentLocal);
   }
@@ -99,9 +111,15 @@ final class EvaluationV2Evaluator {
   }
 
   private boolean validatesDomain(
-      ObjectNode proposal, UUID memoId, int memoRevision, int contentLength) {
+      ObjectNode proposal, UUID memoId, int memoRevision, String content) {
     try {
-      domainValidator.validate(proposal, memoId, memoRevision, contentLength);
+      domainValidator.validate(
+          proposal,
+          memoId,
+          memoRevision,
+          content,
+          expectedProvenance,
+          expectedRoutingPolicyVersion);
       return true;
     } catch (RuntimeException exception) {
       return false;
@@ -258,6 +276,7 @@ final class EvaluationV2Matcher {
         best.topOneEligible(),
         best.topOneCorrect(),
         best.overflowOmittedCount(),
+        best.unresolvedFieldHallucinationCount(),
         options.resolution());
   }
 
@@ -363,6 +382,7 @@ final class EvaluationV2Matcher {
         topOne.eligible(),
         topOne.correct(),
         set.overflowOmittedCount(),
+        metrics.unresolvedFieldHallucinationCount(),
         choice.score());
   }
 
@@ -444,6 +464,11 @@ final class EvaluationV2Matcher {
     EvaluationFieldCounts action = EvaluationFieldCounts.zero();
     EvaluationFieldCounts object = EvaluationFieldCounts.zero();
     EvaluationFieldCounts sourceSpan = EvaluationFieldCounts.zero();
+    int unresolvedFieldHallucinationCount = 0;
+    boolean hasUnresolvedAction =
+        gold.stream().anyMatch(item -> item.action().state() == EvaluationTextState.UNRESOLVED);
+    boolean hasUnresolvedObject =
+        gold.stream().anyMatch(item -> item.object().state() == EvaluationTextState.UNRESOLVED);
 
     for (int actualIndex = 0; actualIndex < mapping.length; actualIndex++) {
       EvaluationActualItem candidate = actual.get(actualIndex);
@@ -454,6 +479,12 @@ final class EvaluationV2Matcher {
         action = action.add(candidate.action() == null ? zero() : fp());
         object = object.add(candidate.object() == null ? zero() : fp());
         sourceSpan = sourceSpan.add(candidate.sourceSpan() == null ? zero() : fp());
+        if (hasUnresolvedAction && candidate.action() != null) {
+          unresolvedFieldHallucinationCount++;
+        }
+        if (hasUnresolvedObject && candidate.object() != null) {
+          unresolvedFieldHallucinationCount++;
+        }
         continue;
       }
       usedGold[goldIndex] = true;
@@ -464,6 +495,10 @@ final class EvaluationV2Matcher {
       action = action.add(textCounts(expected.action(), candidate.action()));
       object = object.add(textCounts(expected.object(), candidate.object()));
       sourceSpan = sourceSpan.add(spanCounts(expected.sourceSpan(), candidate.sourceSpan()));
+      unresolvedFieldHallucinationCount +=
+          unresolvedHallucination(expected.action(), candidate.action());
+      unresolvedFieldHallucinationCount +=
+          unresolvedHallucination(expected.object(), candidate.object());
     }
 
     for (int goldIndex = 0; goldIndex < gold.size(); goldIndex++) {
@@ -480,7 +515,8 @@ final class EvaluationV2Matcher {
 
     EvaluationCounts itemCounts =
         new EvaluationCounts(exactItems, actual.size() - exactItems, gold.size() - exactItems);
-    return new MappingEvaluation(itemCounts, kind, title, action, object, sourceSpan);
+    return new MappingEvaluation(
+        itemCounts, kind, title, action, object, sourceSpan, unresolvedFieldHallucinationCount);
   }
 
   private static boolean itemExact(EvaluationActualItem actual, EvaluationItemGold gold) {
@@ -522,6 +558,10 @@ final class EvaluationV2Matcher {
 
   private static EvaluationFieldCounts missingTextCounts(EvaluationTextExpectation expected) {
     return expected.state() == EvaluationTextState.VALUE ? fn() : zero();
+  }
+
+  private static int unresolvedHallucination(EvaluationTextExpectation expected, String actual) {
+    return expected.state() == EvaluationTextState.UNRESOLVED && actual != null ? 1 : 0;
   }
 
   private static EvaluationFieldCounts spanCounts(
@@ -596,7 +636,8 @@ final class EvaluationV2Matcher {
       EvaluationFieldCounts title,
       EvaluationFieldCounts action,
       EvaluationFieldCounts object,
-      EvaluationFieldCounts sourceSpan) {}
+      EvaluationFieldCounts sourceSpan,
+      int unresolvedFieldHallucinationCount) {}
 
   private record ItemSetEvaluation(
       String setId,
@@ -612,6 +653,7 @@ final class EvaluationV2Matcher {
       boolean topOneEligible,
       boolean topOneCorrect,
       int overflowOmittedCount,
+      int unresolvedFieldHallucinationCount,
       MappingScore score) {
     static ItemSetEvaluation empty(int actualCount) {
       return new ItemSetEvaluation(
@@ -627,6 +669,7 @@ final class EvaluationV2Matcher {
           false,
           false,
           false,
+          0,
           0,
           new MappingScore(0, 0, 0, 0, 0, 0, 0, 0));
     }
@@ -655,6 +698,7 @@ record ItemCaseEvaluation(
     boolean topOneEligible,
     boolean topOneCorrect,
     int overflowOmittedCount,
+    int unresolvedFieldHallucinationCount,
     String resolution) {}
 
 record CaseEvaluation(
@@ -676,6 +720,7 @@ record CaseEvaluation(
     ItemCaseEvaluation items,
     boolean overflowExpected,
     boolean overflowSignal,
+    boolean missingOverflowSignal,
     boolean localOverflow,
     boolean semanticFalseConfidentLocal) {
   boolean isSplit(String value) {

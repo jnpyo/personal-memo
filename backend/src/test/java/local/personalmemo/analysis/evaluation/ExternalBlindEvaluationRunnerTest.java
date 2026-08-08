@@ -110,8 +110,12 @@ class ExternalBlindEvaluationRunnerTest {
                 fixture.path("timeZone").asText());
     return EvaluationV2Metrics.aggregate(
             List.of(
-                new EvaluationV2Evaluator(json)
-                    .evaluate(fixture, proposal, memoId, 1, content.length())))
+                new EvaluationV2Evaluator(
+                        json,
+                        new FakeAnalyzer(json).provenance(),
+                        new local.personalmemo.analysis.domain.DeterministicAmbiguityGate()
+                            .version())
+                    .evaluate(fixture, proposal, memoId, 1, content)))
         .toJson(json);
   }
 

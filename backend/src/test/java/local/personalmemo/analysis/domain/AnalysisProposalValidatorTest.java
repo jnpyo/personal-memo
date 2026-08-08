@@ -40,7 +40,7 @@ class AnalysisProposalValidatorTest {
   }
 
   @Test
-  void rejectsImpossibleDateAndOutOfBoundsSourceSpan() {
+  void rejectsImpossibleDateAndInvalidSourceSpans() {
     UUID memoId = UUID.randomUUID();
     String content = "11.25 OS과제 제출";
     ObjectNode impossibleDate = proposal(memoId, 1, content);
@@ -49,9 +49,27 @@ class AnalysisProposalValidatorTest {
     ((ObjectNode) invalidSpan.at("/itemCandidates/0"))
         .set(
             "sourceSpan", json.createObjectNode().put("start", 0).put("end", content.length() + 1));
+    ObjectNode emptySpan = proposal(memoId, 1, content);
+    ((ObjectNode) emptySpan.at("/itemCandidates/0"))
+        .set("sourceSpan", json.createObjectNode().put("start", 3).put("end", 3));
 
     assertInvalidProposal(() -> validator.validate(impossibleDate, memoId, 1, content.length()));
     assertInvalidProposal(() -> validator.validate(invalidSpan, memoId, 1, content.length()));
+    assertInvalidProposal(() -> validator.validate(emptySpan, memoId, 1, content.length()));
+  }
+
+  @Test
+  void rejectsSourceSpansThatSplitUtf16SurrogatePairs() {
+    UUID memoId = UUID.randomUUID();
+    String content = "😀 과제 제출";
+    ObjectNode splitSurrogate = proposal(memoId, 1, content);
+    ((ObjectNode) splitSurrogate.at("/itemCandidates/0"))
+        .set("sourceSpan", json.createObjectNode().put("start", 1).put("end", content.length()));
+
+    assertInvalidProposal(
+        () ->
+            validator.validate(
+                splitSurrogate, memoId, 1, content, analyzer.provenance(), "field-policy-v1"));
   }
 
   private ObjectNode proposal(UUID memoId, int revision, String content) {

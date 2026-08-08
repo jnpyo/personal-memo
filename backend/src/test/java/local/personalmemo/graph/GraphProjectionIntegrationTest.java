@@ -61,6 +61,125 @@ class GraphProjectionIntegrationTest extends PostgresIntegrationTestSupport {
             });
   }
 
+  @Test
+  void mixedInformationAndTaskUsesApplicationSelectionAsStableRepresentative() throws Exception {
+    UUID memoId = UUID.randomUUID();
+    createMemo(memoId, "graph-mixed-create", "mixed graph memo");
+    UUID proposalId =
+        UUID.fromString(
+            response(startAnalysis(memoId, "graph-mixed-start", 1)).path("proposalId").asText());
+
+    Map<String, Object> task = new LinkedHashMap<>();
+    task.put("kind", "TASK");
+    task.put("title", "Child task must not become the representative");
+    task.put("due", null);
+    Map<String, Object> information = new LinkedHashMap<>();
+    information.put("kind", "INFORMATION");
+    information.put("title", "Supporting information item");
+    information.put("due", null);
+    Map<String, Object> selection =
+        Map.of(
+            "expectedMemoRevision",
+            1,
+            "selectedType",
+            "INFORMATION",
+            "title",
+            "Stable application title",
+            "selectedTags",
+            List.of(),
+            "items",
+            List.of(task, information));
+    var applied = applyProposal(proposalId, "graph-mixed-apply", selection);
+    assertThat(applied.getResponse().getStatus()).isEqualTo(200);
+
+    JsonNode node = memoNode(graph(10), memoId);
+
+    assertThat(node.path("label").asText()).isEqualTo("Stable application title");
+    assertThat(node.path("memoType").asText()).isEqualTo("INFORMATION");
+    assertThat(node.path("taskState").asText()).isEqualTo("TODO");
+    assertThat(node.path("overdue").asBoolean()).isFalse();
+  }
+
+  @Test
+  void anyOverdueActiveChildTaskMarksTheMemoOverdue() throws Exception {
+    UUID memoId = UUID.randomUUID();
+    createMemo(memoId, "graph-overdue-create", "two task graph memo");
+    UUID proposalId =
+        UUID.fromString(
+            response(startAnalysis(memoId, "graph-overdue-start", 1)).path("proposalId").asText());
+
+    Map<String, Object> firstTask = new LinkedHashMap<>();
+    firstTask.put("kind", "TASK");
+    firstTask.put("title", "First child task");
+    firstTask.put("due", null);
+    Map<String, Object> secondTask = new LinkedHashMap<>();
+    secondTask.put("kind", "TASK");
+    secondTask.put("title", "Second child task");
+    secondTask.put("due", null);
+    Map<String, Object> selection =
+        Map.of(
+            "expectedMemoRevision",
+            1,
+            "selectedType",
+            "TASK",
+            "title",
+            "Task collection title",
+            "selectedTags",
+            List.of(),
+            "items",
+            List.of(firstTask, secondTask));
+    var applied = applyProposal(proposalId, "graph-overdue-apply", selection);
+    assertThat(applied.getResponse().getStatus()).isEqualTo(200);
+
+    List<UUID> taskIds =
+        db.sql(
+                """
+                select i.id
+                  from memo_items i
+                  join task_details t
+                    on t.memo_item_id = i.id
+                   and t.owner_id = i.owner_id
+                 where i.memo_id = :memoId
+                   and i.owner_id = :ownerId
+                   and i.archived_at is null
+                 order by i.id
+                """)
+            .param("memoId", memoId)
+            .param("ownerId", OWNER_ID)
+            .query(UUID.class)
+            .list();
+    assertThat(taskIds).hasSize(2);
+    db.sql(
+            """
+            update task_details
+               set due_at_utc = current_timestamp + interval '1 day',
+                   due_local_date = null
+             where memo_item_id = :taskId
+               and owner_id = :ownerId
+            """)
+        .param("taskId", taskIds.getFirst())
+        .param("ownerId", OWNER_ID)
+        .update();
+    db.sql(
+            """
+            update task_details
+               set due_at_utc = current_timestamp - interval '1 day',
+                   due_local_date = null
+             where memo_item_id = :taskId
+               and owner_id = :ownerId
+            """)
+        .param("taskId", taskIds.getLast())
+        .param("ownerId", OWNER_ID)
+        .update();
+
+    JsonNode node = memoNode(graph(10), memoId);
+
+    assertThat(node.path("label").asText()).isEqualTo("Task collection title");
+    assertThat(node.path("memoType").asText()).isEqualTo("TASK");
+    assertThat(node.path("taskState").asText()).isEqualTo("TODO");
+    assertThat(node.path("overdue").asBoolean()).isTrue();
+  }
+
   private UUID createAppliedMemo(String keyPrefix) throws Exception {
     UUID memoId = UUID.randomUUID();
     createMemo(memoId, keyPrefix + "-create", keyPrefix + " 작업");
@@ -95,5 +214,14 @@ class GraphProjectionIntegrationTest extends PostgresIntegrationTestSupport {
         mvc.perform(get("/api/v1/graph/home").param("limit", Integer.toString(limit))).andReturn();
     assertThat(result.getResponse().getStatus()).isEqualTo(200);
     return response(result);
+  }
+
+  private JsonNode memoNode(JsonNode projection, UUID memoId) {
+    for (JsonNode node : projection.path("nodes")) {
+      if (("memo:" + memoId).equals(node.path("id").asText())) {
+        return node;
+      }
+    }
+    throw new AssertionError("Memo node was not present: " + memoId);
   }
 }

@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import local.personalmemo.analysis.domain.DeterministicAmbiguityGate;
 import local.personalmemo.analysis.infrastructure.FakeAnalyzer;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
@@ -19,6 +20,10 @@ class EvaluationV2EvaluatorTest {
   private static final String REGRESSION_RESOURCE = "/fixtures/korean-memo-cases.json";
 
   private final ObjectMapper json = new ObjectMapper();
+  private final FakeAnalyzer analyzer = new FakeAnalyzer(json);
+  private final DeterministicAmbiguityGate ambiguityGate = new DeterministicAmbiguityGate();
+  private final EvaluationV2Evaluator evaluator =
+      new EvaluationV2Evaluator(json, analyzer.provenance(), ambiguityGate.version());
 
   @Test
   void dateSemanticNormalizationIsFailClosedAndOffsetIndependent() {
@@ -60,8 +65,7 @@ class EvaluationV2EvaluatorTest {
     types.add(json.createObjectNode().put("value", "TASK").put("score", 0.1));
     types.add(expected);
 
-    CaseEvaluation result =
-        new EvaluationV2Evaluator(json).evaluate(fixture, proposal, memoId, 1, content.length());
+    CaseEvaluation result = evaluator.evaluate(fixture, proposal, memoId, 1, content);
     assertThat(result.topTypeCorrect()).isTrue();
     assertThat(result.typeSetExact()).isFalse();
     assertThat(result.semanticFalseConfidentLocal()).isTrue();
@@ -137,14 +141,15 @@ class EvaluationV2EvaluatorTest {
             "item-1",
             "TASK",
             value("Review it"),
-            value("Review"),
+            new EvaluationTextExpectation(EvaluationTextState.UNRESOLVED, null),
             new EvaluationTextExpectation(EvaluationTextState.UNRESOLVED, null),
             new EvaluationSpanExpectation(EvaluationSpanRequirement.ABSENT, List.of()));
     EvaluationItemGoldSet set =
         new EvaluationItemGoldSet(
             "set-1", value("Review it"), "item-1", List.of(expected), List.of("item-1"));
     EvaluationActualItem hallucinated =
-        new EvaluationActualItem("TASK", "Review it", "Review", "invented document", null, 0.99);
+        new EvaluationActualItem(
+            "TASK", "Review it", "invented action", "invented document", null, 0.99);
 
     ItemCaseEvaluation result =
         EvaluationV2Matcher.evaluateItems(
@@ -153,9 +158,147 @@ class EvaluationV2EvaluatorTest {
             "Review it");
 
     assertThat(result.itemCounts()).isEqualTo(new EvaluationCounts(0, 1, 1));
+    assertThat(result.action()).isEqualTo(EvaluationFieldCounts.zero());
     assertThat(result.object()).isEqualTo(EvaluationFieldCounts.zero());
+    assertThat(result.unresolvedFieldHallucinationCount()).isEqualTo(2);
     assertThat(result.completeSetExact()).isFalse();
     assertThat(result.topOneCorrect()).isFalse();
+
+    EvaluationActualItem safelyUnresolved =
+        new EvaluationActualItem("TASK", "Review it", null, null, null, 0.99);
+    ItemCaseEvaluation safeResult =
+        EvaluationV2Matcher.evaluateItems(
+            new EvaluationItemGoldOptions("USER_INPUT_NEEDED", List.of(set)),
+            List.of(safelyUnresolved),
+            "Review it");
+    assertThat(safeResult.unresolvedFieldHallucinationCount()).isZero();
+
+    ItemCaseEvaluation extraHallucinationResult =
+        EvaluationV2Matcher.evaluateItems(
+            new EvaluationItemGoldOptions("USER_INPUT_NEEDED", List.of(set)),
+            List.of(hallucinated, safelyUnresolved),
+            "Review it");
+    assertThat(extraHallucinationResult.unresolvedFieldHallucinationCount()).isEqualTo(2);
+    assertThat(extraHallucinationResult.completeSetExact()).isFalse();
+  }
+
+  @Test
+  void productionDomainValidationRejectsTamperedProvenanceAndSurrogateSplitSpans()
+      throws Exception {
+    ObjectNode fixture = fixture("prompt-injection");
+    String original = fixture.path("content").asText();
+    String content = "😀" + original;
+    fixture.put("content", content);
+    ObjectNode goldSpan =
+        (ObjectNode)
+            fixture.at("/expectedItems/acceptableSets/0/allItems/0/sourceSpan/acceptedSpans/0");
+    goldSpan.put("start", 0).put("end", content.length());
+    UUID memoId = UUID.randomUUID();
+    ObjectNode proposal =
+        analyzer.analyze(
+            memoId,
+            1,
+            content,
+            Instant.parse(fixture.path("baseInstant").asText()),
+            fixture.path("timeZone").asText());
+
+    ((ObjectNode) proposal.at("/providerMetadata")).put("analyzerVersion", "tampered");
+    assertThat(evaluator.evaluate(fixture, proposal, memoId, 1, content).domainValid()).isFalse();
+
+    ((ObjectNode) proposal.at("/providerMetadata"))
+        .put("analyzerVersion", analyzer.provenance().analyzerVersion());
+    ((ObjectNode) proposal.at("/itemCandidates/0/sourceSpan")).put("start", 1);
+    assertThat(evaluator.evaluate(fixture, proposal, memoId, 1, content).domainValid()).isFalse();
+  }
+
+  @Test
+  void missingOverflowSignalIsCountedEvenWhenAnotherSignalAlreadyRoutesToCloud() throws Exception {
+    ObjectNode fixture = fixture("long-ambiguous-note");
+    String content = fixture.path("content").asText();
+    UUID memoId = UUID.randomUUID();
+    ObjectNode proposal =
+        new FakeAnalyzer(json)
+            .analyze(
+                memoId,
+                1,
+                content,
+                Instant.parse(fixture.path("baseInstant").asText()),
+                fixture.path("timeZone").asText());
+    removeSignal(proposal, "CANDIDATE_LIMIT_EXCEEDED");
+
+    CaseEvaluation missing = evaluator.evaluate(fixture, proposal, memoId, 1, content);
+
+    assertThat(missing.actualRoute()).isEqualTo("CLOUD_ENRICH");
+    assertThat(missing.overflowExpected()).isTrue();
+    assertThat(missing.missingOverflowSignal()).isTrue();
+    AggregateEvaluation aggregate = EvaluationV2Metrics.aggregate(List.of(missing));
+    assertThat(aggregate.missingOverflowSignalCount()).isEqualTo(1);
+    assertThat(aggregate.toJson(json).at("/safety/missingOverflowSignalCount").asInt())
+        .isEqualTo(1);
+    ObjectNode gates =
+        EvaluationV2Report.gates(json, aggregate, EvaluationV2Metrics.aggregate(List.of()));
+    assertThat(gates.at("/regression/missingOverflowSignalMaximum").asInt()).isZero();
+    assertThat(gates.at("/regression/actualMissingOverflowSignalCount").asInt()).isEqualTo(1);
+    assertThat(gates.at("/regression/passed").asBoolean()).isFalse();
+    ObjectNode visibleOnlyGates =
+        EvaluationV2Report.gates(json, EvaluationV2Metrics.aggregate(List.of()), aggregate);
+    assertThat(visibleOnlyGates.at("/visibleChallenge/enforced").asBoolean()).isFalse();
+    assertThat(visibleOnlyGates.at("/visibleChallenge/actualMissingOverflowSignalCount").asInt())
+        .isEqualTo(1);
+    assertThat(
+            visibleOnlyGates.at("/visibleChallenge/missingOverflowSignalMaximum").isMissingNode())
+        .isTrue();
+
+    ((ArrayNode) proposal.path("ambiguityReasons")).add("CANDIDATE_LIMIT_EXCEEDED");
+    CaseEvaluation guarded = evaluator.evaluate(fixture, proposal, memoId, 1, content);
+    assertThat(guarded.missingOverflowSignal()).isFalse();
+  }
+
+  @Test
+  void unresolvedObjectHallucinationIsAggregatedAndFailsTheRegressionSafetyGate() throws Exception {
+    ObjectNode fixture = fixture("imprecise-reference-task");
+    String content = fixture.path("content").asText();
+    UUID memoId = UUID.randomUUID();
+    ObjectNode proposal =
+        new FakeAnalyzer(json)
+            .analyze(
+                memoId,
+                1,
+                content,
+                Instant.parse(fixture.path("baseInstant").asText()),
+                fixture.path("timeZone").asText());
+    ((ObjectNode) proposal.at("/itemCandidates/0")).put("object", "invented document");
+
+    CaseEvaluation hallucinated = evaluator.evaluate(fixture, proposal, memoId, 1, content);
+
+    assertThat(hallucinated.items().unresolvedFieldHallucinationCount()).isEqualTo(1);
+    AggregateEvaluation aggregate = EvaluationV2Metrics.aggregate(List.of(hallucinated));
+    assertThat(aggregate.unresolvedFieldHallucinationCount()).isEqualTo(1);
+    assertThat(aggregate.toJson(json).at("/safety/unresolvedFieldHallucinationCount").asInt())
+        .isEqualTo(1);
+    ObjectNode gates =
+        EvaluationV2Report.gates(json, aggregate, EvaluationV2Metrics.aggregate(List.of()));
+    assertThat(gates.at("/regression/unresolvedFieldHallucinationMaximum").asInt()).isZero();
+    assertThat(gates.at("/regression/actualUnresolvedFieldHallucinationCount").asInt())
+        .isEqualTo(1);
+    assertThat(gates.at("/regression/passed").asBoolean()).isFalse();
+    ObjectNode visibleOnlyGates =
+        EvaluationV2Report.gates(json, EvaluationV2Metrics.aggregate(List.of()), aggregate);
+    assertThat(visibleOnlyGates.at("/visibleChallenge/enforced").asBoolean()).isFalse();
+    assertThat(
+            visibleOnlyGates
+                .at("/visibleChallenge/actualUnresolvedFieldHallucinationCount")
+                .asInt())
+        .isEqualTo(1);
+    assertThat(
+            visibleOnlyGates
+                .at("/visibleChallenge/unresolvedFieldHallucinationMaximum")
+                .isMissingNode())
+        .isTrue();
+
+    ((ObjectNode) proposal.at("/itemCandidates/0")).putNull("object");
+    CaseEvaluation safe = evaluator.evaluate(fixture, proposal, memoId, 1, content);
+    assertThat(safe.items().unresolvedFieldHallucinationCount()).isZero();
   }
 
   @Test
@@ -202,6 +345,19 @@ class EvaluationV2EvaluatorTest {
   private EvaluationItemGold withId(EvaluationItemGold item, String id) {
     return new EvaluationItemGold(
         id, item.kind(), item.title(), item.action(), item.object(), item.sourceSpan());
+  }
+
+  private void removeSignal(ObjectNode proposal, String removed) {
+    ArrayNode reasons = (ArrayNode) proposal.path("ambiguityReasons");
+    List<String> retained = new java.util.ArrayList<>();
+    reasons.forEach(
+        reason -> {
+          if (!removed.equals(reason.asText())) {
+            retained.add(reason.asText());
+          }
+        });
+    reasons.removeAll();
+    retained.forEach(reasons::add);
   }
 
   private ObjectNode fixture(String id) throws Exception {

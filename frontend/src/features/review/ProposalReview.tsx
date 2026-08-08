@@ -72,8 +72,20 @@ function suggestedType(review: ReviewDraft): ItemKind | null {
   return preferredItemKind(review.proposal);
 }
 
+function requiresExplicitDateMapping(review: ReviewDraft): boolean {
+  const dates = usableDateCandidates(review.proposal);
+  if (review.proposal.dateCandidates.length === 0) return false;
+  if (dates.length !== review.proposal.dateCandidates.length) return true;
+  if (review.items.length !== 1 || review.items[0].kind !== 'TASK' || dates.length !== 1) {
+    return true;
+  }
+  return review.items[0].due === null || !sameDate(review.items[0].due, dates[0]);
+}
+
 function initialStep(review: ReviewDraft): MainReviewStep {
-  return suggestedType(review) && isValidReviewDraft(review) ? 'CONFIRM' : 'ALTERNATIVES';
+  return suggestedType(review) && isValidReviewDraft(review) && !requiresExplicitDateMapping(review)
+    ? 'CONFIRM'
+    : 'ALTERNATIVES';
 }
 
 function orderedTypeOptions(review: ReviewDraft): ItemKind[] {
@@ -440,7 +452,10 @@ export function ProposalReview({
               </p>
 
               <div className="review-navigation-actions">
-                {primaryType && !draftChanged && isValidReviewDraft(review) && (
+                {primaryType &&
+                  !draftChanged &&
+                  isValidReviewDraft(review) &&
+                  !requiresExplicitDateMapping(review) && (
                   <button
                     type="button"
                     className="secondary-button"
@@ -477,6 +492,13 @@ export function ProposalReview({
               <p className="review-note">
                 아래 내용은 아직 제안입니다. 승인 전에는 선택한 항목과 태그가 생성되지 않습니다.
               </p>
+
+              {review.proposal.dateCandidates.length > dateCandidates.length && (
+                <p className="review-note" role="status">
+                  정확하지 않은 날짜 표현은 기한으로 자동 저장하지 않습니다. 아래에서 정확한 날짜를
+                  직접 입력하거나 ‘날짜 포함 안 함’을 확인해 주세요.
+                </p>
+              )}
 
               <div className="review-fields">
                 <label>

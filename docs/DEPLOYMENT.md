@@ -356,7 +356,7 @@ Remove-Item Env:PERSONAL_MEMO_FRONTEND_PORT
 
 - 적용된 versioned migration을 수정·삭제·순서 변경하지 않는다. schema 변경은 다음 번호의 새 migration으로 전진시킨다.
 - backend 시작이 Flyway를 자동 실행하므로, 배포 전에 백업과 restore 검증을 끝내고 한 번에 하나의 migration 주체만 시작한다.
-- `V11`의 일반 `CREATE INDEX`는 현재 작은 private database에는 적합하지만 큰 `analysis_applications` table에서는 migration 동안 write를 막을 수 있다. 아직 `V11`을 적용하지 않은 대규모 공개 database를 upgrade할 때는 사전 table-size·lock 검증, writer drain과 maintenance window를 release gate로 둔다. 이후 큰 table의 index는 PostgreSQL/Flyway transaction 경계를 고려한 별도 concurrent migration 절차를 먼저 검증하며, 이미 적용된 `V11`을 고쳐 쓰지 않는다.
+- `V11`과 `V12`의 일반 `CREATE INDEX`는 현재 작은 private database에는 적합하지만 큰 `analysis_applications`·`memo_items` table에서는 migration 동안 write를 막을 수 있다. 아직 이 migration을 적용하지 않은 대규모 공개 database를 upgrade할 때는 사전 table-size·lock 검증, writer drain과 maintenance window를 release gate로 둔다. 이후 큰 table의 index는 PostgreSQL/Flyway transaction 경계를 고려한 별도 concurrent migration 절차를 먼저 검증하며, 이미 적용된 versioned migration을 고쳐 쓰지 않는다.
 - migration 실패 시 트래픽과 새 쓰기를 중단하고 실패한 database를 증거로 보존한다. 원인을 모른 채 `flyway repair`로 rollback을 대신하지 않는다.
 - 이전 application image로 되돌리는 것은 새 schema와 이전 코드가 호환될 때만 가능하다. 호환되지 않으면 검증된 backup을 새 volume에 복원하고 edge를 전환한다.
 - 데이터베이스 rollback은 migration SQL을 역으로 임의 실행하는 작업이 아니라, 알려진 정상 backup의 별도 복원·검증·전환 절차다.

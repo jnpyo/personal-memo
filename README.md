@@ -290,7 +290,7 @@ docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.p
 - 자동 태그 병합·분리, 의미 검색, 노드 압축
 - Neo4j, Kafka, Redis, 별도 AI 마이크로서비스
 
-local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 적용되며 잠금 중 추가 시도로 만료가 연장되지 않습니다. 만료 뒤 정상 로그인하면 실패 기록을 초기화합니다. 결정론적 평가 v2는 regression의 proposal schema/domain 유효성, wrong-local 0, 정밀 날짜 발명 0, local overflow 0을 hard gate로 검사합니다. 공개 visible challenge와 date/item/source-span 품질 수치는 진단용이며 blind 정확도 주장이 아닙니다. 현재 Fake 분석기의 가장 큰 측정 공백은 item 분해와 source span입니다. 외부 blind runner는 원문을 저장소나 CI에 넣지 않는 aggregate-only 경계까지만 준비됐고 metric gate는 `NOT_CONFIGURED`입니다. 실제 AI provider와 로컬 모델 연결은 독립적인 gold 검토, 사전 승인된 threshold, 개인정보·비용·실패 수명주기 경계가 준비되기 전까지 보류합니다.
+local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 적용되며 잠금 중 추가 시도로 만료가 연장되지 않습니다. 만료 뒤 정상 로그인하면 실패 기록을 초기화합니다. 결정론적 평가 v2는 regression의 proposal schema/domain 유효성, wrong-local 0, 정밀 날짜 발명 0, local overflow 0, 누락된 overflow 신호 0, 미해결 action/object 환각 0을 hard gate로 검사합니다. `fake-v5`는 순차 item을 분리하고 immutable 원문의 UTF-16 source span을 제안에 포함하며, 현재 공개 합성 자료에서 item 수는 regression/challenge 각각 12/12 case, source span은 15/15·14/14개가 일치합니다. 이 수치와 나머지 date/item 품질은 진단용이며 blind 정확도 주장이 아닙니다. 남은 분석 품질 작업은 item 의미 gold의 독립 검토, 명시적인 date-to-item 연결 계약, 공개 자료와 분리된 blind 평가입니다. 외부 blind runner는 원문을 저장소나 CI에 넣지 않는 aggregate-only 경계까지만 준비됐고 metric gate는 `NOT_CONFIGURED`입니다. 실제 AI provider와 로컬 모델 연결은 독립적인 gold 검토, 사전 승인된 threshold, 개인정보·비용·실패 수명주기 경계가 준비되기 전까지 보류합니다.
 
 ## 문서
 

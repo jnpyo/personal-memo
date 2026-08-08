@@ -162,7 +162,7 @@ top-1/top-2 conflict merely because their scores are close.
 The current deterministic gate thresholds and structured-proposal reconstruction rules belong to
 routing policy `field-policy-v1`; changing a gate threshold, cloud-signal set, or reconstruction
 rule requires a new policy version. Lexical classification, reference extraction, and date parsing
-are separately identified by `fake-v4` and `korean-rules-v2`; changing those inputs does not rename
+are separately identified by `fake-v5` and `korean-rules-v3`; changing those inputs does not rename
 an otherwise unchanged gate. Runtime configuration and user-specific thresholds remain a later
 milestone.
 
@@ -285,8 +285,8 @@ The version-1 result should contain fields conceptually equivalent to:
   "relationCandidates": [],
   "ambiguityReasons": [],
   "providerMetadata": {
-    "analyzerVersion": "fake-v4",
-    "deterministicRulesVersion": "korean-rules-v2",
+    "analyzerVersion": "fake-v5",
+    "deterministicRulesVersion": "korean-rules-v3",
     "promptVersion": "none",
     "localModelVersion": "none",
     "embeddingModelVersion": "none",
@@ -296,7 +296,7 @@ The version-1 result should contain fields conceptually equivalent to:
 }
 ```
 
-The server must validate this against both JSON Schema and domain rules. Unknown enum values and stale revisions are rejected. The five required version strings in `providerMetadata` contain 1–64 characters and must exactly match the server-owned analyzer and routing provenance; `toolCalls` is a required integer from 0 through 100. Provider-specific extra metadata is allowed only inside the metadata object. Before schema validation, the compact serialized proposal is capped at 65,536 UTF-8 bytes (64 KiB) and `providerMetadata` at 8,192 UTF-8 bytes (8 KiB).
+The server must validate this against both JSON Schema and domain rules. Unknown enum values and stale revisions are rejected. A non-null item `sourceSpan` is a non-empty UTF-16 code-unit half-open range `[start, end)` over the exact immutable raw memo revision; it must stay in bounds and must not split a surrogate pair. The five required version strings in `providerMetadata` contain 1–64 characters and must exactly match the server-owned analyzer and routing provenance; `toolCalls` is a required integer from 0 through 100. Provider-specific extra metadata is allowed only inside the metadata object. Before schema validation, the compact serialized proposal is capped at 65,536 UTF-8 bytes (64 KiB) and `providerMetadata` at 8,192 UTF-8 bytes (8 KiB).
 
 ## Application
 
@@ -401,8 +401,9 @@ for:
 
 Track precision of high-confidence local routing separately from overall accuracy. The primary safety metric is the rate of wrong local decisions that were presented as unambiguous.
 
-`fake-v4` generalizes weekday/time, approximate-date, reference, action, event, and multi-intent rules
-without copying a challenge sentence. The version-2 report now exposes date mention/item/item-source-span
+`fake-v5` / `korean-rules-v3` keeps the generalized weekday/time, approximate-date, reference, event,
+and multi-intent rules while extracting sequential item facets and source-aligned UTF-16 spans from
+the immutable raw revision without copying a challenge sentence. The version-2 report now exposes date mention/item/item-source-span
 failures as well as route/type/signal metrics, including missing spans rather than silently treating
 them as success. The public visible challenge and the semantic quality rates remain report-only;
 they are not a blind or general Korean accuracy claim. The generated public report contains case

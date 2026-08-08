@@ -420,7 +420,7 @@ public class AnalysisService {
         proposal,
         memo.id(),
         memo.currentRevision(),
-        memo.content().length(),
+        memo.content(),
         expectedProvenance,
         expectedRoutingPolicyVersion);
     validateProposalReferences(proposal);

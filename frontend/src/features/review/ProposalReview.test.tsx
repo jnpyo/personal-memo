@@ -103,6 +103,72 @@ describe('proposal review dialog', () => {
     expect(markup).not.toContain('예, 이대로 적용');
   });
 
+  it('requires detailed review when dates cannot be mapped to one task unambiguously', () => {
+    const markup = renderProposal({
+      ...taskProposal,
+      dateCandidates: [
+        {
+          surfaceText: '11월 20일',
+          value: '2026-11-20',
+          precision: 'DATE_ONLY',
+          timeSpecified: false,
+          confidence: 0.9,
+          ambiguityReasons: ['MISSING_YEAR', 'MISSING_TIME'],
+        },
+        {
+          surfaceText: '11월 25일',
+          value: '2026-11-25',
+          precision: 'DATE_ONLY',
+          timeSpecified: false,
+          confidence: 0.9,
+          ambiguityReasons: ['MISSING_YEAR', 'MISSING_TIME'],
+        },
+      ],
+    });
+
+    expect(markup).toContain('어떤 부분이 다른가요?');
+    expect(markup).toContain('유형은 맞아요');
+    expect(markup).not.toContain('AI 추천으로 돌아가기');
+    expect(markup).not.toContain('예, 이대로 적용');
+  });
+
+  it('requires detailed review for a mixed item set or an imprecise date', () => {
+    const exactDate: Proposal['dateCandidates'][number] = {
+      surfaceText: '11월 25일',
+      value: '2026-11-25',
+      precision: 'DATE_ONLY' as const,
+      timeSpecified: false,
+      confidence: 0.9,
+      ambiguityReasons: ['MISSING_YEAR'],
+    };
+    const mixedMarkup = renderProposal({
+      ...taskProposal,
+      dateCandidates: [exactDate],
+      itemCandidates: [
+        taskProposal.itemCandidates[0],
+        { ...taskProposal.itemCandidates[0], candidateId: 'event-1', kind: 'EVENT', title: '회의' },
+      ],
+    });
+    const approximateMarkup = renderProposal({
+      ...taskProposal,
+      dateCandidates: [
+        {
+          surfaceText: '주말쯤',
+          value: null,
+          precision: 'APPROXIMATE',
+          timeSpecified: false,
+          confidence: 0.5,
+          ambiguityReasons: ['IMPRECISE_DATE'],
+        },
+      ],
+    });
+
+    expect(mixedMarkup).toContain('어떤 부분이 다른가요?');
+    expect(mixedMarkup).not.toContain('예, 이대로 적용');
+    expect(approximateMarkup).toContain('어떤 부분이 다른가요?');
+    expect(approximateMarkup).not.toContain('예, 이대로 적용');
+  });
+
   it('does not expose a retry while another proposal operation is in flight', () => {
     const markup = renderProposal(taskProposal, {
       busy: true,

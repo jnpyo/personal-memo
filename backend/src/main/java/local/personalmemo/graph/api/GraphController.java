@@ -61,41 +61,65 @@ public class GraphController {
     return db.sql(
             """
             select m.id,
-                   selected_item.title,
-                   selected_item.kind,
-                   selected_item.task_status,
-                   selected_item.overdue
+                   latest_application.selection_json ->> 'title' as title,
+                   latest_application.selection_json ->> 'selectedType' as kind,
+                   task_summary.task_status,
+                   coalesce(task_summary.overdue, false) as overdue
               from memos m
               join lateral (
-                select i.title,
-                       i.kind,
-                       t.status as task_status,
+                select a.id, a.selection_json
+                  from analysis_applications a
+                 where a.memo_id = m.id
+                   and a.owner_id = m.owner_id
+                   and a.status = 'APPLIED'
+                 order by a.applied_at desc, a.id desc
+                 limit 1
+              ) latest_application on true
+              left join lateral (
+                select case
+                         when bool_or(t.status = 'TODO') then 'TODO'
+                         when bool_or(t.status = 'DONE') then 'DONE'
+                         when bool_or(t.status = 'CANCELLED') then 'CANCELLED'
+                         else null
+                       end as task_status,
                        coalesce(
-                         t.status = 'TODO'
-                         and (
-                           (t.due_at_utc is not null and t.due_at_utc < current_timestamp)
-                           or (
-                             t.due_local_date is not null
-                             and t.due_local_date <
-                               (current_timestamp at time zone t.source_time_zone)::date
+                         bool_or(
+                           t.status = 'TODO'
+                           and (
+                             (t.due_at_utc is not null and t.due_at_utc < current_timestamp)
+                             or (
+                               t.due_local_date is not null
+                               and t.due_local_date <
+                                 (current_timestamp at time zone t.source_time_zone)::date
+                             )
                            )
                          ),
                          false
                        ) as overdue
                   from memo_items i
-                  left join task_details t
+                  join task_details t
                     on t.memo_item_id = i.id
                    and t.owner_id = i.owner_id
                  where i.memo_id = m.id
                    and i.owner_id = m.owner_id
                    and i.archived_at is null
-                 order by case when t.status = 'TODO' then 0 else 1 end,
-                          i.created_at desc,
-                          i.id
-                 limit 1
-              ) selected_item on true
+              ) task_summary on true
              where m.owner_id = :ownerId
                and m.status = 'ACTIVE'
+               and jsonb_typeof(latest_application.selection_json) = 'object'
+               and jsonb_typeof(latest_application.selection_json -> 'title') = 'string'
+               and btrim(latest_application.selection_json ->> 'title') <> ''
+               and jsonb_typeof(latest_application.selection_json -> 'selectedType') = 'string'
+               and latest_application.selection_json ->> 'selectedType'
+                     in ('TASK', 'EVENT', 'INFORMATION', 'IDEA', 'RECORD')
+               and exists (
+                 select 1
+                   from memo_items latest_item
+                  where latest_item.application_id = latest_application.id
+                    and latest_item.memo_id = m.id
+                    and latest_item.owner_id = m.owner_id
+                    and latest_item.archived_at is null
+               )
              order by m.updated_at desc, m.id
              limit :limit
             """)

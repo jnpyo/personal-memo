@@ -244,7 +244,7 @@ export function decodeReviewOutcomeSummary(value: unknown): AnalysisReviewOutcom
     'byAnalysisVersion',
   ]);
   if (summary.schemaVersion !== '1') fail('schemaVersion');
-  if (summary.comparisonPolicyVersion !== 'review-default-v1') {
+  if (summary.comparisonPolicyVersion !== 'review-default-v2') {
     fail('comparisonPolicyVersion');
   }
 
@@ -284,7 +284,7 @@ export function decodeReviewOutcomeSummary(value: unknown): AnalysisReviewOutcom
 
   return {
     schemaVersion: '1',
-    comparisonPolicyVersion: 'review-default-v1',
+    comparisonPolicyVersion: 'review-default-v2',
     cohort: {
       basis: 'PROPOSAL_CREATED_AT',
       days,

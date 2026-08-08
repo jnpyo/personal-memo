@@ -56,6 +56,77 @@ class AnalysisReviewOutcomeClassifierTest {
   }
 
   @Test
+  void exactDoesNotGuessADueWhenMultipleDatesNeedUserMapping() {
+    proposal
+        .withArray("dateCandidates")
+        .addObject()
+        .put("surfaceText", "11.30")
+        .put("value", "2026-11-30")
+        .put("precision", "DATE_ONLY")
+        .put("timeSpecified", false)
+        .put("confidence", 0.7)
+        .putArray("ambiguityReasons");
+    ((ObjectNode) selection.path("items").get(0)).putNull("due");
+
+    var result = classifier.classify(proposal, selection, context);
+
+    assertThat(result.outcome()).isEqualTo(Outcome.EXACT);
+    assertThat(result.correctedFields().due()).isFalse();
+  }
+
+  @Test
+  void exactProjectsThePreferredTaskBeforeAssigningTheOnlyPreciseDue() {
+    ((ObjectNode) proposal.path("itemCandidates").get(0)).put("kind", "INFORMATION");
+
+    var result = classifier.classify(proposal, selection, context);
+
+    assertThat(result.outcome()).isEqualTo(Outcome.EXACT);
+    assertThat(result.correctedFields().any()).isFalse();
+  }
+
+  @Test
+  void exactDoesNotGuessADueForMixedItemsOrAnImpreciseDate() {
+    proposal
+        .withArray("itemCandidates")
+        .addObject()
+        .put("candidateId", "item-2")
+        .put("kind", "EVENT")
+        .put("title", "Meeting")
+        .putNull("sourceSpan")
+        .putNull("action")
+        .putNull("object")
+        .put("confidence", 0.8);
+    ((ObjectNode) selection.path("items").get(0)).putNull("due");
+    selection
+        .withArray("items")
+        .addObject()
+        .put("kind", "EVENT")
+        .put("title", "Meeting")
+        .putNull("due");
+
+    assertThat(classifier.classify(proposal, selection, context).outcome())
+        .isEqualTo(Outcome.EXACT);
+
+    proposal = taskProposal();
+    proposal
+        .putArray("dateCandidates")
+        .addObject()
+        .put("surfaceText", "around the weekend")
+        .putNull("value")
+        .put("precision", "APPROXIMATE")
+        .put("timeSpecified", false)
+        .put("confidence", 0.5)
+        .putArray("ambiguityReasons")
+        .add("IMPRECISE_DATE");
+    proposal.putArray("ambiguityReasons").add("IMPRECISE_DATE");
+    selection = exactSelection();
+    ((ObjectNode) selection.path("items").get(0)).putNull("due");
+
+    assertThat(classifier.classify(proposal, selection, context).outcome())
+        .isEqualTo(Outcome.EXACT);
+  }
+
+  @Test
   void correctedReportsOnlyComparableFieldFamilies() {
     selection.put("selectedType", "IDEA").put("title", "Changed title");
     selection.putArray("selectedTags");
@@ -169,6 +240,7 @@ class AnalysisReviewOutcomeClassifierTest {
         .put("kind", "INFORMATION")
         .put("title", "Reference note")
         .putNull("due");
+    ((ObjectNode) selection.path("items").get(0)).putNull("due");
 
     var result = classifier.classify(proposal, selection, context);
 

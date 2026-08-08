@@ -140,7 +140,9 @@ class ExternalBlindEvaluationRunner {
           "safety",
           "semanticFalseConfidentLocalCount",
           "semanticFalseConfidentLocalEnforced",
-          "localOverflowCount");
+          "localOverflowCount",
+          "missingOverflowSignalCount",
+          "unresolvedFieldHallucinationCount");
   private static final Set<String> SENSITIVE_VALUE_FIELDS =
       Set.of("id", "goldId", "setId", "content", "notes", "surfaceText", "value");
   private static final Set<String> IDENTIFIER_VALUE_FIELDS = Set.of("id", "goldId", "setId");
@@ -180,7 +182,8 @@ class ExternalBlindEvaluationRunner {
     BlindEnvelope envelope = readAndValidateEnvelope(datasetPath, caseSchema);
     assertNoPublicFixtureOverlap(envelope);
 
-    EvaluationV2Evaluator evaluator = new EvaluationV2Evaluator(json);
+    EvaluationV2Evaluator evaluator =
+        new EvaluationV2Evaluator(json, analyzer.provenance(), ambiguityGate.version());
     List<CaseEvaluation> results = new ArrayList<>(envelope.cases().size());
     for (int index = 0; index < envelope.cases().size(); index++) {
       JsonNode fixture = envelope.cases().get(index);
@@ -194,7 +197,7 @@ class ExternalBlindEvaluationRunner {
                 content,
                 Instant.parse(fixture.path("baseInstant").asText()),
                 fixture.path("timeZone").asText());
-        results.add(evaluator.evaluate(fixture, proposal, memoId, 1, content.length()));
+        results.add(evaluator.evaluate(fixture, proposal, memoId, 1, content));
       } catch (RuntimeException exception) {
         fail("A blind case could not be evaluated safely.");
       }
@@ -510,7 +513,9 @@ class ExternalBlindEvaluationRunner {
         Set.of(
             "semanticFalseConfidentLocalCount",
             "semanticFalseConfidentLocalEnforced",
-            "localOverflowCount"),
+            "localOverflowCount",
+            "missingOverflowSignalCount",
+            "unresolvedFieldHallucinationCount"),
         "The blind aggregate safety shape is invalid.");
   }
 

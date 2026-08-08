@@ -150,6 +150,45 @@ public class AnalysisProposalValidator {
     }
   }
 
+  public void validate(
+      JsonNode proposal,
+      UUID memoId,
+      int memoRevision,
+      String content,
+      AnalysisProvenance expectedProvenance,
+      String expectedRoutingPolicyVersion) {
+    Objects.requireNonNull(content, "content");
+    validate(
+        proposal,
+        memoId,
+        memoRevision,
+        content.length(),
+        expectedProvenance,
+        expectedRoutingPolicyVersion);
+    validateSourceSpanBoundaries(proposal.path("itemCandidates"), content);
+  }
+
+  private void validateSourceSpanBoundaries(JsonNode candidates, String content) {
+    for (JsonNode candidate : candidates) {
+      JsonNode sourceSpan = candidate.path("sourceSpan");
+      if (sourceSpan.isNull()) {
+        continue;
+      }
+      int start = sourceSpan.path("start").asInt();
+      int end = sourceSpan.path("end").asInt();
+      if (splitsSurrogatePair(content, start) || splitsSurrogatePair(content, end)) {
+        fail("itemCandidates[].sourceSpan must align to UTF-16 code point boundaries.");
+      }
+    }
+  }
+
+  private boolean splitsSurrogatePair(String content, int offset) {
+    return offset > 0
+        && offset < content.length()
+        && Character.isHighSurrogate(content.charAt(offset - 1))
+        && Character.isLowSurrogate(content.charAt(offset));
+  }
+
   private void validateAmbiguityConsistency(JsonNode proposal) {
     Set<String> summary = reasonValues(proposal.path("ambiguityReasons"));
     for (JsonNode date : proposal.path("dateCandidates")) {
@@ -378,7 +417,7 @@ public class AnalysisProposalValidator {
         || !end.canConvertToInt()) {
       fail("itemCandidates[].sourceSpan must contain integer offsets.");
     }
-    if (start.asInt() < 0 || end.asInt() < start.asInt() || end.asInt() > contentLength) {
+    if (start.asInt() < 0 || end.asInt() <= start.asInt() || end.asInt() > contentLength) {
       fail("itemCandidates[].sourceSpan is outside the memo content.");
     }
   }

@@ -65,7 +65,7 @@ function validProposal() {
 function validReviewOutcomeSummary() {
   return {
     schemaVersion: '1',
-    comparisonPolicyVersion: 'review-default-v1',
+    comparisonPolicyVersion: 'review-default-v2',
     cohort: {
       basis: 'PROPOSAL_CREATED_AT',
       days: 14,

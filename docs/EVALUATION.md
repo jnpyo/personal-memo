@@ -78,6 +78,20 @@ missing fallback behavior with general action, reference, event, weekday/time, a
 rules. It is protected by different-wording unit cases, negative substring/date cases, and a source
 check that rejects copied full challenge sentences or three-token challenge branches.
 
+`fake-v5` / `korean-rules-v3` adds source-aligned UTF-16 item spans, sequential action facets, explicit
+three-item truncation after full detection, and fail-closed alternative handling. These changes do not
+turn the public fixture into blind evidence; the generated version-2 report remains the only current
+measurement artifact and its item quality fields remain diagnostic.
+
+The current generated report has schema/domain-valid proposals for all 12 regression and 12 visible
+challenge cases. Item cardinality matches in 12/12 cases in each split, and required source spans match
+15/15 regression items and 14/14 visible-challenge items. Both splits have zero semantic
+false-confident-local cases, invented precise-date cases, missing overflow signals, and hallucinated
+action/object values where gold requires unresolved fields. These are public synthetic diagnostics,
+not independently adjudicated or blind accuracy.
+The remaining mismatches in acceptable item semantics and ambiguity signals stay visible in the report
+and are not promoted to provider gates.
+
 The generated deterministic report is the source for current measured values. It now exposes the
 date and item failures rather than hiding missing spans or unresolved fields behind route/type
 success. The visible challenge remains report-only even when its current counts are green. Public
@@ -91,7 +105,9 @@ The current CI gate is deliberately narrow:
 - all regression proposals must pass proposal schema and production domain validation;
 - regression route/type/signal `wrongLocal.count` must be zero;
 - regression `dates.inventedPreciseDateCaseCount` must be zero;
-- regression local-review candidate-overflow count must be zero.
+- regression local-review candidate-overflow count must be zero;
+- regression missing-overflow-signal count must be zero;
+- regression unresolved action/object hallucination count must be zero.
 
 Visible-challenge results are report-only. A failing case is evidence for a general deterministic rule,
 parser improvement, or a correctly bounded escalation rule; it must not be fixed by copying the

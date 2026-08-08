@@ -19,7 +19,7 @@ import tools.jackson.databind.JsonNode;
  */
 @Component
 public final class AnalysisReviewOutcomeClassifier {
-  public static final String POLICY_VERSION = "review-default-v1";
+  public static final String POLICY_VERSION = "review-default-v2";
 
   private static final Set<String> ITEM_KINDS =
       Set.of("TASK", "EVENT", "INFORMATION", "IDEA", "RECORD");
@@ -125,29 +125,26 @@ public final class AnalysisReviewOutcomeClassifier {
       return Projection.userResolutionRequired();
     }
 
-    DueValue preferredDue = preferredDue(proposal.path("dateCandidates"));
-    if (preferredDue == DueValue.INVALID) {
-      return Projection.invalid();
-    }
-    boolean dueAssigned = false;
-    List<SemanticItem> draftItems = new ArrayList<>();
-    for (SemanticItem item : items) {
-      DueValue due = null;
-      if (!dueAssigned && "TASK".equals(item.kind()) && preferredDue != null) {
-        due = preferredDue;
-        dueAssigned = true;
-      }
-      draftItems.add(new SemanticItem(item.kind(), item.title(), due));
+    List<SemanticItem> projectedItems = new ArrayList<>(items);
+    if (projectedItems.stream().noneMatch(item -> preferred.kind().equals(item.kind()))) {
+      SemanticItem first = projectedItems.getFirst();
+      projectedItems.set(0, new SemanticItem(preferred.kind(), first.title(), null));
     }
 
-    if (draftItems.stream().noneMatch(item -> preferred.kind().equals(item.kind()))) {
-      SemanticItem first = draftItems.getFirst();
-      draftItems.set(
-          0,
-          new SemanticItem(
-              preferred.kind(),
-              first.title(),
-              "TASK".equals(preferred.kind()) ? first.due() : null));
+    List<DueValue> usableDues = usableDues(proposal.path("dateCandidates"));
+    if (usableDues == null) {
+      return Projection.invalid();
+    }
+    DueValue unambiguousDue =
+        projectedItems.size() == 1
+                && "TASK".equals(projectedItems.getFirst().kind())
+                && usableDues.size() == 1
+            ? usableDues.getFirst()
+            : null;
+    List<SemanticItem> draftItems = new ArrayList<>();
+    for (SemanticItem item : projectedItems) {
+      DueValue due = "TASK".equals(item.kind()) ? unambiguousDue : null;
+      draftItems.add(new SemanticItem(item.kind(), item.title(), due));
     }
 
     SemanticSelection selection =
@@ -304,25 +301,18 @@ public final class AnalysisReviewOutcomeClassifier {
     return List.copyOf(items);
   }
 
-  private DueValue preferredDue(JsonNode candidates) {
+  private List<DueValue> usableDues(JsonNode candidates) {
     if (!candidates.isArray()) {
-      return DueValue.INVALID;
+      return null;
     }
-    DueValue first = null;
-    DueValue firstDateOnly = null;
+    List<DueValue> dues = new ArrayList<>();
     for (JsonNode candidate : candidates) {
       DueValue due = proposalDue(candidate);
-      if (due == null) {
-        continue;
-      }
-      if (first == null) {
-        first = due;
-      }
-      if (firstDateOnly == null && "DATE_ONLY".equals(due.precision())) {
-        firstDateOnly = due;
+      if (due != null) {
+        dues.add(due);
       }
     }
-    return firstDateOnly != null ? firstDateOnly : first;
+    return List.copyOf(dues);
   }
 
   private DueValue proposalDue(JsonNode due) {
@@ -332,6 +322,9 @@ public final class AnalysisReviewOutcomeClassifier {
     if (surfaceText == null
         || !DATE_PRECISIONS.contains(precision)
         || !timeSpecifiedNode.isBoolean()) {
+      return null;
+    }
+    if (Set.of("APPROXIMATE", "UNKNOWN").contains(precision)) {
       return null;
     }
     String value = nullableText(due.path("value"));
@@ -577,9 +570,7 @@ public final class AnalysisReviewOutcomeClassifier {
   private record SemanticItem(String kind, String title, DueValue due) {}
 
   private record DueValue(
-      String surfaceText, String value, String precision, boolean timeSpecified) {
-    private static final DueValue INVALID = new DueValue("", null, "", false);
-  }
+      String surfaceText, String value, String precision, boolean timeSpecified) {}
 
   private record NormalizedDue(boolean valid, String value) {
     static NormalizedDue valid(String value) {

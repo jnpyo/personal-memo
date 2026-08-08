@@ -59,6 +59,8 @@ final class EvaluationV2Metrics {
     private int overflowItemCases;
     private int semanticFalseConfidentLocal;
     private int localOverflow;
+    private int missingOverflowSignal;
+    private int unresolvedFieldHallucination;
 
     void add(CaseEvaluation value) {
       caseCount++;
@@ -70,6 +72,8 @@ final class EvaluationV2Metrics {
       if (value.signalsExact()) signalExactCases++;
       if (value.semanticFalseConfidentLocal()) semanticFalseConfidentLocal++;
       if (value.localOverflow()) localOverflow++;
+      if (value.missingOverflowSignal()) missingOverflowSignal++;
+      unresolvedFieldHallucination += value.items().unresolvedFieldHallucinationCount();
 
       boolean expectedLocal = "LOCAL_REVIEW".equals(value.expectedRoute());
       boolean actualLocal = "LOCAL_REVIEW".equals(value.actualRoute());
@@ -165,7 +169,9 @@ final class EvaluationV2Metrics {
           userInputNeededItemCases,
           overflowItemCases,
           semanticFalseConfidentLocal,
-          localOverflow);
+          localOverflow,
+          missingOverflowSignal,
+          unresolvedFieldHallucination);
     }
   }
 }
@@ -212,7 +218,9 @@ record AggregateEvaluation(
     int userInputNeededItemCaseCount,
     int overflowItemCaseCount,
     int semanticFalseConfidentLocalCount,
-    int localOverflowCount) {
+    int localOverflowCount,
+    int missingOverflowSignalCount,
+    int unresolvedFieldHallucinationCount) {
   ObjectNode toJson(ObjectMapper json) {
     ObjectNode value =
         json.createObjectNode()
@@ -289,7 +297,9 @@ record AggregateEvaluation(
     safety
         .put("semanticFalseConfidentLocalCount", semanticFalseConfidentLocalCount)
         .put("semanticFalseConfidentLocalEnforced", false)
-        .put("localOverflowCount", localOverflowCount);
+        .put("localOverflowCount", localOverflowCount)
+        .put("missingOverflowSignalCount", missingOverflowSignalCount)
+        .put("unresolvedFieldHallucinationCount", unresolvedFieldHallucinationCount);
     return value;
   }
 
@@ -299,7 +309,9 @@ record AggregateEvaluation(
         && domainValidCount == caseCount
         && legacyWrongLocalCount == 0
         && inventedPreciseDateCaseCount == 0
-        && localOverflowCount == 0;
+        && localOverflowCount == 0
+        && missingOverflowSignalCount == 0
+        && unresolvedFieldHallucinationCount == 0;
   }
 
   private static ObjectNode countMetrics(ObjectMapper json, EvaluationCounts counts) {
@@ -399,9 +411,15 @@ final class EvaluationV2Report {
         .put("wrongLocalMaximum", 0)
         .put("inventedPreciseDateMaximum", 0)
         .put("localOverflowMaximum", 0)
+        .put("missingOverflowSignalMaximum", 0)
+        .put("unresolvedFieldHallucinationMaximum", 0)
         .put("actualWrongLocal", regression.legacyWrongLocalCount())
         .put("actualInventedPreciseDateCaseCount", regression.inventedPreciseDateCaseCount())
         .put("actualLocalOverflow", regression.localOverflowCount())
+        .put("actualMissingOverflowSignalCount", regression.missingOverflowSignalCount())
+        .put(
+            "actualUnresolvedFieldHallucinationCount",
+            regression.unresolvedFieldHallucinationCount())
         .put("semanticFalseConfidentLocalEnforced", false)
         .put("semanticFalseConfidentLocalPromotion", "REQUIRES_INDEPENDENT_TWO_PERSON_ADJUDICATION")
         .put("passed", regression.regressionHardGatePassed());
@@ -411,6 +429,10 @@ final class EvaluationV2Report {
         .put("actualWrongLocal", visibleChallenge.legacyWrongLocalCount())
         .put("actualInventedPreciseDateCaseCount", visibleChallenge.inventedPreciseDateCaseCount())
         .put("actualLocalOverflow", visibleChallenge.localOverflowCount())
+        .put("actualMissingOverflowSignalCount", visibleChallenge.missingOverflowSignalCount())
+        .put(
+            "actualUnresolvedFieldHallucinationCount",
+            visibleChallenge.unresolvedFieldHallucinationCount())
         .put(
             "semanticFalseConfidentLocalCount", visibleChallenge.semanticFalseConfidentLocalCount())
         .put(
@@ -456,6 +478,8 @@ final class EvaluationV2Report {
         .put("itemFalseNegative", value.items().itemCounts().falseNegative())
         .put("itemCardinalityExact", value.items().cardinalityExact())
         .put("itemCompleteSetExact", value.items().completeSetExact())
+        .put("unresolvedFieldHallucinationCount", value.items().unresolvedFieldHallucinationCount())
+        .put("missingOverflowSignal", value.missingOverflowSignal())
         .put("localOverflow", value.localOverflow())
         .put("semanticFalseConfidentLocal", value.semanticFalseConfidentLocal());
   }

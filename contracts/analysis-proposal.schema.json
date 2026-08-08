@@ -153,6 +153,7 @@
     },
     "sourceSpan": {
       "type": "object",
+      "description": "A non-empty, half-open [start, end) range in UTF-16 code units over the exact immutable memo revision. Offsets must not split a surrogate pair.",
       "additionalProperties": false,
       "required": ["start", "end"],
       "properties": {

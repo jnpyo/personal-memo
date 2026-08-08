@@ -327,7 +327,7 @@ Content-Type: application/json
 GET /api/v1/analysis-proposals/{proposalId}
 ```
 
-`schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`, `tagCandidates`, `itemCandidates`, `relationCandidates`, `ambiguityReasons`, `providerMetadata`를 포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag나 task를 생성하지 않는다. 현재 Fake analyzer의 필수 provenance 값은 `fake-v4`, `none`, `none`, `none`, `field-policy-v1`이며 `toolCalls`는 `0`이다. 추가 metadata의 `deterministicRulesVersion`은 `korean-rules-v2`다.
+`schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`, `tagCandidates`, `itemCandidates`, `relationCandidates`, `ambiguityReasons`, `providerMetadata`를 포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag나 task를 생성하지 않는다. 현재 Fake analyzer의 필수 provenance 값은 `fake-v5`, `none`, `none`, `none`, `field-policy-v1`이며 `toolCalls`는 `0`이다. 추가 metadata의 `deterministicRulesVersion`은 `korean-rules-v3`다. non-null `itemCandidates[].sourceSpan`은 해당 immutable raw memo revision을 기준으로 하는 비어 있지 않은 UTF-16 code-unit half-open 범위 `[start, end)`다. 서버는 범위가 원문 안에 있고 surrogate pair를 쪼개지 않는지 검증한다.
 
 ### Recover proposals awaiting review
 
@@ -369,8 +369,8 @@ Recovery query는 `REVIEW_REQUIRED`와 `POSTPONED`를 지원한다. `limit` 기�
     "relationCandidates": [],
     "ambiguityReasons": [],
     "providerMetadata": {
-      "analyzerVersion": "fake-v4",
-      "deterministicRulesVersion": "korean-rules-v2",
+      "analyzerVersion": "fake-v5",
+      "deterministicRulesVersion": "korean-rules-v3",
       "promptVersion": "none",
       "localModelVersion": "none",
       "embeddingModelVersion": "none",
@@ -499,7 +499,7 @@ X-Expected-Owner-Id: 018f4fad-e9a9-7a01-a4d1-936938a8a1e8
 ```json
 {
   "schemaVersion": "1",
-  "comparisonPolicyVersion": "review-default-v1",
+  "comparisonPolicyVersion": "review-default-v2",
   "cohort": {
     "basis": "PROPOSAL_CREATED_AT",
     "days": 14,
@@ -543,7 +543,7 @@ X-Expected-Owner-Id: 018f4fad-e9a9-7a01-a4d1-936938a8a1e8
   "byAnalysisVersion": [
     {
       "route": "LOCAL",
-      "analyzerVersion": "fake-v4",
+      "analyzerVersion": "fake-v5",
       "promptVersion": "none",
       "localModelVersion": "none",
       "embeddingModelVersion": "none",
@@ -561,6 +561,8 @@ X-Expected-Owner-Id: 018f4fad-e9a9-7a01-a4d1-936938a8a1e8
 - `proposals.currentStates`는 현재 mutable `analysis_runs.status` 분포다. 그 합은 `proposals.total`이다. `currentPostponed`는 **현재** `POSTPONED`인 제안만 뜻한다. 보류 뒤 적용·거절된 과거 이력은 현재 schema에 별도 event로 남지 않는다.
 - `latestApplications`는 proposal마다 `(applied_at DESC, id DESC)`로 고른 최신 application 상태다. `none + applied + undone = proposals.total`이다. undo 뒤 새 idempotency key로 재적용하면 새 application이 최신이 되며, 이 값은 모든 apply/undo event 횟수가 아니다.
 - `outcomes`는 application이 있는 proposal의 최신 `selection_json`을 versioned default-review projection과 의미상 비교한다. `exact + corrected + userResolved + unclassifiable = proposals.withApplication`이다. `correctedFields`는 한 `CORRECTED` selection에서 여러 field가 동시에 증가할 수 있는 비배타적 세부 집계다.
+
+`review-default-v2`는 날짜와 항목 사이의 명시적 binding이 없는 proposal schema v1에서 기한을 추측하지 않는다. 제안 항목이 정확히 하나이고 그 항목이 TASK이며 정밀한 usable date도 정확히 하나일 때만 그 기한을 기본 선택에 배정한다. 다른 항목이 함께 있거나 날짜·항목이 여러 개이거나 날짜가 `APPROXIMATE`/`UNKNOWN`이면 모든 기한을 미배정으로 두고 클라이언트도 상세 검토를 강제한다. 사용자가 정확한 날짜를 직접 입력하거나 각 TASK의 날짜를 직접 선택한 결과는 그대로 비교·적용된다.
 
 `exact`는 “제안 그대로 적용”을 뜻할 뿐 AI의 정답·정확도를 뜻하지 않는다. `corrected`는 바로 적용 가능한 기본 선택을 수정한 경우, `userResolved`는 동점/`UNKNOWN` 유형 또는 item 부재처럼 기본 선택만으로 적용할 수 없어 사용자가 보완한 경우다. relation 후보, 지원하지 않는/손상된 과거 JSON, revision 불일치처럼 현재 비교 정책이 안전하게 재구성할 수 없는 application은 `unclassifiable`이다. 거절에는 교정 target이 저장되지 않으므로 거절 건수도 정답 label이 아니다.
 
@@ -654,7 +656,7 @@ GET /api/v1/graph/home?limit=100
 }
 ```
 
-이 응답은 `memo_items`, `task_details`, `tags`, `item_tags`에서 매번 투영된다. `memoType`, `taskState`, `overdue`는 memo node metadata이며 별도 system-type hub node가 아니다.
+이 응답은 `analysis_applications`, `memo_items`, `task_details`, `tags`, `item_tags`에서 매번 투영된다. memo node의 `label`과 `memoType`은 최신 `APPLIED` application의 사용자 승인 selection을 사용하므로 여러 항목의 UUID나 생성 시각에 따라 대표값이 바뀌지 않는다. `taskState`는 해당 memo의 모든 활성 child task를 `TODO` 우선으로 집계하고, 그중 하나라도 현재 시각 기준으로 overdue이면 memo의 `overdue`가 true다. `memoType`, `taskState`, `overdue`는 metadata이며 별도 system-type hub node가 아니다.
 
 ## Health
 
