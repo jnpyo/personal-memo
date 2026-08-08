@@ -1,0 +1,982 @@
+[
+  {
+    "id": "challenge-explicit-health-task",
+    "datasetVersion": "2",
+    "split": "VISIBLE_CHALLENGE",
+    "content": "2026.09.14 14:30 치과 예약 확인",
+    "baseInstant": "2026-08-05T02:00:00Z",
+    "timeZone": "Asia/Seoul",
+    "expectedRoute": "LOCAL_REVIEW",
+    "expectedTypes": [
+      "TASK"
+    ],
+    "expectedSignals": [],
+    "expectedDates": {
+      "mentions": [
+        {
+          "goldId": "date-1",
+          "sourceSpan": {
+            "start": 0,
+            "end": 16,
+            "unit": "UTF16_CODE_UNIT"
+          },
+          "surfaceText": "2026.09.14 14:30",
+          "acceptedInterpretations": [
+            {
+              "precision": "EXACT_TIME",
+              "value": "2026-09-14T14:30:00+09:00",
+              "timeSpecified": true
+            }
+          ],
+          "ambiguityReasons": [],
+          "primary": true
+        }
+      ],
+      "emittedCandidateGoldIds": [
+        "date-1"
+      ],
+      "primaryGoldId": "date-1"
+    },
+    "expectedItems": {
+      "resolution": "RESOLVED",
+      "acceptableSets": [
+        {
+          "setId": "set-1",
+          "suggestedTitle": {
+            "state": "VALUE",
+            "value": "치과 예약 확인"
+          },
+          "primaryItemGoldId": "item-1",
+          "allItems": [
+            {
+              "goldId": "item-1",
+              "kind": "TASK",
+              "title": {
+                "state": "VALUE",
+                "value": "치과 예약 확인"
+              },
+              "action": {
+                "state": "VALUE",
+                "value": "확인"
+              },
+              "object": {
+                "state": "VALUE",
+                "value": "치과 예약"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 17,
+                    "end": 25,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            }
+          ],
+          "emittedItemGoldIds": [
+            "item-1"
+          ]
+        }
+      ]
+    },
+    "notes": "A precise personal task that should be safe to review locally."
+  },
+  {
+    "id": "challenge-architecture-information",
+    "datasetVersion": "2",
+    "split": "VISIBLE_CHALLENGE",
+    "content": "API 응답 캐시는 사용자별로 분리해야 함",
+    "baseInstant": "2026-08-05T02:00:00Z",
+    "timeZone": "Asia/Seoul",
+    "expectedRoute": "LOCAL_REVIEW",
+    "expectedTypes": [
+      "INFORMATION"
+    ],
+    "expectedSignals": [],
+    "expectedDates": {
+      "mentions": [],
+      "emittedCandidateGoldIds": [],
+      "primaryGoldId": null
+    },
+    "expectedItems": {
+      "resolution": "RESOLVED",
+      "acceptableSets": [
+        {
+          "setId": "set-1",
+          "suggestedTitle": {
+            "state": "VALUE",
+            "value": "API 응답 캐시는 사용자별로 분리해야 함"
+          },
+          "primaryItemGoldId": "item-1",
+          "allItems": [
+            {
+              "goldId": "item-1",
+              "kind": "INFORMATION",
+              "title": {
+                "state": "VALUE",
+                "value": "API 응답 캐시는 사용자별로 분리해야 함"
+              },
+              "action": {
+                "state": "ABSENT"
+              },
+              "object": {
+                "state": "VALUE",
+                "value": "API 응답 캐시"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 0,
+                    "end": 23,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            }
+          ],
+          "emittedItemGoldIds": [
+            "item-1"
+          ]
+        }
+      ]
+    },
+    "notes": "Declarative technical knowledge is information, not a personal action."
+  },
+  {
+    "id": "challenge-exercise-record",
+    "datasetVersion": "2",
+    "split": "VISIBLE_CHALLENGE",
+    "content": "운동 기록 스쿼트 80kg 5세트",
+    "baseInstant": "2026-08-05T02:00:00Z",
+    "timeZone": "Asia/Seoul",
+    "expectedRoute": "LOCAL_REVIEW",
+    "expectedTypes": [
+      "RECORD"
+    ],
+    "expectedSignals": [],
+    "expectedDates": {
+      "mentions": [],
+      "emittedCandidateGoldIds": [],
+      "primaryGoldId": null
+    },
+    "expectedItems": {
+      "resolution": "RESOLVED",
+      "acceptableSets": [
+        {
+          "setId": "set-1",
+          "suggestedTitle": {
+            "state": "VALUE",
+            "value": "운동 기록 스쿼트 80kg 5세트"
+          },
+          "primaryItemGoldId": "item-1",
+          "allItems": [
+            {
+              "goldId": "item-1",
+              "kind": "RECORD",
+              "title": {
+                "state": "VALUE",
+                "value": "운동 기록 스쿼트 80kg 5세트"
+              },
+              "action": {
+                "state": "ABSENT"
+              },
+              "object": {
+                "state": "VALUE",
+                "value": "스쿼트 80kg 5세트"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 0,
+                    "end": 18,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            }
+          ],
+          "emittedItemGoldIds": [
+            "item-1"
+          ]
+        }
+      ]
+    },
+    "notes": "A completed measurement is a record and must not become a task."
+  },
+  {
+    "id": "challenge-calendar-event",
+    "datasetVersion": "2",
+    "split": "VISIBLE_CHALLENGE",
+    "content": "10월 3일 동창회",
+    "baseInstant": "2026-08-05T02:00:00Z",
+    "timeZone": "Asia/Seoul",
+    "expectedRoute": "LOCAL_REVIEW",
+    "expectedTypes": [
+      "EVENT"
+    ],
+    "expectedSignals": [
+      "MISSING_YEAR",
+      "MISSING_TIME"
+    ],
+    "expectedDates": {
+      "mentions": [
+        {
+          "goldId": "date-1",
+          "sourceSpan": {
+            "start": 0,
+            "end": 6,
+            "unit": "UTF16_CODE_UNIT"
+          },
+          "surfaceText": "10월 3일",
+          "acceptedInterpretations": [
+            {
+              "precision": "DATE_ONLY",
+              "value": "2026-10-03",
+              "timeSpecified": false
+            }
+          ],
+          "ambiguityReasons": [
+            "MISSING_YEAR",
+            "MISSING_TIME"
+          ],
+          "primary": true
+        }
+      ],
+      "emittedCandidateGoldIds": [
+        "date-1"
+      ],
+      "primaryGoldId": "date-1"
+    },
+    "expectedItems": {
+      "resolution": "RESOLVED",
+      "acceptableSets": [
+        {
+          "setId": "set-1",
+          "suggestedTitle": {
+            "state": "VALUE",
+            "value": "동창회"
+          },
+          "primaryItemGoldId": "item-1",
+          "allItems": [
+            {
+              "goldId": "item-1",
+              "kind": "EVENT",
+              "title": {
+                "state": "VALUE",
+                "value": "동창회"
+              },
+              "action": {
+                "state": "ABSENT"
+              },
+              "object": {
+                "state": "VALUE",
+                "value": "동창회"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 7,
+                    "end": 10,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            }
+          ],
+          "emittedItemGoldIds": [
+            "item-1"
+          ]
+        }
+      ]
+    },
+    "notes": "The event type is clear even though the proposed date remains reviewable."
+  },
+  {
+    "id": "challenge-unresolved-document-task",
+    "datasetVersion": "2",
+    "split": "VISIBLE_CHALLENGE",
+    "content": "팀장님이 말한 그 문서 다시 보기",
+    "baseInstant": "2026-08-05T02:00:00Z",
+    "timeZone": "Asia/Seoul",
+    "expectedRoute": "CLOUD_ENRICH",
+    "expectedTypes": [
+      "TASK"
+    ],
+    "expectedSignals": [
+      "UNRESOLVED_REFERENCE"
+    ],
+    "expectedDates": {
+      "mentions": [],
+      "emittedCandidateGoldIds": [],
+      "primaryGoldId": null
+    },
+    "expectedItems": {
+      "resolution": "USER_INPUT_NEEDED",
+      "acceptableSets": [
+        {
+          "setId": "set-1",
+          "suggestedTitle": {
+            "state": "VALUE",
+            "value": "팀장님이 말한 문서 다시 보기"
+          },
+          "primaryItemGoldId": "item-1",
+          "allItems": [
+            {
+              "goldId": "item-1",
+              "kind": "TASK",
+              "title": {
+                "state": "VALUE",
+                "value": "팀장님이 말한 문서 다시 보기"
+              },
+              "action": {
+                "state": "VALUE",
+                "value": "다시 보기"
+              },
+              "object": {
+                "state": "UNRESOLVED"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 0,
+                    "end": 18,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            }
+          ],
+          "emittedItemGoldIds": [
+            "item-1"
+          ]
+        }
+      ]
+    },
+    "notes": "The action is understandable, but the referenced document is unresolved."
+  },
+  {
+    "id": "challenge-imprecise-weekend-task",
+    "datasetVersion": "2",
+    "split": "VISIBLE_CHALLENGE",
+    "content": "주말쯤 병원 예약 잡기",
+    "baseInstant": "2026-08-05T02:00:00Z",
+    "timeZone": "Asia/Seoul",
+    "expectedRoute": "CLOUD_ENRICH",
+    "expectedTypes": [
+      "TASK"
+    ],
+    "expectedSignals": [
+      "IMPRECISE_DATE"
+    ],
+    "expectedDates": {
+      "mentions": [
+        {
+          "goldId": "date-1",
+          "sourceSpan": {
+            "start": 0,
+            "end": 3,
+            "unit": "UTF16_CODE_UNIT"
+          },
+          "surfaceText": "주말쯤",
+          "acceptedInterpretations": [
+            {
+              "precision": "APPROXIMATE",
+              "value": null,
+              "timeSpecified": false
+            }
+          ],
+          "ambiguityReasons": [
+            "IMPRECISE_DATE"
+          ],
+          "primary": true
+        }
+      ],
+      "emittedCandidateGoldIds": [
+        "date-1"
+      ],
+      "primaryGoldId": "date-1"
+    },
+    "expectedItems": {
+      "resolution": "RESOLVED",
+      "acceptableSets": [
+        {
+          "setId": "set-1",
+          "suggestedTitle": {
+            "state": "VALUE",
+            "value": "병원 예약 잡기"
+          },
+          "primaryItemGoldId": "item-1",
+          "allItems": [
+            {
+              "goldId": "item-1",
+              "kind": "TASK",
+              "title": {
+                "state": "VALUE",
+                "value": "병원 예약 잡기"
+              },
+              "action": {
+                "state": "VALUE",
+                "value": "잡기"
+              },
+              "object": {
+                "state": "VALUE",
+                "value": "병원 예약"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 4,
+                    "end": 12,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            }
+          ],
+          "emittedItemGoldIds": [
+            "item-1"
+          ]
+        }
+      ]
+    },
+    "notes": "The approximate weekend expression must not silently become an exact due date."
+  },
+  {
+    "id": "challenge-shopping-task",
+    "datasetVersion": "2",
+    "split": "VISIBLE_CHALLENGE",
+    "content": "장보기: 우유, 계란, 휴지",
+    "baseInstant": "2026-08-05T02:00:00Z",
+    "timeZone": "Asia/Seoul",
+    "expectedRoute": "LOCAL_REVIEW",
+    "expectedTypes": [
+      "TASK"
+    ],
+    "expectedSignals": [],
+    "expectedDates": {
+      "mentions": [],
+      "emittedCandidateGoldIds": [],
+      "primaryGoldId": null
+    },
+    "expectedItems": {
+      "resolution": "RESOLVED",
+      "acceptableSets": [
+        {
+          "setId": "set-1",
+          "suggestedTitle": {
+            "state": "VALUE",
+            "value": "장보기"
+          },
+          "primaryItemGoldId": "item-1",
+          "allItems": [
+            {
+              "goldId": "item-1",
+              "kind": "TASK",
+              "title": {
+                "state": "VALUE",
+                "value": "장보기"
+              },
+              "action": {
+                "state": "VALUE",
+                "value": "장보기"
+              },
+              "object": {
+                "state": "VALUE",
+                "value": "우유, 계란, 휴지"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 0,
+                    "end": 15,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            }
+          ],
+          "emittedItemGoldIds": [
+            "item-1"
+          ]
+        }
+      ]
+    },
+    "notes": "A compact shopping list expresses one clear action."
+  },
+  {
+    "id": "challenge-multi-action-task",
+    "datasetVersion": "2",
+    "split": "VISIBLE_CHALLENGE",
+    "content": "논문 읽고 요약하고 발표 자료 만들기",
+    "baseInstant": "2026-08-05T02:00:00Z",
+    "timeZone": "Asia/Seoul",
+    "expectedRoute": "CLOUD_ENRICH",
+    "expectedTypes": [
+      "TASK"
+    ],
+    "expectedSignals": [
+      "MULTI_INTENT"
+    ],
+    "expectedDates": {
+      "mentions": [],
+      "emittedCandidateGoldIds": [],
+      "primaryGoldId": null
+    },
+    "expectedItems": {
+      "resolution": "RESOLVED",
+      "acceptableSets": [
+        {
+          "setId": "set-1",
+          "suggestedTitle": {
+            "state": "VALUE",
+            "value": "논문 요약 및 발표 자료 준비"
+          },
+          "primaryItemGoldId": "item-1",
+          "allItems": [
+            {
+              "goldId": "item-1",
+              "kind": "TASK",
+              "title": {
+                "state": "VALUE",
+                "value": "논문 읽기"
+              },
+              "action": {
+                "state": "VALUE",
+                "value": "읽기"
+              },
+              "object": {
+                "state": "VALUE",
+                "value": "논문"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 0,
+                    "end": 5,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            },
+            {
+              "goldId": "item-2",
+              "kind": "TASK",
+              "title": {
+                "state": "VALUE",
+                "value": "논문 요약하기"
+              },
+              "action": {
+                "state": "VALUE",
+                "value": "요약"
+              },
+              "object": {
+                "state": "VALUE",
+                "value": "논문"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 6,
+                    "end": 10,
+                    "unit": "UTF16_CODE_UNIT"
+                  },
+                  {
+                    "start": 0,
+                    "end": 10,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            },
+            {
+              "goldId": "item-3",
+              "kind": "TASK",
+              "title": {
+                "state": "VALUE",
+                "value": "발표 자료 만들기"
+              },
+              "action": {
+                "state": "VALUE",
+                "value": "만들기"
+              },
+              "object": {
+                "state": "VALUE",
+                "value": "발표 자료"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 11,
+                    "end": 20,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            }
+          ],
+          "emittedItemGoldIds": [
+            "item-1",
+            "item-2",
+            "item-3"
+          ]
+        }
+      ]
+    },
+    "notes": "Several dependent actions require a reviewable split."
+  },
+  {
+    "id": "challenge-phone-task",
+    "datasetVersion": "2",
+    "split": "VISIBLE_CHALLENGE",
+    "content": "엄마한테 전화하기",
+    "baseInstant": "2026-08-05T02:00:00Z",
+    "timeZone": "Asia/Seoul",
+    "expectedRoute": "LOCAL_REVIEW",
+    "expectedTypes": [
+      "TASK"
+    ],
+    "expectedSignals": [],
+    "expectedDates": {
+      "mentions": [],
+      "emittedCandidateGoldIds": [],
+      "primaryGoldId": null
+    },
+    "expectedItems": {
+      "resolution": "RESOLVED",
+      "acceptableSets": [
+        {
+          "setId": "set-1",
+          "suggestedTitle": {
+            "state": "VALUE",
+            "value": "엄마한테 전화하기"
+          },
+          "primaryItemGoldId": "item-1",
+          "allItems": [
+            {
+              "goldId": "item-1",
+              "kind": "TASK",
+              "title": {
+                "state": "VALUE",
+                "value": "엄마한테 전화하기"
+              },
+              "action": {
+                "state": "VALUE",
+                "value": "전화하기"
+              },
+              "object": {
+                "state": "VALUE",
+                "value": "엄마"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 0,
+                    "end": 9,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            }
+          ],
+          "emittedItemGoldIds": [
+            "item-1"
+          ]
+        }
+      ]
+    },
+    "notes": "A short explicit action should be safe to review locally."
+  },
+  {
+    "id": "challenge-relative-event",
+    "datasetVersion": "2",
+    "split": "VISIBLE_CHALLENGE",
+    "content": "회의는 다음 주 수요일 오후 2시",
+    "baseInstant": "2026-08-05T02:00:00Z",
+    "timeZone": "Asia/Seoul",
+    "expectedRoute": "LOCAL_REVIEW",
+    "expectedTypes": [
+      "EVENT"
+    ],
+    "expectedSignals": [],
+    "expectedDates": {
+      "mentions": [
+        {
+          "goldId": "date-1",
+          "sourceSpan": {
+            "start": 4,
+            "end": 18,
+            "unit": "UTF16_CODE_UNIT"
+          },
+          "surfaceText": "다음 주 수요일 오후 2시",
+          "acceptedInterpretations": [
+            {
+              "precision": "RELATIVE_EXACT",
+              "value": "2026-08-12T14:00:00+09:00",
+              "timeSpecified": true
+            }
+          ],
+          "ambiguityReasons": [],
+          "primary": true
+        }
+      ],
+      "emittedCandidateGoldIds": [
+        "date-1"
+      ],
+      "primaryGoldId": "date-1"
+    },
+    "expectedItems": {
+      "resolution": "RESOLVED",
+      "acceptableSets": [
+        {
+          "setId": "set-1",
+          "suggestedTitle": {
+            "state": "VALUE",
+            "value": "회의"
+          },
+          "primaryItemGoldId": "item-1",
+          "allItems": [
+            {
+              "goldId": "item-1",
+              "kind": "EVENT",
+              "title": {
+                "state": "VALUE",
+                "value": "회의"
+              },
+              "action": {
+                "state": "ABSENT"
+              },
+              "object": {
+                "state": "VALUE",
+                "value": "회의"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 0,
+                    "end": 2,
+                    "unit": "UTF16_CODE_UNIT"
+                  },
+                  {
+                    "start": 0,
+                    "end": 18,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            }
+          ],
+          "emittedItemGoldIds": [
+            "item-1"
+          ]
+        }
+      ]
+    },
+    "notes": "The base instant and time zone make this a resolvable event expression."
+  },
+  {
+    "id": "challenge-unresolved-deadline",
+    "datasetVersion": "2",
+    "split": "VISIBLE_CHALLENGE",
+    "content": "그거 다음 회의 전까지 마무리",
+    "baseInstant": "2026-08-05T02:00:00Z",
+    "timeZone": "Asia/Seoul",
+    "expectedRoute": "CLOUD_ENRICH",
+    "expectedTypes": [
+      "TASK"
+    ],
+    "expectedSignals": [
+      "IMPRECISE_DATE",
+      "UNRESOLVED_REFERENCE"
+    ],
+    "expectedDates": {
+      "mentions": [
+        {
+          "goldId": "date-1",
+          "sourceSpan": {
+            "start": 3,
+            "end": 12,
+            "unit": "UTF16_CODE_UNIT"
+          },
+          "surfaceText": "다음 회의 전까지",
+          "acceptedInterpretations": [
+            {
+              "precision": "UNKNOWN",
+              "value": null,
+              "timeSpecified": false
+            }
+          ],
+          "ambiguityReasons": [
+            "IMPRECISE_DATE"
+          ],
+          "primary": true
+        }
+      ],
+      "emittedCandidateGoldIds": [
+        "date-1"
+      ],
+      "primaryGoldId": "date-1"
+    },
+    "expectedItems": {
+      "resolution": "USER_INPUT_NEEDED",
+      "acceptableSets": [
+        {
+          "setId": "set-1",
+          "suggestedTitle": {
+            "state": "VALUE",
+            "value": "그거 마무리"
+          },
+          "primaryItemGoldId": "item-1",
+          "allItems": [
+            {
+              "goldId": "item-1",
+              "kind": "TASK",
+              "title": {
+                "state": "VALUE",
+                "value": "그거 마무리"
+              },
+              "action": {
+                "state": "VALUE",
+                "value": "마무리"
+              },
+              "object": {
+                "state": "UNRESOLVED"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 0,
+                    "end": 16,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            }
+          ],
+          "emittedItemGoldIds": [
+            "item-1"
+          ]
+        }
+      ]
+    },
+    "notes": "Both the object and the relative deadline require context."
+  },
+  {
+    "id": "challenge-alternative-decision",
+    "datasetVersion": "2",
+    "split": "VISIBLE_CHALLENGE",
+    "content": "예산안 검토 또는 보류 결정",
+    "baseInstant": "2026-08-05T02:00:00Z",
+    "timeZone": "Asia/Seoul",
+    "expectedRoute": "CLOUD_ENRICH",
+    "expectedTypes": [
+      "TASK",
+      "INFORMATION"
+    ],
+    "expectedSignals": [
+      "MULTI_INTENT"
+    ],
+    "expectedDates": {
+      "mentions": [],
+      "emittedCandidateGoldIds": [],
+      "primaryGoldId": null
+    },
+    "expectedItems": {
+      "resolution": "USER_INPUT_NEEDED",
+      "acceptableSets": [
+        {
+          "setId": "set-review",
+          "suggestedTitle": {
+            "state": "VALUE",
+            "value": "예산안 검토"
+          },
+          "primaryItemGoldId": "item-review",
+          "allItems": [
+            {
+              "goldId": "item-review",
+              "kind": "TASK",
+              "title": {
+                "state": "VALUE",
+                "value": "예산안 검토"
+              },
+              "action": {
+                "state": "VALUE",
+                "value": "검토"
+              },
+              "object": {
+                "state": "VALUE",
+                "value": "예산안"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 0,
+                    "end": 6,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            }
+          ],
+          "emittedItemGoldIds": [
+            "item-review"
+          ]
+        },
+        {
+          "setId": "set-defer",
+          "suggestedTitle": {
+            "state": "VALUE",
+            "value": "예산안 보류 결정"
+          },
+          "primaryItemGoldId": "item-defer",
+          "allItems": [
+            {
+              "goldId": "item-defer",
+              "kind": "TASK",
+              "title": {
+                "state": "VALUE",
+                "value": "예산안 보류 결정"
+              },
+              "action": {
+                "state": "VALUE",
+                "value": "결정"
+              },
+              "object": {
+                "state": "VALUE",
+                "value": "예산안 보류"
+              },
+              "sourceSpan": {
+                "requirement": "REQUIRED",
+                "acceptedSpans": [
+                  {
+                    "start": 10,
+                    "end": 15,
+                    "unit": "UTF16_CODE_UNIT"
+                  }
+                ]
+              }
+            }
+          ],
+          "emittedItemGoldIds": [
+            "item-defer"
+          ]
+        }
+      ]
+    },
+    "notes": "Alternative intents must not be flattened into one confident record."
+  }
+]

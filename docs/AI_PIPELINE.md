@@ -11,8 +11,9 @@ The first implementation must support a mock analyzer. Real model selection come
 The repository now implements the model-free portion of Milestone 2:
 
 - a revision-context Korean date parser with explicit `UNKNOWN` fallback;
-- versioned 12-case regression and 12-case visible synthetic challenge Korean memo suites, a fixture contract,
-  and a raw-content-free deterministic baseline report;
+- versioned 12-case regression and 12-case `VISIBLE_CHALLENGE` Korean memo suites, a version-2
+  fixture contract with date mention/surface and item/source-span gold, and a raw-content-free
+  deterministic baseline report;
 - an enum-based ambiguity gate that routes to `LOCAL_REVIEW` or `CLOUD_ENRICH`;
 - `FakeAnalyzer` and a no-network, no-tool, mutation-free `FakeCloudAnalysisGateway`;
 - Draft 2020-12 contract, domain, and owner-reference validation before routing and again after enrichment;
@@ -24,6 +25,9 @@ The repository now implements the model-free portion of Milestone 2:
 - explicit user resolution of `UNKNOWN` types and partial item application;
 - a raw-content-free, owner-scoped review outcome summary derived read-only from stored proposals
   and latest validated selections.
+- an explicitly invoked external blind harness that accepts only an outside-repository,
+  independently human-curated version-2 release and emits aggregate-only Fake-analyzer metrics from
+  a clean, pinned commit. No blind dataset or passing metric threshold is included in this repository.
 
 No real local model or cloud provider is connected. The roadmap's real-provider adapter remains deferred by the project decision until explicitly authorized.
 
@@ -349,8 +353,9 @@ analyzer/prompt/local-model/embedding-model/routing-policy provenance and are se
 `Cache-Control: no-store`.
 
 This evidence makes personal review behavior observable, but it does not open the real-LLM gate.
-Complete date/item gold, a separately held blind set, provider privacy/consent/cost/failure
-boundaries, and the remaining criteria in [EVALUATION.md](EVALUATION.md) are still required.
+Independent adjudication of the version-2 date/item gold, a separately held blind release with a
+pre-registered gate, provider privacy/consent/cost/failure boundaries, and the remaining criteria in
+[EVALUATION.md](EVALUATION.md) are still required.
 
 ## Personalization without fine-tuning
 
@@ -382,8 +387,8 @@ The algorithm discovers cluster candidates; a cloud model may propose a human-re
 ## Evaluation
 
 The executable baseline and provider-entry gate are specified in [EVALUATION.md](EVALUATION.md).
-The current version has 12 regression cases and a 12-case visible synthetic challenge split with
-expected:
+The current version has 12 regression cases and a 12-case `VISIBLE_CHALLENGE` split with fixed gold
+for:
 
 - type candidates
 - explicit/ambiguous date interpretation
@@ -391,15 +396,20 @@ expected:
 - unresolved references
 - multi-intent split
 - escalation decision
+- normalized date value/precision/time and UTF-16 source spans
+- acceptable item sets and title/action/object/source-span fields
 
 Track precision of high-confidence local routing separately from overall accuracy. The primary safety metric is the rate of wrong local decisions that were presented as unambiguous.
 
-The initial `fake-v3` report kept the regression safety gate green but exposed 9 wrong-local cases
-out of 12 in the visible challenge split. `fake-v4` generalizes weekday/time, approximate-date,
-reference, action, event, and multi-intent rules without copying a challenge sentence; the current
-visible challenge report is schema-valid 12/12 with 0 wrong-local, exact routes for all 12 cases,
-correct preferred top-1 types for all 12, and exact signal sets for all 12. This remains a visible
-synthetic challenge, not a blind or
-general Korean accuracy claim, and remains report-only. The generated JSON report contains case
-identifiers and aggregate labels only, never fixture or personal memo text. Exact date values and
-item boundaries are still protected by focused tests rather than scored by this report.
+`fake-v4` generalizes weekday/time, approximate-date, reference, action, event, and multi-intent rules
+without copying a challenge sentence. The version-2 report now exposes date mention/item/item-source-span
+failures as well as route/type/signal metrics, including missing spans rather than silently treating
+them as success. The public visible challenge and the semantic quality rates remain report-only;
+they are not a blind or general Korean accuracy claim. The generated public report contains case
+identifiers and labels for transparent diagnostics, never fixture or personal memo text.
+
+The separately held blind boundary is documented in [EVALUATION.md](EVALUATION.md). It is local and
+explicit only, uses the deterministic `FakeAnalyzer` without network access, and writes a different
+aggregate-only report with no per-case identifiers, results, labels, hashes, spans, paths, or raw
+text. Its metric status stays `NOT_CONFIGURED` until humans pre-register the release policy and
+thresholds before examining candidate output.

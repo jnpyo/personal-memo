@@ -65,6 +65,11 @@ operational approval. Resolved decisions are not implementation prompts.
   interfaces.
 - No real local model or cloud provider is selected or connected without a separate product,
   privacy, evaluation, and cost decision.
+- Public regression and `VISIBLE_CHALLENGE` fixtures are diagnostic synthetic data, never blind
+  evidence. An external blind harness may consume only an independently human-curated version-2
+  release outside Git and emits aggregate-only output from a clean, pinned commit.
+- The external harness currently has no metric `PASS` state. A curator/reviewer must approve the
+  release, adjudication policy, sample size, and thresholds before the first candidate run.
 
 ## Decisions required before a public self-service launch
 
@@ -84,6 +89,8 @@ operational approval. Resolved decisions are not implementation prompts.
 - whether memo text may leave the service and how consent is recorded;
 - monthly budget and per-request context/token limits;
 - maximum accepted latency, retry behavior, and outage policy.
+- who independently curates and adjudicates the blind release, and which metric thresholds are
+  frozen before any candidate output is inspected.
 
 ### Deletion, retention, and export
 

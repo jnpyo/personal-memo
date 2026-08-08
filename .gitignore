@@ -20,3 +20,11 @@ frontend/vite.config.d.ts
 *.dump.sha256
 backups/
 PrivateTls/
+
+# Evaluation inputs with raw or separately held examples stay outside this repository.
+# These patterns are defense in depth only; the blind runner also rejects in-repository paths.
+.private-evaluation/
+private-evaluation/
+blind-evaluation/
+*.blind-dataset.json
+*.blind-dataset.json.enc

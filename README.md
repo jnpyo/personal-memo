@@ -290,7 +290,7 @@ docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.p
 - 자동 태그 병합·분리, 의미 검색, 노드 압축
 - Neo4j, Kafka, Redis, 별도 AI 마이크로서비스
 
-local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 적용되며 잠금 중 추가 시도로 만료가 연장되지 않습니다. 만료 뒤 정상 로그인하면 실패 기록을 초기화합니다. 결정론적 평가 기준선은 현재 regression wrong-local 0을 보장하지만 visible challenge split에서는 12건 중 9건을 잘못된 `LOCAL_REVIEW`로 분류했습니다. 이 공개 합성 set은 blind 정확도 추정치가 아닙니다. 따라서 다음 분석 단계는 gold를 바꾸는 것이 아니라 일반화된 규칙과 owner-scoped review-outcome 집계를 보완한 뒤, Fake cloud의 field-level 실패 상태와 async 수명주기를 구현하는 것입니다. 실제 AI provider와 로컬 모델 연결은 현재 기본 결정에 따라 보류하며, 별도 승인과 평가·비용·개인정보 경계가 준비되기 전에는 도입하지 않습니다.
+local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 적용되며 잠금 중 추가 시도로 만료가 연장되지 않습니다. 만료 뒤 정상 로그인하면 실패 기록을 초기화합니다. 결정론적 평가 v2는 regression의 proposal schema/domain 유효성, wrong-local 0, 정밀 날짜 발명 0, local overflow 0을 hard gate로 검사합니다. 공개 visible challenge와 date/item/source-span 품질 수치는 진단용이며 blind 정확도 주장이 아닙니다. 현재 Fake 분석기의 가장 큰 측정 공백은 item 분해와 source span입니다. 외부 blind runner는 원문을 저장소나 CI에 넣지 않는 aggregate-only 경계까지만 준비됐고 metric gate는 `NOT_CONFIGURED`입니다. 실제 AI provider와 로컬 모델 연결은 독립적인 gold 검토, 사전 승인된 threshold, 개인정보·비용·실패 수명주기 경계가 준비되기 전까지 보류합니다.
 
 ## 문서
 

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://personal-memo.local/schemas/korean-memo-evaluation-case-v1.json",
-  "title": "KoreanMemoEvaluationCaseV1",
+  "$id": "https://personal-memo.local/schemas/korean-memo-evaluation-case-v2.json",
+  "title": "KoreanMemoEvaluationCaseV2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,6 +14,8 @@
     "expectedRoute",
     "expectedTypes",
     "expectedSignals",
+    "expectedDates",
+    "expectedItems",
     "notes"
   ],
   "dependentRequired": {
@@ -27,7 +29,8 @@
         "required": ["split"]
       },
       "then": {
-        "required": ["analyzerExpectedRoute", "analyzerExpectedSignals"]
+        "required": ["analyzerExpectedRoute", "analyzerExpectedSignals"],
+        "not": { "required": ["sourcePolicy"] }
       },
       "else": {
         "not": {
@@ -37,20 +40,35 @@
           ]
         }
       }
+    },
+    {
+      "if": {
+        "properties": { "split": { "const": "BLIND" } },
+        "required": ["split"]
+      },
+      "then": {
+        "required": ["sourcePolicy"],
+        "properties": {
+          "sourcePolicy": { "const": "INDEPENDENT_HUMAN_CURATED" }
+        }
+      },
+      "else": {
+        "not": { "required": ["sourcePolicy"] }
+      }
     }
   ],
   "properties": {
     "id": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 100,
-      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+      "$ref": "#/$defs/goldId"
     },
     "datasetVersion": {
-      "const": "1"
+      "const": "2"
     },
     "split": {
-      "enum": ["REGRESSION", "HOLDOUT"]
+      "enum": ["REGRESSION", "VISIBLE_CHALLENGE", "BLIND"]
+    },
+    "sourcePolicy": {
+      "const": "INDEPENDENT_HUMAN_CURATED"
     },
     "content": {
       "type": "string",
@@ -81,6 +99,12 @@
     "analyzerExpectedSignals": {
       "$ref": "#/$defs/signals"
     },
+    "expectedDates": {
+      "$ref": "#/$defs/expectedDates"
+    },
+    "expectedItems": {
+      "$ref": "#/$defs/expectedItems"
+    },
     "notes": {
       "type": "string",
       "minLength": 1,
@@ -88,6 +112,12 @@
     }
   },
   "$defs": {
+    "goldId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
     "route": {
       "enum": ["LOCAL_REVIEW", "CLOUD_ENRICH"]
     },
@@ -104,22 +134,320 @@
       "type": "array",
       "uniqueItems": true,
       "items": {
-        "enum": [
-          "LOW_TYPE_MARGIN",
-          "LOW_TAG_SIMILARITY",
-          "TAG_CONFLICT",
-          "NEW_TOPIC",
-          "MISSING_YEAR",
-          "MISSING_TIME",
-          "IMPRECISE_DATE",
-          "CONFLICTING_DATES",
-          "UNRESOLVED_REFERENCE",
-          "MISSING_ACTION",
-          "MISSING_OBJECT",
-          "MULTI_INTENT",
-          "CANDIDATE_LIMIT_EXCEEDED",
-          "LOCAL_CLOUD_CONFLICT"
-        ]
+        "$ref": "#/$defs/ambiguityReason"
+      }
+    },
+    "ambiguityReason": {
+      "enum": [
+        "LOW_TYPE_MARGIN",
+        "LOW_TAG_SIMILARITY",
+        "TAG_CONFLICT",
+        "NEW_TOPIC",
+        "MISSING_YEAR",
+        "MISSING_TIME",
+        "IMPRECISE_DATE",
+        "CONFLICTING_DATES",
+        "UNRESOLVED_REFERENCE",
+        "MISSING_ACTION",
+        "MISSING_OBJECT",
+        "MULTI_INTENT",
+        "CANDIDATE_LIMIT_EXCEEDED",
+        "LOCAL_CLOUD_CONFLICT"
+      ]
+    },
+    "sourceSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "unit"],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "unit": {
+          "const": "UTF16_CODE_UNIT"
+        }
+      }
+    },
+    "dateInterpretation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["precision", "value", "timeSpecified"],
+      "properties": {
+        "precision": {
+          "enum": ["EXACT_TIME", "DATE_ONLY", "RELATIVE_EXACT", "APPROXIMATE", "UNKNOWN"]
+        },
+        "value": {
+          "type": ["string", "null"]
+        },
+        "timeSpecified": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "precision": { "const": "DATE_ONLY" } },
+            "required": ["precision"]
+          },
+          "then": {
+            "properties": {
+              "value": { "type": "string", "format": "date" },
+              "timeSpecified": { "const": false }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "precision": { "enum": ["EXACT_TIME", "RELATIVE_EXACT"] }
+            },
+            "required": ["precision"]
+          },
+          "then": {
+            "properties": {
+              "value": { "type": "string", "format": "date-time" },
+              "timeSpecified": { "const": true }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "precision": { "enum": ["APPROXIMATE", "UNKNOWN"] }
+            },
+            "required": ["precision"]
+          },
+          "then": {
+            "properties": {
+              "value": { "type": "null" },
+              "timeSpecified": { "const": false }
+            }
+          }
+        }
+      ]
+    },
+    "dateMention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "goldId",
+        "sourceSpan",
+        "surfaceText",
+        "acceptedInterpretations",
+        "ambiguityReasons",
+        "primary"
+      ],
+      "properties": {
+        "goldId": {
+          "$ref": "#/$defs/goldId"
+        },
+        "sourceSpan": {
+          "$ref": "#/$defs/sourceSpan"
+        },
+        "surfaceText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "acceptedInterpretations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/dateInterpretation"
+          }
+        },
+        "ambiguityReasons": {
+          "$ref": "#/$defs/signals"
+        },
+        "primary": {
+          "type": "boolean"
+        }
+      }
+    },
+    "expectedDates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mentions", "emittedCandidateGoldIds", "primaryGoldId"],
+      "properties": {
+        "mentions": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/dateMention"
+          }
+        },
+        "emittedCandidateGoldIds": {
+          "type": "array",
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/goldId"
+          }
+        },
+        "primaryGoldId": {
+          "oneOf": [
+            { "$ref": "#/$defs/goldId" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "textExpectation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "value"],
+          "properties": {
+            "state": { "const": "VALUE" },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "properties": {
+            "state": { "enum": ["ABSENT", "UNRESOLVED"] }
+          }
+        }
+      ]
+    },
+    "sourceSpanExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirement", "acceptedSpans"],
+      "properties": {
+        "requirement": {
+          "enum": ["REQUIRED", "ABSENT", "OPTIONAL"]
+        },
+        "acceptedSpans": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/sourceSpan"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "requirement": { "const": "REQUIRED" } },
+            "required": ["requirement"]
+          },
+          "then": {
+            "properties": {
+              "acceptedSpans": { "minItems": 1 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "requirement": { "const": "ABSENT" } },
+            "required": ["requirement"]
+          },
+          "then": {
+            "properties": {
+              "acceptedSpans": { "maxItems": 0 }
+            }
+          }
+        }
+      ]
+    },
+    "goldItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["goldId", "kind", "title", "action", "object", "sourceSpan"],
+      "properties": {
+        "goldId": {
+          "$ref": "#/$defs/goldId"
+        },
+        "kind": {
+          "enum": ["TASK", "EVENT", "INFORMATION", "IDEA", "RECORD"]
+        },
+        "title": {
+          "$ref": "#/$defs/textExpectation"
+        },
+        "action": {
+          "$ref": "#/$defs/textExpectation"
+        },
+        "object": {
+          "$ref": "#/$defs/textExpectation"
+        },
+        "sourceSpan": {
+          "$ref": "#/$defs/sourceSpanExpectation"
+        }
+      }
+    },
+    "acceptableItemSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "setId",
+        "suggestedTitle",
+        "primaryItemGoldId",
+        "allItems",
+        "emittedItemGoldIds"
+      ],
+      "properties": {
+        "setId": {
+          "$ref": "#/$defs/goldId"
+        },
+        "suggestedTitle": {
+          "$ref": "#/$defs/textExpectation"
+        },
+        "primaryItemGoldId": {
+          "oneOf": [
+            { "$ref": "#/$defs/goldId" },
+            { "type": "null" }
+          ]
+        },
+        "allItems": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/goldItem"
+          }
+        },
+        "emittedItemGoldIds": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/goldId"
+          }
+        }
+      }
+    },
+    "expectedItems": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resolution", "acceptableSets"],
+      "properties": {
+        "resolution": {
+          "enum": ["RESOLVED", "USER_INPUT_NEEDED", "OVERFLOW"]
+        },
+        "acceptableSets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/acceptableItemSet"
+          }
+        }
       }
     }
   }

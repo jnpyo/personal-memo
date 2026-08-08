@@ -14,23 +14,21 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import local.personalmemo.analysis.domain.AnalysisProposalSchemaValidator;
 import local.personalmemo.analysis.domain.DeterministicAmbiguityGate;
-import local.personalmemo.analysis.infrastructure.Draft202012AnalysisProposalSchemaValidator;
 import local.personalmemo.analysis.infrastructure.FakeAnalyzer;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 class DeterministicEvaluationBaselineTest {
   private static final String REGRESSION_RESOURCE = "/fixtures/korean-memo-cases.json";
-  private static final String HOLDOUT_RESOURCE = "/fixtures/korean-memo-holdout-cases.json";
+  private static final String CHALLENGE_RESOURCE = "/fixtures/korean-memo-challenge-cases.json";
   private static final String CASE_SCHEMA_RESOURCE =
       "/contracts/korean-memo-evaluation-case.schema.json";
   private static final Path REPORT_PATH =
@@ -50,182 +48,155 @@ class DeterministicEvaluationBaselineTest {
   private final ObjectMapper json = new ObjectMapper();
   private final FakeAnalyzer analyzer = new FakeAnalyzer(json);
   private final DeterministicAmbiguityGate ambiguityGate = new DeterministicAmbiguityGate();
-  private final AnalysisProposalSchemaValidator proposalSchemaValidator =
-      new Draft202012AnalysisProposalSchemaValidator();
+  private final EvaluationV2Evaluator evaluator = new EvaluationV2Evaluator(json);
   private final Schema caseSchema = loadCaseSchema();
 
   @Test
   void fixturesAreVersionedValidSeparatedAndSynchronized() throws Exception {
     JsonNode regression = fixtures(REGRESSION_RESOURCE);
-    JsonNode holdout = fixtures(HOLDOUT_RESOURCE);
+    JsonNode challenge = fixtures(CHALLENGE_RESOURCE);
 
     assertThat(regression).hasSize(12);
-    assertThat(holdout).hasSize(12);
+    assertThat(challenge).hasSize(12);
     validateCases(regression, "REGRESSION");
-    validateCases(holdout, "HOLDOUT");
-    assertUniqueIdsAndContent(regression, holdout);
-    assertHoldoutAvoidsFixtureSpecificBranches(holdout);
-    assertRuleSourcesDoNotCopyHoldoutPhrases(holdout);
+    validateCases(challenge, "VISIBLE_CHALLENGE");
+    assertUniqueIdsAndContent(regression, challenge);
+    assertChallengeAvoidsFixtureSpecificBranches(challenge);
+    assertRuleSourcesDoNotCopyChallengePhrases(challenge);
 
     assertResourceMatchesRepositoryCopy(REGRESSION_RESOURCE, "fixtures/korean-memo-cases.json");
     assertResourceMatchesRepositoryCopy(
-        HOLDOUT_RESOURCE, "fixtures/korean-memo-holdout-cases.json");
+        CHALLENGE_RESOURCE, "fixtures/korean-memo-challenge-cases.json");
     assertResourceMatchesRepositoryCopy(
         CASE_SCHEMA_RESOURCE, "contracts/korean-memo-evaluation-case.schema.json");
   }
 
   @Test
-  void writesContentFreeBaselineAndEnforcesOnlyTheRegressionSafetyGate() throws Exception {
+  void writesContentFreeV2BaselineAndEnforcesOnlyReviewedSafetyGates() throws Exception {
     Files.deleteIfExists(REPORT_PATH);
     List<JsonNode> fixtures = new ArrayList<>();
     fixtures(REGRESSION_RESOURCE).forEach(fixtures::add);
-    fixtures(HOLDOUT_RESOURCE).forEach(fixtures::add);
+    fixtures(CHALLENGE_RESOURCE).forEach(fixtures::add);
 
-    List<CaseResult> results = fixtures.stream().map(this::evaluate).toList();
-    Metrics regression =
-        Metrics.from(results.stream().filter(result -> result.isSplit("REGRESSION")).toList());
-    Metrics holdout =
-        Metrics.from(results.stream().filter(result -> result.isSplit("HOLDOUT")).toList());
-    Metrics all = Metrics.from(results);
-    regression.assertInternallyConsistent();
-    holdout.assertInternallyConsistent();
-    all.assertInternallyConsistent();
-    assertThat(all.caseCount()).isEqualTo(regression.caseCount() + holdout.caseCount());
-    assertThat(all.wrongLocalCount())
-        .isEqualTo(regression.wrongLocalCount() + holdout.wrongLocalCount());
-    assertThat(ratio(1, 2)).isEqualTo(0.5);
-    assertThat(ratio(0, 0)).isZero();
-    ObjectNode report = report(results, regression, holdout, all);
+    List<CaseEvaluation> results = fixtures.stream().map(this::evaluate).toList();
+    AggregateEvaluation regression =
+        EvaluationV2Metrics.aggregate(
+            results.stream().filter(result -> result.isSplit("REGRESSION")).toList());
+    AggregateEvaluation challenge =
+        EvaluationV2Metrics.aggregate(
+            results.stream().filter(result -> result.isSplit("VISIBLE_CHALLENGE")).toList());
+    AggregateEvaluation all = EvaluationV2Metrics.aggregate(results);
+    assertAggregateArithmetic(regression, challenge, all);
 
+    Map<String, AggregateEvaluation> splits = new LinkedHashMap<>();
+    splits.put("regression", regression);
+    splits.put("visibleChallenge", challenge);
+    splits.put("all", all);
+    EvaluationReportMetadata metadata =
+        new EvaluationReportMetadata(
+            "2",
+            "2",
+            analyzer.version(),
+            analyzer.deterministicRulesVersion(),
+            ambiguityGate.version(),
+            "NOT_SUPPORTED_BY_PROPOSAL_V1");
+    ObjectNode report = EvaluationV2Report.withPublicCases(json, metadata, splits, results);
+    report.set("gates", EvaluationV2Report.gates(json, regression, challenge));
     String serialized = json.writerWithDefaultPrettyPrinter().writeValueAsString(report) + "\n";
 
     assertThat(regression.schemaValidCount()).isEqualTo(regression.caseCount());
-    assertThat(regression.wrongLocalCount()).isZero();
-    assertThat(report.path("deterministicRulesVersion").asText()).isEqualTo("korean-rules-v2");
+    assertThat(regression.domainValidCount()).isEqualTo(regression.caseCount());
+    assertThat(regression.legacyWrongLocalCount()).isZero();
+    assertThat(regression.inventedPreciseDateCaseCount()).isZero();
+    assertThat(regression.localOverflowCount()).isZero();
+    assertThat(regression.regressionHardGatePassed()).isTrue();
     assertThat(report.at("/gates/regression/passed").asBoolean()).isTrue();
-    assertThat(report.at("/gates/holdout/enforced").asBoolean()).isFalse();
-    assertThat(holdout.caseCount()).isEqualTo(12);
+    assertThat(report.at("/gates/regression/semanticFalseConfidentLocalEnforced").asBoolean())
+        .isFalse();
+    assertThat(report.at("/gates/visibleChallenge/enforced").asBoolean()).isFalse();
+    assertThat(report.at("/capabilities/dateItemDueBinding").asText())
+        .isEqualTo("NOT_SUPPORTED_BY_PROPOSAL_V1");
+    assertThat(report.at("/splits/regression/type/actualCandidateCount").canConvertToInt())
+        .isTrue();
+    assertThat(report.at("/splits/regression/type/matchedCandidatePrecision").isNumber()).isTrue();
+    assertThat(challenge.caseCount()).isEqualTo(12);
+
+    assertContentFreeReport(report, serialized, fixtures);
+    Files.createDirectories(REPORT_PATH.getParent());
+    Files.writeString(REPORT_PATH, serialized, StandardCharsets.UTF_8);
+  }
+
+  private CaseEvaluation evaluate(JsonNode fixture) {
+    UUID memoId = UUID.randomUUID();
+    int revision = 1;
+    String content = fixture.path("content").asText();
+    ObjectNode proposal =
+        analyzer.analyze(
+            memoId,
+            revision,
+            content,
+            Instant.parse(fixture.path("baseInstant").asText()),
+            fixture.path("timeZone").asText());
+    return evaluator.evaluate(fixture, proposal, memoId, revision, content.length());
+  }
+
+  private void assertContentFreeReport(
+      ObjectNode report, String serialized, List<JsonNode> fixtures) {
     for (String forbiddenField :
         List.of(
             "content",
             "rawMemo",
             "memoBody",
-            "title",
             "notes",
+            "surfaceText",
             "contentHash",
             "ownerId",
-            "userId")) {
+            "userId",
+            "memoId")) {
       assertThat(report.findValue(forbiddenField)).isNull();
     }
     for (JsonNode fixture : fixtures) {
       assertThat(serialized).doesNotContain(fixture.path("content").asText());
-    }
-    Files.createDirectories(REPORT_PATH.getParent());
-    Files.writeString(REPORT_PATH, serialized, StandardCharsets.UTF_8);
-  }
-
-  private CaseResult evaluate(JsonNode fixture) {
-    String content = fixture.path("content").asText();
-    ObjectNode proposal =
-        analyzer.analyze(
-            UUID.randomUUID(),
-            1,
-            content,
-            Instant.parse(fixture.path("baseInstant").asText()),
-            fixture.path("timeZone").asText());
-    boolean schemaValid = isProposalSchemaValid(proposal);
-    List<String> actualTypes = textValues(proposal.path("typeCandidates"), "value");
-    Set<String> actualSignals =
-        ambiguityGate.routingSignals(proposal).stream()
-            .map(Enum::name)
-            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-    String actualRoute = ambiguityGate.route(ambiguityGate.routingSignals(proposal)).name();
-    String expectedRoute = evaluationRoute(fixture);
-    List<String> expectedTypes = textValues(fixture.path("expectedTypes"), null);
-    Set<String> expectedSignals = new LinkedHashSet<>(evaluationSignals(fixture));
-    boolean topTypeCorrect =
-        !actualTypes.isEmpty()
-            && !expectedTypes.isEmpty()
-            && actualTypes.getFirst().equals(expectedTypes.getFirst());
-    boolean signalsExact = actualSignals.equals(expectedSignals);
-    boolean routeCorrect = actualRoute.equals(expectedRoute);
-    boolean wrongLocal =
-        "LOCAL_REVIEW".equals(actualRoute)
-            && (!schemaValid || !routeCorrect || !topTypeCorrect || !signalsExact);
-
-    return new CaseResult(
-        fixture.path("id").asText(),
-        fixture.path("split").asText(),
-        schemaValid,
-        expectedRoute,
-        actualRoute,
-        expectedTypes,
-        actualTypes,
-        expectedSignals,
-        actualSignals,
-        topTypeCorrect,
-        signalsExact,
-        wrongLocal);
-  }
-
-  private boolean isProposalSchemaValid(ObjectNode proposal) {
-    try {
-      proposalSchemaValidator.validate(proposal);
-      return true;
-    } catch (RuntimeException exception) {
-      return false;
+      assertThat(serialized).doesNotContain(fixture.path("notes").asText());
+      for (JsonNode date : fixture.at("/expectedDates/mentions")) {
+        assertThat(serialized).doesNotContain(date.path("surfaceText").asText());
+      }
+      for (JsonNode set : fixture.at("/expectedItems/acceptableSets")) {
+        assertTextExpectationAbsent(serialized, set.path("suggestedTitle"));
+        for (JsonNode item : set.path("allItems")) {
+          assertTextExpectationAbsent(serialized, item.path("title"));
+          assertTextExpectationAbsent(serialized, item.path("action"));
+          assertTextExpectationAbsent(serialized, item.path("object"));
+        }
+      }
     }
   }
 
-  private String evaluationRoute(JsonNode fixture) {
-    JsonNode analyzerExpectedRoute = fixture.path("analyzerExpectedRoute");
-    return analyzerExpectedRoute.isTextual()
-        ? analyzerExpectedRoute.asText()
-        : fixture.path("expectedRoute").asText();
+  private void assertTextExpectationAbsent(String serialized, JsonNode expectation) {
+    if (expectation.path("value").isTextual()) {
+      assertThat(serialized).doesNotContain(expectation.path("value").asText());
+    }
   }
 
-  private List<String> evaluationSignals(JsonNode fixture) {
-    JsonNode analyzerExpectedSignals = fixture.path("analyzerExpectedSignals");
-    return analyzerExpectedSignals.isArray()
-        ? textValues(analyzerExpectedSignals, null)
-        : textValues(fixture.path("expectedSignals"), null);
-  }
-
-  private ObjectNode report(
-      List<CaseResult> results, Metrics regression, Metrics holdout, Metrics all) {
-    ObjectNode report =
-        json.createObjectNode()
-            .put("reportVersion", "1")
-            .put("datasetVersion", "1")
-            .put("analyzerVersion", analyzer.version())
-            .put("deterministicRulesVersion", analyzer.deterministicRulesVersion())
-            .put("routingPolicyVersion", ambiguityGate.version())
-            .put("containsRawMemoContent", false);
-    ObjectNode splits = report.putObject("splits");
-    splits.set("regression", regression.toJson(json));
-    splits.set("holdout", holdout.toJson(json));
-    splits.set("all", all.toJson(json));
-
-    ObjectNode gates = report.putObject("gates");
-    gates
-        .putObject("regression")
-        .put("wrongLocalMaximum", 0)
-        .put("actualWrongLocal", regression.wrongLocalCount())
-        .put(
-            "passed",
-            regression.wrongLocalCount() == 0
-                && regression.schemaValidCount() == regression.caseCount());
-    gates
-        .putObject("holdout")
-        .put("enforced", false)
-        .put("actualWrongLocal", holdout.wrongLocalCount())
-        .put(
-            "reason",
-            "Visible synthetic challenge (HOLDOUT split name) is report-only until general rules are improved.");
-
-    ArrayNode cases = report.putArray("cases");
-    results.stream().map(result -> result.toJson(json)).forEach(cases::add);
-    return report;
+  private void assertAggregateArithmetic(
+      AggregateEvaluation regression, AggregateEvaluation challenge, AggregateEvaluation all) {
+    assertThat(all.caseCount()).isEqualTo(regression.caseCount() + challenge.caseCount());
+    assertThat(all.schemaValidCount())
+        .isEqualTo(regression.schemaValidCount() + challenge.schemaValidCount());
+    assertThat(all.domainValidCount())
+        .isEqualTo(regression.domainValidCount() + challenge.domainValidCount());
+    assertThat(all.legacyWrongLocalCount())
+        .isEqualTo(regression.legacyWrongLocalCount() + challenge.legacyWrongLocalCount());
+    assertThat(all.inventedPreciseDateCaseCount())
+        .isEqualTo(
+            regression.inventedPreciseDateCaseCount() + challenge.inventedPreciseDateCaseCount());
+    assertThat(all.localOverflowCount())
+        .isEqualTo(regression.localOverflowCount() + challenge.localOverflowCount());
+    assertThat(all.dateSemantics().truePositive())
+        .isEqualTo(
+            regression.dateSemantics().truePositive() + challenge.dateSemantics().truePositive());
+    assertThat(all.items().falseNegative())
+        .isEqualTo(regression.items().falseNegative() + challenge.items().falseNegative());
   }
 
   private void validateCases(JsonNode fixtures, String expectedSplit) {
@@ -233,14 +204,17 @@ class DeterministicEvaluationBaselineTest {
       assertThat(caseSchema.validate(fixture))
           .as("fixture contract for %s", fixture.path("id").asText())
           .isEmpty();
+      assertThat(fixture.path("datasetVersion").asText()).isEqualTo("2");
       assertThat(fixture.path("split").asText()).isEqualTo(expectedSplit);
+      EvaluationCaseGold parsed = EvaluationV2GoldIntegrity.validate(fixture);
+      assertThat(parsed.content()).isEqualTo(fixture.path("content").asText());
     }
   }
 
-  private void assertUniqueIdsAndContent(JsonNode regression, JsonNode holdout) {
+  private void assertUniqueIdsAndContent(JsonNode regression, JsonNode challenge) {
     Set<String> ids = new HashSet<>();
     Set<String> contents = new HashSet<>();
-    for (JsonNode fixtures : List.of(regression, holdout)) {
+    for (JsonNode fixtures : List.of(regression, challenge)) {
       for (JsonNode fixture : fixtures) {
         assertThat(ids.add(fixture.path("id").asText())).isTrue();
         assertThat(contents.add(fixture.path("content").asText())).isTrue();
@@ -248,12 +222,12 @@ class DeterministicEvaluationBaselineTest {
     }
   }
 
-  private void assertHoldoutAvoidsFixtureSpecificBranches(JsonNode holdout) {
-    for (JsonNode fixture : holdout) {
+  private void assertChallengeAvoidsFixtureSpecificBranches(JsonNode challenge) {
+    for (JsonNode fixture : challenge) {
       String content = fixture.path("content").asText();
       assertThat(FIXTURE_SPECIFIC_BRANCH_MARKERS)
           .as(
-              "holdout %s must not reuse FakeAnalyzer fixture branches",
+              "visible challenge %s must not reuse FakeAnalyzer fixture branches",
               fixture.path("id").asText())
           .noneMatch(content::contains);
       assertThat(content.contains("어제") && content.contains("봤음")).isFalse();
@@ -261,7 +235,7 @@ class DeterministicEvaluationBaselineTest {
     }
   }
 
-  private void assertRuleSourcesDoNotCopyHoldoutPhrases(JsonNode holdout) throws Exception {
+  private void assertRuleSourcesDoNotCopyChallengePhrases(JsonNode challenge) throws Exception {
     String ruleSources =
         Files.readString(
                 backendPath(
@@ -269,7 +243,7 @@ class DeterministicEvaluationBaselineTest {
             + Files.readString(
                 backendPath(
                     "src/main/java/local/personalmemo/analysis/domain/KoreanDateParser.java"));
-    for (JsonNode fixture : holdout) {
+    for (JsonNode fixture : challenge) {
       String content = fixture.path("content").asText().replaceAll("\\s+", " ").strip();
       assertThat(ruleSources)
           .as(
@@ -351,200 +325,6 @@ class DeterministicEvaluationBaselineTest {
       return schema;
     } catch (IOException | RuntimeException exception) {
       throw new IllegalStateException("Evaluation case schema could not be loaded.", exception);
-    }
-  }
-
-  private List<String> textValues(JsonNode array, String field) {
-    List<String> values = new ArrayList<>();
-    for (JsonNode value : array) {
-      values.add(field == null ? value.asText() : value.path(field).asText());
-    }
-    return List.copyOf(values);
-  }
-
-  private static double ratio(long numerator, long denominator) {
-    if (denominator == 0) {
-      return 0;
-    }
-    return Math.round(((double) numerator / denominator) * 1_000_000d) / 1_000_000d;
-  }
-
-  private record CaseResult(
-      String id,
-      String split,
-      boolean schemaValid,
-      String expectedRoute,
-      String actualRoute,
-      List<String> expectedTypes,
-      List<String> actualTypes,
-      Set<String> expectedSignals,
-      Set<String> actualSignals,
-      boolean topTypeCorrect,
-      boolean signalsExact,
-      boolean wrongLocal) {
-    private boolean isSplit(String expected) {
-      return split.equals(expected);
-    }
-
-    private ObjectNode toJson(ObjectMapper json) {
-      return json.createObjectNode()
-          .put("id", id)
-          .put("split", split)
-          .put("schemaValid", schemaValid)
-          .put("expectedRoute", expectedRoute)
-          .put("actualRoute", actualRoute)
-          .put("topTypeCorrect", topTypeCorrect)
-          .put("signalsExact", signalsExact)
-          .put("wrongLocal", wrongLocal);
-    }
-  }
-
-  private record Metrics(
-      int caseCount,
-      int schemaValidCount,
-      int expectedLocalActualLocal,
-      int expectedLocalActualCloud,
-      int expectedCloudActualLocal,
-      int expectedCloudActualCloud,
-      int wrongLocalCount,
-      int topTypeCorrectCount,
-      int expectedTypeCandidateCount,
-      int matchedTypeCandidateCount,
-      int signalTruePositive,
-      int signalFalsePositive,
-      int signalFalseNegative,
-      int signalExactCaseCount) {
-    private static Metrics from(List<CaseResult> results) {
-      int schemaValid = 0;
-      int expectedLocalActualLocal = 0;
-      int expectedLocalActualCloud = 0;
-      int expectedCloudActualLocal = 0;
-      int expectedCloudActualCloud = 0;
-      int wrongLocal = 0;
-      int topTypeCorrect = 0;
-      int expectedTypeCandidates = 0;
-      int matchedTypeCandidates = 0;
-      int signalTruePositive = 0;
-      int signalFalsePositive = 0;
-      int signalFalseNegative = 0;
-      int signalExactCases = 0;
-
-      for (CaseResult result : results) {
-        if (result.schemaValid()) schemaValid++;
-        if (result.wrongLocal()) wrongLocal++;
-        if (result.topTypeCorrect()) topTypeCorrect++;
-        if (result.signalsExact()) signalExactCases++;
-
-        boolean expectedLocal = "LOCAL_REVIEW".equals(result.expectedRoute());
-        boolean actualLocal = "LOCAL_REVIEW".equals(result.actualRoute());
-        if (expectedLocal && actualLocal) expectedLocalActualLocal++;
-        if (expectedLocal && !actualLocal) expectedLocalActualCloud++;
-        if (!expectedLocal && actualLocal) expectedCloudActualLocal++;
-        if (!expectedLocal && !actualLocal) expectedCloudActualCloud++;
-
-        expectedTypeCandidates += result.expectedTypes().size();
-        Set<String> actualTypeSet = new HashSet<>(result.actualTypes());
-        matchedTypeCandidates +=
-            result.expectedTypes().stream().filter(actualTypeSet::contains).count();
-
-        Set<String> expectedSignals = result.expectedSignals();
-        Set<String> actualSignals = result.actualSignals();
-        signalTruePositive += actualSignals.stream().filter(expectedSignals::contains).count();
-        signalFalsePositive +=
-            actualSignals.stream().filter(signal -> !expectedSignals.contains(signal)).count();
-        signalFalseNegative +=
-            expectedSignals.stream().filter(signal -> !actualSignals.contains(signal)).count();
-      }
-
-      return new Metrics(
-          results.size(),
-          schemaValid,
-          expectedLocalActualLocal,
-          expectedLocalActualCloud,
-          expectedCloudActualLocal,
-          expectedCloudActualCloud,
-          wrongLocal,
-          topTypeCorrect,
-          expectedTypeCandidates,
-          matchedTypeCandidates,
-          signalTruePositive,
-          signalFalsePositive,
-          signalFalseNegative,
-          signalExactCases);
-    }
-
-    private ObjectNode toJson(ObjectMapper json) {
-      ObjectNode value =
-          json.createObjectNode()
-              .put("caseCount", caseCount)
-              .put("schemaValidCount", schemaValidCount)
-              .put("schemaValidRate", ratio(schemaValidCount, caseCount));
-      value
-          .putObject("routeConfusion")
-          .put("expectedLocalActualLocal", expectedLocalActualLocal)
-          .put("expectedLocalActualCloud", expectedLocalActualCloud)
-          .put("expectedCloudActualLocal", expectedCloudActualLocal)
-          .put("expectedCloudActualCloud", expectedCloudActualCloud)
-          .put("accuracy", ratio(expectedLocalActualLocal + expectedCloudActualCloud, caseCount));
-      int actualLocalCount = expectedLocalActualLocal + expectedCloudActualLocal;
-      value
-          .putObject("wrongLocal")
-          .put("count", wrongLocalCount)
-          .put("rateAmongLocal", ratio(wrongLocalCount, actualLocalCount))
-          .put("rateOverall", ratio(wrongLocalCount, caseCount));
-      value
-          .putObject("type")
-          .put("top1CorrectCount", topTypeCorrectCount)
-          .put("top1Accuracy", ratio(topTypeCorrectCount, caseCount))
-          .put("expectedCandidateCount", expectedTypeCandidateCount)
-          .put("matchedCandidateCount", matchedTypeCandidateCount)
-          .put(
-              "expectedCandidateRecall",
-              ratio(matchedTypeCandidateCount, expectedTypeCandidateCount));
-      long signalPrecisionDenominator = signalTruePositive + signalFalsePositive;
-      long signalRecallDenominator = signalTruePositive + signalFalseNegative;
-      double precision = ratio(signalTruePositive, signalPrecisionDenominator);
-      double recall = ratio(signalTruePositive, signalRecallDenominator);
-      value
-          .putObject("signals")
-          .put("truePositive", signalTruePositive)
-          .put("falsePositive", signalFalsePositive)
-          .put("falseNegative", signalFalseNegative)
-          .put("precision", precision)
-          .put("recall", recall)
-          .put(
-              "f1",
-              precision + recall == 0 ? 0 : ratioDouble(2 * precision * recall, precision + recall))
-          .put("exactCaseCount", signalExactCaseCount)
-          .put("exactCaseRate", ratio(signalExactCaseCount, caseCount));
-      return value;
-    }
-
-    private void assertInternallyConsistent() {
-      assertThat(caseCount).isPositive();
-      assertThat(schemaValidCount).isBetween(0, caseCount);
-      assertThat(
-              expectedLocalActualLocal
-                  + expectedLocalActualCloud
-                  + expectedCloudActualLocal
-                  + expectedCloudActualCloud)
-          .isEqualTo(caseCount);
-      assertThat(wrongLocalCount).isBetween(0, expectedLocalActualLocal + expectedCloudActualLocal);
-      assertThat(topTypeCorrectCount).isBetween(0, caseCount);
-      assertThat(expectedTypeCandidateCount).isPositive();
-      assertThat(matchedTypeCandidateCount).isBetween(0, expectedTypeCandidateCount);
-      assertThat(signalTruePositive).isNotNegative();
-      assertThat(signalFalsePositive).isNotNegative();
-      assertThat(signalFalseNegative).isNotNegative();
-      assertThat(signalExactCaseCount).isBetween(0, caseCount);
-      assertThat(ratio(schemaValidCount, caseCount)).isBetween(0d, 1d);
-      assertThat(ratio(wrongLocalCount, caseCount)).isBetween(0d, 1d);
-      assertThat(ratio(topTypeCorrectCount, caseCount)).isBetween(0d, 1d);
-      assertThat(ratio(signalExactCaseCount, caseCount)).isBetween(0d, 1d);
-    }
-
-    private static double ratioDouble(double numerator, double denominator) {
-      return Math.round((numerator / denominator) * 1_000_000d) / 1_000_000d;
     }
   }
 }

@@ -6,16 +6,16 @@ This checkpoint measures the deterministic/Fake analysis boundary before any rea
 cloud LLM is selected. It does not authorize a provider, send memo text over a network, or let an
 analyzer write canonical data.
 
-The baseline contains two version-1 synthetic splits:
+The public baseline contains two version-2 synthetic splits:
 
 - `fixtures/korean-memo-cases.json` is a 12-case **regression** set. Several cases are deliberately
   represented by fixture-specific branches in `FakeAnalyzer`, so this split protects known behavior
   but is not an unbiased accuracy estimate.
-- `fixtures/korean-memo-holdout-cases.json` is a 12-case visible synthetic **challenge** set stored
-  under the `HOLDOUT` split name. A test prevents its text from reusing the currently known
-  fixture-specific branch markers. Its failures are intentionally reported rather than hidden or
-  rewritten to match the Fake implementation. Because the set is committed and visible, it is not
-  a statistically independent or blind accuracy estimate.
+- `fixtures/korean-memo-challenge-cases.json` is a 12-case **visible challenge** set with split
+  `VISIBLE_CHALLENGE`. A test prevents its text from reusing the currently known fixture-specific
+  branch markers. Its failures are intentionally reported rather than hidden or rewritten to match
+  the Fake implementation. Because the set is committed and visible, it is neither statistically
+  independent nor a blind accuracy estimate.
 
 Every case is validated by `contracts/korean-memo-evaluation-case.schema.json`. The test-resource
 copies must remain structurally identical to the repository fixtures and contract.
@@ -23,7 +23,9 @@ copies must remain structurally identical to the repository fixtures and contrac
 The regression cases retain `expectedRoute` and `expectedSignals` for the product flow after
 owner-scoped tag/alias resolution. `analyzerExpectedRoute` and `analyzerExpectedSignals` are the
 fixed gold labels for the owner-neutral `FakeAnalyzer` boundary, where an otherwise known tag is
-still a new-topic candidate. The test runner never changes a gold label based on analyzer output.
+still a new-topic candidate. Version 2 also carries pre-annotated date and item gold, including
+accepted alternatives where the memo is genuinely ambiguous. A runner must never change a gold
+label or accepted alternative after seeing analyzer output.
 
 ## Running the baseline
 
@@ -47,19 +49,26 @@ publishing raw evaluation text.
 
 ## Metrics
 
-Metrics are reported separately for regression, the visible challenge (`holdout`) split, and the combined set, keyed by
+Metrics are reported separately for regression, `VISIBLE_CHALLENGE`, and the combined set, keyed by
 `analyzerVersion`, `deterministicRulesVersion`, and `routingPolicyVersion`.
 
-- **Schema-valid rate**: proposals accepted by the version-1 proposal JSON Schema.
+- **Schema/domain-valid rate**: proposals accepted by the version-1 proposal JSON Schema and the
+  production domain validator.
 - **Route confusion**: expected/actual `LOCAL_REVIEW` and `CLOUD_ENRICH` counts and accuracy.
 - **Wrong local**: an actual `LOCAL_REVIEW` result whose schema, route, preferred type, or complete
   ambiguity-signal set disagrees with the fixed gold label. This approximates the primary safety
   failure: a wrong decision presented as unambiguous.
-- **Type**: preferred-type accuracy and recall of expected type candidates.
+- **Type**: preferred-type accuracy, candidate-set exactness, and candidate precision/recall.
 - **Signals**: micro precision, recall, F1, and exact-case rate over ambiguity reasons.
+- **Date**: normalized value/precision/time-specified agreement, annotated mention/surface matching,
+  invented precise-date safety failures, and overflow that was incorrectly routed to local review.
+- **Item**: resolution, complete acceptable-set agreement, and title/action/object/source-span
+  agreement without copying analyzer-generated values into gold.
 
-This version does not yet score title quality, exact date values, item boundaries, relations, or tag
-ranking. Those labels must be added before their metrics are used for a model decision.
+Date, item, item-source-span, and semantic false-confident-local metrics are now reported. Their quality
+rates remain diagnostic until the labels have independent two-person adjudication and an external
+blind run. Title prose quality, relations, and tag ranking are not provider-selection metrics at this
+checkpoint.
 
 ## Current observed checkpoint
 
@@ -69,31 +78,101 @@ missing fallback behavior with general action, reference, event, weekday/time, a
 rules. It is protected by different-wording unit cases, negative substring/date cases, and a source
 check that rejects copied full challenge sentences or three-token challenge branches.
 
-The current deterministic report is:
-
-- regression: schema-valid 12/12, wrong-local 0, route exact 12/12, preferred top-1 type
-  correct 12/12, and signal-set exact 12/12;
-- visible challenge: schema-valid 12/12, wrong-local 0, route exact 12/12, preferred top-1
-  type correct 12/12, and signal-set exact 12/12.
-
-These values only show that the documented synthetic cases are now covered without known phrase
-copies. They do not estimate general Korean accuracy, and the challenge split remains visible and
-report-only. In particular, exact relative-date values and item boundaries are not part of these
-aggregate metrics; focused parser/analyzer tests cover the current rules until the fixture contract
-gains complete date and item gold.
+The generated deterministic report is the source for current measured values. It now exposes the
+date and item failures rather than hiding missing spans or unresolved fields behind route/type
+success. The visible challenge remains report-only even when its current counts are green. Public
+synthetic coverage does not estimate general Korean accuracy and is not evidence that the Fake
+analyzer or a future provider passed a blind evaluation.
 
 ## Automated gates
 
 The current CI gate is deliberately narrow:
 
-- all regression proposals must be schema-valid;
-- regression `wrongLocal.count` must be zero.
+- all regression proposals must pass proposal schema and production domain validation;
+- regression route/type/signal `wrongLocal.count` must be zero;
+- regression `dates.inventedPreciseDateCaseCount` must be zero;
+- regression local-review candidate-overflow count must be zero.
 
-Challenge-set results are report-only. A failing case is evidence for a general deterministic rule,
+Visible-challenge results are report-only. A failing case is evidence for a general deterministic rule,
 parser improvement, or a correctly bounded escalation rule; it must not be fixed by copying the
-challenge phrase into `FakeAnalyzer`. Thresholds become enforceable only after the rules and gold
-labels receive a separate review and a separate blind set exists. Overall/type/signal rates are
-diagnostic at this checkpoint, not release claims.
+challenge phrase into `FakeAnalyzer`. Complete date/item/item-source-span quality rates and semantic
+false-confident-local counts remain report-only until the labels receive two-person adjudication and
+an independently held blind run. Thresholds must be approved before examining that blind run; they
+must not be chosen to fit observed output.
+
+## Separately held blind evaluation
+
+The external blind dataset is a separately controlled release, not a third public fixture split.
+It must be written and frozen by independent human curators before the candidate is evaluated.
+Codex-generated, developer-generated, or analyzer-generated synthetic sentences cannot be described
+as blind evidence. The curator must keep the dataset outside the repository, pull-request artifacts,
+ordinary logs, the product database, and any owner raw-memo export.
+
+The external file is a version-2 envelope:
+
+```json
+{
+  "datasetVersion": "2",
+  "releaseId": "opaque-curator-release",
+  "labelPolicyVersion": "pre-registered-policy",
+  "sourcePolicy": "INDEPENDENT_HUMAN_CURATED",
+  "cases": []
+}
+```
+
+Every enclosed case must independently repeat `split: "BLIND"` and
+`sourcePolicy: "INDEPENDENT_HUMAN_CURATED"`. The initial runner requires at least 50 cases and
+validates every case against the repository's version-2 evaluation schema. `releaseId`,
+`labelPolicyVersion`, the minimum sample size, and metric thresholds must be frozen and approved by
+people before the first candidate output is inspected. The current harness deliberately reports the
+metric gate as `NOT_CONFIGURED`; it cannot claim `PASS` until a separately reviewed, pre-registered
+blind-gate policy is implemented. `sourcePolicy` is a curator attestation, not cryptographic proof of
+independent authorship. The curator-assigned `releaseId` must be an opaque label; it must
+not encode raw text, a case identifier, or a content/ID hash. Blind case and gold identifiers must
+contain at least four characters so the summary's substring leakage check remains fail-closed.
+
+From `backend/`, run it only against a clean, fixed candidate commit:
+
+```powershell
+$env:PERSONAL_MEMO_BLIND_DATASET = '<absolute-path-outside-the-repository>'
+$env:PERSONAL_MEMO_CANDIDATE_COMMIT = (git rev-parse HEAD).Trim()
+try {
+  mvn clean -Dtest=ExternalBlindEvaluationRunner test
+} finally {
+  Remove-Item Env:PERSONAL_MEMO_BLIND_DATASET -ErrorAction SilentlyContinue
+  Remove-Item Env:PERSONAL_MEMO_CANDIDATE_COMMIT -ErrorAction SilentlyContinue
+}
+```
+
+`ExternalBlindEvaluationRunner` does not match the ordinary Surefire test-name patterns and is not
+run by normal `test` or `verify`. The two one-run environment variables keep the external path out
+of Surefire's serialized system-property element and must be removed in `finally`. It fails closed
+when either variable is absent, the worktree is dirty, the candidate commit is not the current
+`HEAD`, the input or a path component resolves through a symbolic link, or the real input path is
+inside the repository. It also rejects malformed envelopes, non-blind cases, and any public-fixture
+ID or content duplicate without printing the offending value. No network or provider credential is
+used; the candidate is the deterministic `FakeAnalyzer` only.
+
+The `clean` lifecycle is mandatory: it removes stale compiled test classes before evaluating the
+pinned source. The runner checks the commit and worktree again before writing the summary, but it is
+not a substitute for an isolated clean checkout or build attestation.
+
+Only a successful integrity run may create:
+
+```text
+backend/target/evaluation/blind-summary.json
+```
+
+That report is aggregate-only and allow-listed. It contains the envelope versions, aggregate counts
+and rates, the exact candidate commit, and server-owned analyzer/rules/routing provenance. It must
+not contain raw text, a case ID, a content or ID hash, a source span, a per-case label/result, an
+owner/user/memo identifier, or a filesystem path. The runner checks the serialized report against
+the input values and deletes the report on every validation, privacy, execution, or write failure.
+
+Public CI must not receive the blind dataset as a secret, invoke the external runner, or upload its
+report or test diagnostics as an artifact. Public CI may only run a leakage guard that fails if a
+tracked JSON file contains a blind case marker. A green public build therefore never means that a
+blind release passed; an authorized curator/operator must retain the aggregate result separately.
 
 ## Privacy and real-use evidence
 
@@ -126,9 +205,9 @@ A real provider remains blocked until all of the following are true:
 1. At least 1–2 weeks and roughly 50–100 personally reviewed memos exist; exact and corrected
    outcomes must be distinguishable by latest `APPLIED` versus `UNDONE` state, while rejects and
    postponements remain separate, without exposing memo text.
-2. The representative evaluation set is expanded beyond fixture-specific rules, date/item/tag gold
-   is complete for the provider task, and the wrong-local safety threshold is approved from measured
-   results rather than chosen after seeing provider output.
+2. The representative evaluation set is expanded beyond fixture-specific rules, date/item gold is
+   independently adjudicated, tag gold is complete for the provider task, and the wrong-local safety
+   threshold is approved from measured results rather than chosen after seeing provider output.
 3. Memo-text transfer consent, allowed provider/region, retention/deletion policy, provider and model
    provenance, per-request context/tool/token/time limits, monthly budget, and outage behavior are
    explicitly decided and enforced fail-closed.

@@ -36,7 +36,7 @@ class KoreanMemoFixtureTest {
       assertThat(fixture.path("id").asText()).isNotBlank();
       assertThat(ids.add(fixture.path("id").asText())).isTrue();
       assertThat(fixture.path("content").asText()).isNotBlank();
-      assertThat(fixture.path("datasetVersion").asText()).isEqualTo("1");
+      assertThat(fixture.path("datasetVersion").asText()).isEqualTo("2");
       assertThat(fixture.path("split").asText()).isEqualTo("REGRESSION");
       assertThat(fixture.path("baseInstant").asText()).isNotBlank();
       assertThat(fixture.path("timeZone").asText()).isNotBlank();
@@ -46,6 +46,8 @@ class KoreanMemoFixtureTest {
       assertThat(fixture.path("expectedTypes").isArray()).isTrue();
       assertThat(fixture.path("expectedSignals").isArray()).isTrue();
       assertThat(fixture.path("analyzerExpectedSignals").isArray()).isTrue();
+      assertThat(fixture.path("expectedDates").isObject()).isTrue();
+      assertThat(fixture.path("expectedItems").isObject()).isTrue();
     }
   }
 
@@ -76,10 +78,6 @@ class KoreanMemoFixtureTest {
     assertThat(textValues(proposal.path("typeCandidates"), "value"))
         .containsExactlyElementsOf(textValues(fixture.path("expectedTypes"), null));
 
-    List<String> actualSignals =
-        ambiguityGate.routingSignals(proposal).stream().map(Enum::name).toList();
-    List<String> expectedSignals = textValues(fixture.path("analyzerExpectedSignals"), null);
-    assertThat(actualSignals).containsExactlyInAnyOrderElementsOf(expectedSignals);
     assertThat(proposal.path("itemCandidates")).hasSizeLessThanOrEqualTo(3);
 
     verifyCaseSpecificContract(fixture.path("id").asText(), proposal);
