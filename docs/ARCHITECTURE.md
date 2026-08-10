@@ -6,9 +6,9 @@ Use a modular monolith for the backend and a mobile-first PWA for the client.
 
 Do not introduce Neo4j, Kafka, Redis, a separate AI microservice, or a second search service in the
 MVP. PostgreSQL and clear module boundaries are sufficient now. V15 uses a bounded in-process
-invocation pool only to keep one synchronous analysis request's gateway work outside database
-transactions. If autonomous background processing is approved later, add a bounded database-backed
-consumer rather than a new infrastructure service.
+invocation pool to keep gateway work outside database transactions. In the production profile, a
+small scheduled worker reuses the same PostgreSQL-backed dispatch state to recover a bounded batch;
+it does not add a queue service or a second source of truth.
 
 ```mermaid
 flowchart TD
@@ -166,8 +166,9 @@ zone.
 
 ## Cloud Agent orchestration
 
-The public cloud boundary is one synchronous request backed by an internal durable state machine,
-not an autonomous processing loop.
+The public cloud boundary remains one synchronous request backed by an internal durable state
+machine. The production profile also runs a bounded internal recovery loop without exposing an
+asynchronous polling contract.
 
 For `CLOUD_ENRICH`, a server-configured adapter first provides one immutable
 `CloudGatewayBinding`: a validated `CloudGatewayDescriptor` containing transfer mode and
@@ -203,12 +204,19 @@ payload. Historical runs are not assigned invented dispatch rows.
 The HTTP request remains synchronous and normally returns only after the run reaches
 `REVIEW_REQUIRED`; an intervening edit or trash operation commits the final run as `STALE` before
 returning `409 STALE_MEMO_REVISION`. If a same-key live lease or invocation outlasts the coordination
-window, the caller receives `409 ANALYSIS_IN_PROGRESS` and retries the identical key/body. Recovery
-is driven only by that later caller. After a lease expires, it may re-execute within the persisted
-fence/deadline limits using the same provider-request token. This is bounded at-least-once execution,
-so an eventual external provider must deduplicate by that token.
-There is no automatic retry scheduler or restart-triggered recovery. Dispatch payloads, tokens,
-bindings, fences, and leases remain internal and are not added to public DTOs, proposal metadata, or
+window, the caller receives `409 ANALYSIS_IN_PROGRESS` and may retry the identical key/body. That
+caller-driven recovery remains available.
+
+The production profile additionally enables a scheduler with a 30-second initial/fixed delay and a
+25-row batch bound. Its database query selects only `PREPARED` or `RUNNING` rows whose lease has
+expired, with owner and the existing raw idempotency key supplied by owner-consistent joins. Each
+candidate then enters the existing owner + operation + raw-key advisory transaction lock and the
+same V15 claim path. Live leases are skipped, including a lease made live between selection and
+claim. A process restart therefore resumes remaining eligible rows on a later bounded cycle. Any
+re-execution stays within the persisted attempt/deadline limits and reuses the same provider-request
+token. This is bounded at-least-once execution, so an eventual external provider must deduplicate by
+that token. Raw recovery keys, dispatch payloads, tokens, bindings, fences, leases, and queued/running
+state remain internal and are not added to public DTOs, proposal metadata, recovery responses, or
 ordinary logs.
 
 A stale revision detected before execution records `CANCELLED_STALE`. A revision that becomes stale
@@ -233,13 +241,18 @@ specific provider.
 
 ## Background jobs
 
-This is a future autonomous-processing design. V15 has a durable dispatch row, transient
-queued/running run state, and a bounded invocation pool, but no background consumer scans that table,
-no scheduler automatically retries work, and a process restart does not resume calls by itself.
-Recovery requires a caller to repeat the same idempotent request. Per-attempt history and
-duration/model-token/cost observability also do not exist. If autonomous processing is approved, use
-a PostgreSQL-backed job consumer and bounded Spring workers. For concurrent consumers, claim work
-with a safe locking pattern such as `FOR UPDATE SKIP LOCKED`.
+Cloud-analysis recovery has one narrow background job. It is enabled only in the `prod` profile and
+scans at most 25 eligible dispatches every 30 seconds. The scan is database-backed and owner-explicit;
+it does not depend on an HTTP security context. The existing idempotency advisory lock, binding
+check, lease/fence/deadline bounds, out-of-transaction Fake invocation, and revision-rechecking
+finalize are reused rather than duplicated. A process-local guard also prevents overlapping cycles
+within one application instance. This is recovery of already prepared work, not a general-purpose
+queue, and caller-driven same-key recovery remains supported. Per-attempt history and
+duration/model-token/cost observability do not exist.
+
+Other autonomous-processing work remains future design. If it is approved, use PostgreSQL-backed
+bounded Spring workers rather than a new infrastructure service; concurrent consumers need a safe
+claiming pattern coordinated with the existing advisory lock and lease.
 
 Initial/P1 jobs:
 

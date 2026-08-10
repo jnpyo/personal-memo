@@ -12,6 +12,11 @@ server:
         secure: true
 
 app:
+  analysis:
+    dispatch-recovery:
+      enabled: true
+      batch-size: 25
+      fixed-delay: 30s
   auth:
     registration-enabled: false
     google:

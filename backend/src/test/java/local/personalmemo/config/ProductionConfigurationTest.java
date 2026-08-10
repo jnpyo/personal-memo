@@ -34,6 +34,12 @@ class ProductionConfigurationTest {
     assertThat(environment.getProperty("app.auth.registration-enabled", Boolean.class)).isFalse();
     assertThat(environment.getProperty("app.auth.google.registration-enabled", Boolean.class))
         .isFalse();
+    assertThat(environment.getProperty("app.analysis.dispatch-recovery.enabled", Boolean.class))
+        .isTrue();
+    assertThat(environment.getProperty("app.analysis.dispatch-recovery.batch-size", Integer.class))
+        .isEqualTo(25);
+    assertThat(environment.getProperty("app.analysis.dispatch-recovery.fixed-delay"))
+        .isEqualTo("30s");
   }
 
   @Test
@@ -48,6 +54,7 @@ class ProductionConfigurationTest {
     assertThat(environment.getProperty("app.auth.registration-enabled", Boolean.class)).isTrue();
     assertThat(environment.getProperty("app.auth.google.registration-enabled", Boolean.class))
         .isFalse();
+    assertThat(environment.getProperty("app.analysis.dispatch-recovery.enabled")).isNull();
   }
 
   private PropertySource<?> load(String name, String resource) throws IOException {

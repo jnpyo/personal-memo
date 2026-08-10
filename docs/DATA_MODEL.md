@@ -239,10 +239,13 @@ stale이면 gateway 0-call로 `CANCELLED_STALE`을 남기며, 호출 뒤 revisio
 application transaction과 restore 검증이 함께 강제한다.
 
 공개 분석 POST는 내부 상태를 polling DTO로 노출하지 않고 최종 run까지 기다리는 동기 계약을
-유지한다. background worker, 자동 재시작 recovery, 개별 attempt history, duration, model-token, cost와
-top-k context는 없다. 동일 key/body를 다시 호출하는 caller-driven recovery만 deadline과
-`max_attempts` 안에서 lease를 재claim하며, transport는 at-least-once다. 실제 provider는 같은
-`pmr1_...` token을 멱등하게 처리해야 한다.
+유지한다. 동일 key/body를 다시 호출하는 caller-driven recovery와 운영 프로필의 bounded background
+recovery가 같은 deadline과 `max_attempts` 안에서 lease를 재claim한다. scheduler는 30초마다 최대
+25건의 `PREPARED` 또는 lease가 만료된 `RUNNING` row를 owner-consistent dispatch/run/idempotency join으로
+선택하고, 기존 owner+operation+raw-key advisory lock 아래 claim한다. live lease는 skip하므로 process
+재시작 뒤에도 eligible row만 다음 주기에서 이어진다. transport는 exactly-once가 아니라
+at-least-once이고 실제 provider는 같은 `pmr1_...` token을 멱등하게 처리해야 한다. 개별 attempt
+history, duration, model-token, cost와 top-k context는 없다.
 
 Proposal schema v2는 `dateCandidates[].candidateId`와 nullable
 `itemCandidates[].dueDateCandidateId`를 기존 `proposal_json` JSONB 안에 저장하고, run의 기존
@@ -291,8 +294,8 @@ FK (analysis_run_id, owner_id) -> analysis_runs(id, owner_id)
 `RUNNING`은 양수 fence, deadline보다 이른 attempt 시작, attempt보다 늦고 deadline을 넘지 않는
 lease가 필요하다. `FINALIZED`는 lease를 비우고 final 시각을 남기며 준비 payload text를 null로
 scrub하지만 hash와 reserved proposal ID는 보존한다. `updated_at`은 silent default 없이 각 write가
-명시한다. deadline과 최대 attempt는 동일 key recovery의 상한이며 자동 scheduler를 뜻하지 않는다.
-fence가 다른 늦은 attempt는 final 결과를 덮어쓸 수 없다.
+명시한다. deadline과 최대 attempt는 caller 및 운영 scheduler recovery 모두의 상한이다. 이 row는
+개별 attempt history가 아니며, fence가 다른 늦은 attempt는 final 결과를 덮어쓸 수 없다.
 
 ### `analysis_proposals`
 
@@ -543,7 +546,7 @@ memos + analysis_applications + memo_items + task_details
 - local email verification and password-reset token/delivery state
 - login abuse/rate-limit audit state if the selected policy requires additional persistence
 - MFA/passkey authenticators and account recovery codes
-- background analysis worker, automatic restart recovery, per-attempt history, duration/model-token/cost state
+- per-attempt analysis history and duration/model-token/cost state
 - top-k retrieval context
 
 필요한 vertical slice가 시작될 때 파괴적 변경 없이 새 Flyway migration으로 추가한다.

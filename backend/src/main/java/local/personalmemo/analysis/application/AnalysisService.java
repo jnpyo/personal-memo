@@ -64,6 +64,7 @@ public class AnalysisService {
   private static final Duration LEASE_GRACE = Duration.ofSeconds(1);
   private static final long COORDINATION_POLL_MILLIS = 25L;
   private static final int MAX_RECOVERY_PROPOSALS = 100;
+  private static final int MAX_RECOVERY_DISPATCH_BATCH = 100;
   private static final Set<String> RESERVED_CLOUD_METADATA =
       Set.of(
           "toolCalls",
@@ -147,9 +148,11 @@ public class AnalysisService {
   }
 
   public RunView start(UUID memoId, String key, Start request) {
+    UUID ownerId = identity.ownerId();
     String requestHash = idempotency.hashRequest(new StartRequest(memoId, request));
     Instant coordinationDeadline = Instant.now().plus(DISPATCH_WINDOW);
-    StartDecision decision = inTransaction(() -> prepareStart(memoId, key, request, requestHash));
+    StartDecision decision =
+        inTransaction(() -> prepareStart(ownerId, memoId, key, request, requestHash));
 
     while (true) {
       if (decision instanceof StartCompleted completed) {
@@ -165,6 +168,7 @@ public class AnalysisService {
             inTransaction(
                 () ->
                     claimStart(
+                        ownerId,
                         needsBinding.runId(),
                         needsBinding.proposalId(),
                         key,
@@ -183,6 +187,7 @@ public class AnalysisService {
             inTransaction(
                 () ->
                     claimStart(
+                        ownerId,
                         waiting.runId(),
                         waiting.proposalId(),
                         key,
@@ -191,31 +196,172 @@ public class AnalysisService {
         continue;
       }
       if (decision instanceof StartDispatch dispatch) {
-        CloudAnalysisResult result;
-        try {
-          result =
-              cloudInvoker.invoke(dispatch.binding(), dispatch.request(), dispatch.callTimeout());
-        } catch (CloudGatewayInvocationException exception) {
-          if (exception.reason() == CloudGatewayInvocationException.Reason.CALLER_INTERRUPTED) {
-            throw DomainException.conflict(
-                "ANALYSIS_IN_PROGRESS",
-                "The analysis remains recoverable. Retry with the same key.");
-          }
-          result = CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
-        } catch (IllegalArgumentException exception) {
-          result = CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
-        }
+        CloudAnalysisResult result = invokeForCaller(dispatch);
         CloudAnalysisResult completedResult = result;
-        decision = inTransaction(() -> finalizeStart(dispatch, completedResult, key, requestHash));
+        decision =
+            inTransaction(
+                () -> finalizeStart(ownerId, dispatch, completedResult, key, requestHash));
         continue;
       }
       throw new IllegalStateException("Unknown analysis start decision.");
     }
   }
 
-  private StartDecision prepareStart(UUID memoId, String key, Start request, String requestHash) {
+  /**
+   * Recovers a bounded set of durable dispatches without relying on an HTTP security context.
+   * Candidate owners and idempotency keys come only from server-owned database rows.
+   */
+  public int recoverPendingDispatches(int batchSize) {
+    if (batchSize < 1 || batchSize > MAX_RECOVERY_DISPATCH_BATCH) {
+      throw new IllegalArgumentException("batchSize must be between 1 and 100.");
+    }
+    int completed = 0;
+    for (RecoveryCandidate candidate : findRecoveryCandidates(batchSize)) {
+      if (Thread.currentThread().isInterrupted()) {
+        break;
+      }
+      try {
+        if (recoverCandidate(candidate)) {
+          completed++;
+        }
+      } catch (RuntimeException ignored) {
+        // A malformed or concurrently changed candidate must not block the bounded scan. The row
+        // remains durable for a later caller or recovery cycle, without logging private evidence.
+      }
+    }
+    return completed;
+  }
+
+  private List<RecoveryCandidate> findRecoveryCandidates(int batchSize) {
+    Instant now = Instant.now();
+    return db.sql(
+            """
+            select d.owner_id,
+                   d.analysis_run_id,
+                   d.reserved_proposal_id,
+                   d.idempotency_key_hash,
+                   d.request_hash,
+                   i.idempotency_key
+              from analysis_run_dispatches d
+              join analysis_runs r
+                on r.id = d.analysis_run_id
+               and r.owner_id = d.owner_id
+              join idempotency_records i
+                on i.owner_id = d.owner_id
+               and i.operation = 'ANALYSIS_START'
+               and i.resource_id = d.analysis_run_id
+               and i.request_hash = d.request_hash
+             where d.state = 'PREPARED'
+                or (d.state = 'RUNNING' and d.lease_expires_at <= :now)
+             order by coalesce(d.lease_expires_at, d.prepared_at),
+                      d.prepared_at,
+                      d.analysis_run_id
+             limit :batchSize
+            """)
+        .param("now", Timestamp.from(now))
+        .param("batchSize", batchSize)
+        .query(
+            (resultSet, rowNumber) ->
+                new RecoveryCandidate(
+                    resultSet.getObject("owner_id", UUID.class),
+                    resultSet.getObject("analysis_run_id", UUID.class),
+                    resultSet.getObject("reserved_proposal_id", UUID.class),
+                    resultSet.getString("idempotency_key_hash"),
+                    resultSet.getString("request_hash"),
+                    resultSet.getString("idempotency_key")))
+        .list();
+  }
+
+  private boolean recoverCandidate(RecoveryCandidate candidate) {
+    if (!Hashing.sha256(candidate.key()).equals(candidate.idempotencyKeyHash())) {
+      throw new IllegalStateException("The durable recovery key failed its integrity check.");
+    }
+    CloudGatewayBinding binding = bindGateway();
+    StartDecision decision =
+        inTransaction(
+            () ->
+                claimStart(
+                    candidate.ownerId(),
+                    candidate.runId(),
+                    candidate.proposalId(),
+                    candidate.key(),
+                    candidate.requestHash(),
+                    binding));
+    for (int transition = 0; transition < 3; transition++) {
+      if (decision instanceof StartCompleted || decision instanceof StartStale) {
+        return true;
+      }
+      if (decision instanceof StartWaiting) {
+        return false;
+      }
+      if (decision instanceof StartNeedsBinding needsBinding) {
+        CloudGatewayBinding nextBinding =
+            needsBinding.binding() == null ? bindGateway() : needsBinding.binding();
+        decision =
+            inTransaction(
+                () ->
+                    claimStart(
+                        candidate.ownerId(),
+                        needsBinding.runId(),
+                        needsBinding.proposalId(),
+                        candidate.key(),
+                        candidate.requestHash(),
+                        nextBinding));
+        continue;
+      }
+      if (decision instanceof StartDispatch dispatch) {
+        CloudAnalysisResult result = invokeForRecovery(dispatch);
+        if (result == null) {
+          return false;
+        }
+        CloudAnalysisResult completedResult = result;
+        decision =
+            inTransaction(
+                () ->
+                    finalizeStart(
+                        candidate.ownerId(),
+                        dispatch,
+                        completedResult,
+                        candidate.key(),
+                        candidate.requestHash()));
+        continue;
+      }
+      throw new IllegalStateException("Unknown durable recovery decision.");
+    }
+    return false;
+  }
+
+  private CloudAnalysisResult invokeForCaller(StartDispatch dispatch) {
+    try {
+      return cloudInvoker.invoke(dispatch.binding(), dispatch.request(), dispatch.callTimeout());
+    } catch (CloudGatewayInvocationException exception) {
+      if (exception.reason() == CloudGatewayInvocationException.Reason.CALLER_INTERRUPTED) {
+        throw DomainException.conflict(
+            "ANALYSIS_IN_PROGRESS", "The analysis remains recoverable. Retry with the same key.");
+      }
+      return CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
+    } catch (IllegalArgumentException exception) {
+      return CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
+    }
+  }
+
+  private CloudAnalysisResult invokeForRecovery(StartDispatch dispatch) {
+    try {
+      return cloudInvoker.invoke(dispatch.binding(), dispatch.request(), dispatch.callTimeout());
+    } catch (CloudGatewayInvocationException exception) {
+      if (exception.reason() == CloudGatewayInvocationException.Reason.CALLER_INTERRUPTED) {
+        return null;
+      }
+      return CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
+    } catch (IllegalArgumentException exception) {
+      return CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
+    }
+  }
+
+  private StartDecision prepareStart(
+      UUID ownerId, UUID memoId, String key, Start request, String requestHash) {
     Optional<IdempotencyService.StoredResult> replay =
-        idempotency.find(START_OPERATION, key, requestHash);
+        idempotency.find(ownerId, START_OPERATION, key, requestHash);
     if (replay.isPresent()) {
       RunView response = idempotency.convert(replay.get().response(), RunView.class);
       if ("STALE".equals(response.status())) {
@@ -227,7 +373,7 @@ public class AnalysisService {
       return new StartCompleted(response);
     }
 
-    MemoSnapshot memo = memos.getCurrentForUpdate(memoId);
+    MemoSnapshot memo = memos.getCurrentForUpdate(ownerId, memoId);
     requireActiveCurrentRevision(memo, request.memoRevision());
 
     UUID runId = UUID.randomUUID();
@@ -244,12 +390,14 @@ public class AnalysisService {
             memo.clientRecordedAt(),
             memo.sourceTimeZone());
     canonicalizeProviderMetadata(localProposal, localProposal);
-    validateProposal(localProposal, memo, proposalSchemaVersion, provenance, routingPolicyVersion);
+    validateProposal(
+        ownerId, localProposal, memo, proposalSchemaVersion, provenance, routingPolicyVersion);
     List<AmbiguityReason> routingReasons = ambiguityGate.routingSignals(localProposal);
     AnalysisRoute route = ambiguityGate.route(routingReasons);
 
     if (route == AnalysisRoute.LOCAL_REVIEW) {
       return completeStartWithoutDispatch(
+          ownerId,
           runId,
           proposalId,
           memo,
@@ -271,6 +419,7 @@ public class AnalysisService {
           CloudRunEvidence.descriptorUnavailable(CloudAnalysisOutcome.UNEXPECTED_FAILURE);
       CloudEnrichment fallback =
           validatedFallback(
+              ownerId,
               localProposal,
               routingReasons,
               routingPolicyVersion,
@@ -280,6 +429,7 @@ public class AnalysisService {
               routingPolicyVersion,
               evidence);
       return completeStartWithoutDispatch(
+          ownerId,
           runId,
           proposalId,
           memo,
@@ -302,11 +452,12 @@ public class AnalysisService {
       Instant checkedAt = Instant.now();
       authorizationCheckedAt = Optional.of(checkedAt);
       acceptedConsentGrantedAt =
-          acceptedPinnedCloudConsent(descriptor.consentPolicyVersion(), checkedAt);
+          acceptedPinnedCloudConsent(ownerId, descriptor.consentPolicyVersion(), checkedAt);
       if (acceptedConsentGrantedAt.isEmpty()) {
         CloudRunEvidence evidence = CloudRunEvidence.consentRequired(descriptor, checkedAt);
         CloudEnrichment fallback =
             validatedFallback(
+                ownerId,
                 localProposal,
                 routingReasons,
                 routingPolicyVersion,
@@ -316,6 +467,7 @@ public class AnalysisService {
                 routingPolicyVersion,
                 evidence);
         return completeStartWithoutDispatch(
+            ownerId,
             runId,
             proposalId,
             memo,
@@ -340,9 +492,10 @@ public class AnalysisService {
             descriptor,
             authorizationCheckedAt,
             acceptedConsentGrantedAt,
-            CloudProviderRequestToken.issue(identity.ownerId(), START_OPERATION, key, requestHash));
+            CloudProviderRequestToken.issue(ownerId, START_OPERATION, key, requestHash));
     CloudRunEvidence pendingEvidence = CloudRunEvidence.pending(cloudRequest);
     insertRun(
+        ownerId,
         runId,
         memo,
         "HYBRID",
@@ -355,13 +508,21 @@ public class AnalysisService {
         startedAt,
         null);
     insertDispatch(
-        runId, proposalId, key, requestHash, binding.bindingId(), localProposal, startedAt);
+        ownerId,
+        runId,
+        proposalId,
+        key,
+        requestHash,
+        binding.bindingId(),
+        localProposal,
+        startedAt);
     RunView pending = new RunView(runId, memo.id(), memo.currentRevision(), "RUNNING", proposalId);
-    idempotency.store(START_OPERATION, key, requestHash, runId, pending);
+    idempotency.store(ownerId, START_OPERATION, key, requestHash, runId, pending);
     return new StartNeedsBinding(runId, proposalId, binding);
   }
 
   private StartDecision completeStartWithoutDispatch(
+      UUID ownerId,
       UUID runId,
       UUID proposalId,
       MemoSnapshot memo,
@@ -377,6 +538,7 @@ public class AnalysisService {
       String requestHash) {
     Instant completedAt = Instant.now();
     insertRun(
+        ownerId,
         runId,
         memo,
         route,
@@ -388,14 +550,15 @@ public class AnalysisService {
         evidence,
         startedAt,
         completedAt);
-    insertProposal(proposalId, runId, proposal, completedAt);
+    insertProposal(ownerId, proposalId, runId, proposal, completedAt);
     RunView response =
         new RunView(runId, memo.id(), memo.currentRevision(), "REVIEW_REQUIRED", proposalId);
-    idempotency.store(START_OPERATION, key, requestHash, runId, response);
+    idempotency.store(ownerId, START_OPERATION, key, requestHash, runId, response);
     return new StartCompleted(response);
   }
 
   private void insertRun(
+      UUID ownerId,
       UUID runId,
       MemoSnapshot memo,
       String route,
@@ -428,7 +591,7 @@ public class AnalysisService {
             )
             """)
         .param("runId", runId)
-        .param("ownerId", identity.ownerId())
+        .param("ownerId", ownerId)
         .param("memoId", memo.id())
         .param("memoRevision", memo.currentRevision())
         .param("route", route)
@@ -457,7 +620,8 @@ public class AnalysisService {
         .update();
   }
 
-  private void insertProposal(UUID proposalId, UUID runId, ObjectNode proposal, Instant createdAt) {
+  private void insertProposal(
+      UUID ownerId, UUID proposalId, UUID runId, ObjectNode proposal, Instant createdAt) {
     String proposalJson = proposal.toString();
     db.sql(
             """
@@ -468,7 +632,7 @@ public class AnalysisService {
             )
             """)
         .param("proposalId", proposalId)
-        .param("ownerId", identity.ownerId())
+        .param("ownerId", ownerId)
         .param("runId", runId)
         .param("proposalJson", proposalJson)
         .param("proposalHash", Hashing.sha256(proposalJson))
@@ -477,6 +641,7 @@ public class AnalysisService {
   }
 
   private void insertDispatch(
+      UUID ownerId,
       UUID runId,
       UUID proposalId,
       String key,
@@ -501,7 +666,7 @@ public class AnalysisService {
             )
             """)
         .param("runId", runId)
-        .param("ownerId", identity.ownerId())
+        .param("ownerId", ownerId)
         .param("proposalId", proposalId)
         .param("idempotencyKeyHash", Hashing.sha256(key))
         .param("requestHash", requestHash)
@@ -516,24 +681,30 @@ public class AnalysisService {
   }
 
   private StartDecision claimStart(
-      UUID runId, UUID proposalId, String key, String requestHash, CloudGatewayBinding binding) {
-    RunView replay = requireStartReplay(key, requestHash);
+      UUID ownerId,
+      UUID runId,
+      UUID proposalId,
+      String key,
+      String requestHash,
+      CloudGatewayBinding binding) {
+    RunView replay = requireStartReplay(ownerId, key, requestHash);
     if (!"RUNNING".equals(replay.status())) {
       return decisionFromFinalResponse(replay);
     }
 
-    DispatchIdentity observed = findDispatchIdentity(runId, proposalId);
-    MemoSnapshot memo = memos.getCurrentForUpdate(observed.memoId());
-    DispatchSnapshot dispatch = findDispatch(runId, proposalId, true);
+    DispatchIdentity observed = findDispatchIdentity(ownerId, runId, proposalId);
+    MemoSnapshot memo = memos.getCurrentForUpdate(ownerId, observed.memoId());
+    DispatchSnapshot dispatch = findDispatch(ownerId, runId, proposalId, true);
     requireSameDispatchIdentity(observed, dispatch);
 
     if (dispatch.finalizedAt() != null || "FINALIZED".equals(dispatch.dispatchState())) {
-      return decisionFromFinalResponse(requireStartReplay(key, requestHash));
+      return decisionFromFinalResponse(requireStartReplay(ownerId, key, requestHash));
     }
     if ("STALE".equals(dispatch.status())
         || !memo.isActive()
         || memo.currentRevision() != dispatch.memoRevision()) {
       return completeDurableDispatch(
+          ownerId,
           dispatch,
           stampedStaleProposal(
               dispatch.localProposal(),
@@ -557,6 +728,7 @@ public class AnalysisService {
     if (remainingDispatchWindow.compareTo(Duration.ofMillis(1)) < 0
         || dispatch.fenceToken() >= dispatch.maxAttempts()) {
       return completeFallbackBeforeCall(
+          ownerId,
           dispatch,
           memo,
           dispatch.evidence().withOutcome(CloudAnalysisOutcome.RETRY_EXHAUSTED),
@@ -566,6 +738,7 @@ public class AnalysisService {
     }
     if (!matchesBinding(dispatch, binding)) {
       return completeFallbackBeforeCall(
+          ownerId,
           dispatch,
           memo,
           dispatch.evidence().withOutcome(CloudAnalysisOutcome.UNEXPECTED_FAILURE),
@@ -578,11 +751,13 @@ public class AnalysisService {
     if (dispatch.descriptor().transferMode() == CloudTransferMode.EXTERNAL_MEMO_CONTENT) {
       Instant checkedAt = Instant.now();
       Optional<Instant> currentGrant =
-          acceptedPinnedCloudConsent(dispatch.descriptor().consentPolicyVersion(), checkedAt);
+          acceptedPinnedCloudConsent(
+              ownerId, dispatch.descriptor().consentPolicyVersion(), checkedAt);
       if (currentGrant.isEmpty()
           || dispatch.acceptedConsentGrantedAt() == null
           || !currentGrant.get().equals(dispatch.acceptedConsentGrantedAt())) {
         return completeFallbackBeforeCall(
+            ownerId,
             dispatch,
             memo,
             CloudRunEvidence.durableConsentRequired(dispatch.descriptor(), checkedAt),
@@ -619,9 +794,9 @@ public class AnalysisService {
         .param("startedAt", Timestamp.from(now))
         .param("leaseExpiresAt", Timestamp.from(leaseExpiresAt))
         .param("runId", runId)
-        .param("ownerId", identity.ownerId())
+        .param("ownerId", ownerId)
         .update();
-    updateRunForAttempt(runId, attemptEvidence);
+    updateRunForAttempt(ownerId, runId, attemptEvidence);
 
     CloudAnalysisRequest request =
         new CloudAnalysisRequest(
@@ -636,18 +811,23 @@ public class AnalysisService {
   }
 
   private StartDecision finalizeStart(
-      StartDispatch attempt, CloudAnalysisResult result, String key, String requestHash) {
-    RunView replay = requireStartReplay(key, requestHash);
+      UUID ownerId,
+      StartDispatch attempt,
+      CloudAnalysisResult result,
+      String key,
+      String requestHash) {
+    RunView replay = requireStartReplay(ownerId, key, requestHash);
     if (!"RUNNING".equals(replay.status())) {
       return decisionFromFinalResponse(replay);
     }
 
-    DispatchIdentity observed = findDispatchIdentity(attempt.runId(), attempt.proposalId());
-    MemoSnapshot memo = memos.getCurrentForUpdate(observed.memoId());
-    DispatchSnapshot dispatch = findDispatch(attempt.runId(), attempt.proposalId(), true);
+    DispatchIdentity observed =
+        findDispatchIdentity(ownerId, attempt.runId(), attempt.proposalId());
+    MemoSnapshot memo = memos.getCurrentForUpdate(ownerId, observed.memoId());
+    DispatchSnapshot dispatch = findDispatch(ownerId, attempt.runId(), attempt.proposalId(), true);
     requireSameDispatchIdentity(observed, dispatch);
     if (dispatch.finalizedAt() != null || "FINALIZED".equals(dispatch.dispatchState())) {
-      return decisionFromFinalResponse(requireStartReplay(key, requestHash));
+      return decisionFromFinalResponse(requireStartReplay(ownerId, key, requestHash));
     }
     if (dispatch.fenceToken() != attempt.fenceToken()) {
       return new StartWaiting(attempt.runId(), attempt.proposalId(), attempt.binding());
@@ -659,6 +839,7 @@ public class AnalysisService {
         || !memo.isActive()
         || memo.currentRevision() != dispatch.memoRevision()) {
       return completeDurableDispatch(
+          ownerId,
           dispatch,
           stampedStaleProposal(
               dispatch.localProposal(),
@@ -674,6 +855,7 @@ public class AnalysisService {
 
     CloudEnrichment enrichment =
         resolveCloudResult(
+            ownerId,
             dispatch.localProposal(),
             result,
             attempt.request(),
@@ -682,6 +864,7 @@ public class AnalysisService {
             dispatch.provenance(),
             dispatch.routingPolicyVersion());
     return completeDurableDispatch(
+        ownerId,
         dispatch,
         enrichment.proposal(),
         enrichment.evidence(),
@@ -692,6 +875,7 @@ public class AnalysisService {
   }
 
   private StartDecision completeFallbackBeforeCall(
+      UUID ownerId,
       DispatchSnapshot dispatch,
       MemoSnapshot memo,
       CloudRunEvidence evidence,
@@ -700,6 +884,7 @@ public class AnalysisService {
       Instant completedAt) {
     CloudEnrichment fallback =
         validatedFallback(
+            ownerId,
             dispatch.localProposal(),
             dispatch.routingReasons(),
             dispatch.routingPolicyVersion(),
@@ -709,6 +894,7 @@ public class AnalysisService {
             dispatch.routingPolicyVersion(),
             evidence);
     return completeDurableDispatch(
+        ownerId,
         dispatch,
         fallback.proposal(),
         fallback.evidence(),
@@ -719,6 +905,7 @@ public class AnalysisService {
   }
 
   private StartDecision completeDurableDispatch(
+      UUID ownerId,
       DispatchSnapshot dispatch,
       ObjectNode proposal,
       CloudRunEvidence evidence,
@@ -762,9 +949,9 @@ public class AnalysisService {
                 : evidence.providerRequestToken().value())
         .param("completedAt", Timestamp.from(completedAt))
         .param("runId", dispatch.runId())
-        .param("ownerId", identity.ownerId())
+        .param("ownerId", ownerId)
         .update();
-    insertProposal(dispatch.proposalId(), dispatch.runId(), proposal, completedAt);
+    insertProposal(ownerId, dispatch.proposalId(), dispatch.runId(), proposal, completedAt);
     db.sql(
             """
              update analysis_run_dispatches
@@ -778,7 +965,7 @@ public class AnalysisService {
             """)
         .param("finalizedAt", Timestamp.from(completedAt))
         .param("runId", dispatch.runId())
-        .param("ownerId", identity.ownerId())
+        .param("ownerId", ownerId)
         .update();
 
     RunView response =
@@ -788,11 +975,12 @@ public class AnalysisService {
             dispatch.memoRevision(),
             status,
             dispatch.proposalId());
-    idempotency.complete(START_OPERATION, key, requestHash, dispatch.runId(), response);
+    idempotency.complete(ownerId, START_OPERATION, key, requestHash, dispatch.runId(), response);
     return "STALE".equals(status) ? new StartStale(response) : new StartCompleted(response);
   }
 
   private CloudEnrichment resolveCloudResult(
+      UUID ownerId,
       ObjectNode localProposal,
       CloudAnalysisResult result,
       CloudAnalysisRequest request,
@@ -802,6 +990,7 @@ public class AnalysisService {
       String expectedRoutingPolicyVersion) {
     if (result instanceof CloudAnalysisResult.Failure failure) {
       return validatedFallback(
+          ownerId,
           localProposal,
           request.routingReasons(),
           request.routingPolicyVersion(),
@@ -813,6 +1002,7 @@ public class AnalysisService {
     }
     if (!(result instanceof CloudAnalysisResult.Success success)) {
       return validatedFallback(
+          ownerId,
           localProposal,
           request.routingReasons(),
           request.routingPolicyVersion(),
@@ -827,15 +1017,26 @@ public class AnalysisService {
     CloudRunEvidence successEvidence = CloudRunEvidence.from(request, CloudAnalysisOutcome.SUCCESS);
     try {
       validateProposal(
-          enriched, memo, expectedSchemaVersion, expectedProvenance, expectedRoutingPolicyVersion);
+          ownerId,
+          enriched,
+          memo,
+          expectedSchemaVersion,
+          expectedProvenance,
+          expectedRoutingPolicyVersion);
       canonicalizeProviderMetadata(enriched, request.validatedLocalProposal());
       stampCloudMetadata(
           enriched, request.routingReasons(), request.routingPolicyVersion(), successEvidence);
       validateProposal(
-          enriched, memo, expectedSchemaVersion, expectedProvenance, expectedRoutingPolicyVersion);
+          ownerId,
+          enriched,
+          memo,
+          expectedSchemaVersion,
+          expectedProvenance,
+          expectedRoutingPolicyVersion);
       return new CloudEnrichment(enriched, successEvidence);
     } catch (RuntimeException exception) {
       return validatedFallback(
+          ownerId,
           localProposal,
           request.routingReasons(),
           request.routingPolicyVersion(),
@@ -870,7 +1071,7 @@ public class AnalysisService {
     return staleProposal;
   }
 
-  private void updateRunForAttempt(UUID runId, CloudRunEvidence evidence) {
+  private void updateRunForAttempt(UUID ownerId, UUID runId, CloudRunEvidence evidence) {
     db.sql(
             """
             update analysis_runs
@@ -891,13 +1092,13 @@ public class AnalysisService {
                 ? null
                 : evidence.providerRequestToken().value())
         .param("runId", runId)
-        .param("ownerId", identity.ownerId())
+        .param("ownerId", ownerId)
         .update();
   }
 
-  private RunView requireStartReplay(String key, String requestHash) {
+  private RunView requireStartReplay(UUID ownerId, String key, String requestHash) {
     return idempotency
-        .find(START_OPERATION, key, requestHash)
+        .find(ownerId, START_OPERATION, key, requestHash)
         .map(stored -> idempotency.convert(stored.response(), RunView.class))
         .orElseThrow(
             () -> new IllegalStateException("The durable analysis reservation is missing."));
@@ -913,7 +1114,7 @@ public class AnalysisService {
     return new StartCompleted(response);
   }
 
-  private DispatchIdentity findDispatchIdentity(UUID runId, UUID proposalId) {
+  private DispatchIdentity findDispatchIdentity(UUID ownerId, UUID runId, UUID proposalId) {
     return db.sql(
             """
             select r.id as run_id,
@@ -929,7 +1130,7 @@ public class AnalysisService {
                and d.reserved_proposal_id = :proposalId
             """)
         .param("runId", runId)
-        .param("ownerId", identity.ownerId())
+        .param("ownerId", ownerId)
         .param("proposalId", proposalId)
         .query(
             (resultSet, rowNumber) ->
@@ -942,7 +1143,8 @@ public class AnalysisService {
         .orElseThrow(() -> DomainException.notFound("Analysis run"));
   }
 
-  private DispatchSnapshot findDispatch(UUID runId, UUID proposalId, boolean forUpdate) {
+  private DispatchSnapshot findDispatch(
+      UUID ownerId, UUID runId, UUID proposalId, boolean forUpdate) {
     String lockingClause = forUpdate ? " for update of r, d" : "";
     return db.sql(
             """
@@ -988,7 +1190,7 @@ public class AnalysisService {
             """
                 + lockingClause)
         .param("runId", runId)
-        .param("ownerId", identity.ownerId())
+        .param("ownerId", ownerId)
         .param("proposalId", proposalId)
         .query(this::mapDispatch)
         .optional()
@@ -1338,7 +1540,7 @@ public class AnalysisService {
         resultSet.getString("status"));
   }
 
-  private void validateProposalReferences(JsonNode proposal) {
+  private void validateProposalReferences(UUID ownerId, JsonNode proposal) {
     Set<UUID> referencedTagIds = new TreeSet<>();
     for (JsonNode tag : proposal.path("tagCandidates")) {
       if (tag.path("existingTagId").isTextual()) {
@@ -1362,7 +1564,7 @@ public class AnalysisService {
                     )
                     """)
                 .param("memoId", targetId)
-                .param("ownerId", identity.ownerId())
+                .param("ownerId", ownerId)
                 .query(Boolean.class)
                 .single();
         if (!exists) {
@@ -1371,10 +1573,11 @@ public class AnalysisService {
         }
       }
     }
-    requireOwnedActiveTags(referencedTagIds);
+    requireOwnedActiveTags(ownerId, referencedTagIds);
   }
 
   private void validateProposal(
+      UUID ownerId,
       ObjectNode proposal,
       MemoSnapshot memo,
       String expectedSchemaVersion,
@@ -1390,7 +1593,7 @@ public class AnalysisService {
           "The proposal schema version does not match the server-owned analyzer contract.");
     }
     proposalSchemaValidator.validate(proposal);
-    resolveOwnerScopedTagCandidates(proposal);
+    resolveOwnerScopedTagCandidates(ownerId, proposal);
     synchronizeNewTopicSignal(proposal);
     synchronizeResolvedRouteMetadata(proposal);
     proposalSchemaValidator.validate(proposal);
@@ -1401,7 +1604,7 @@ public class AnalysisService {
         memo.content(),
         expectedProvenance,
         expectedRoutingPolicyVersion);
-    validateProposalReferences(proposal);
+    validateProposalReferences(ownerId, proposal);
   }
 
   /**
@@ -1410,7 +1613,7 @@ public class AnalysisService {
    * resolved only when its normalized canonical/alias values identify exactly one active tag owned
    * by the authenticated user.
    */
-  private void resolveOwnerScopedTagCandidates(ObjectNode proposal) {
+  private void resolveOwnerScopedTagCandidates(UUID ownerId, ObjectNode proposal) {
     for (JsonNode candidateNode : proposal.path("tagCandidates")) {
       if (!candidateNode.path("isNewProposal").isBoolean()
           || !candidateNode.path("isNewProposal").asBoolean()
@@ -1444,7 +1647,7 @@ public class AnalysisService {
                      and t.state = 'ACTIVE'
                      and (ta.normalized_alias = :canonical or ta.normalized_alias = :alias)
                   """)
-              .param("ownerId", identity.ownerId())
+              .param("ownerId", ownerId)
               .param("canonical", normalizedCanonical.get())
               .param("alias", aliasLookup)
               .query(
@@ -1548,6 +1751,7 @@ public class AnalysisService {
   }
 
   private CloudEnrichment validatedFallback(
+      UUID ownerId,
       ObjectNode localProposal,
       List<AmbiguityReason> routingReasons,
       String routingPolicyVersion,
@@ -1560,7 +1764,12 @@ public class AnalysisService {
     canonicalizeProviderMetadata(fallback, fallback);
     stampCloudMetadata(fallback, routingReasons, routingPolicyVersion, evidence);
     validateProposal(
-        fallback, memo, expectedSchemaVersion, expectedProvenance, expectedRoutingPolicyVersion);
+        ownerId,
+        fallback,
+        memo,
+        expectedSchemaVersion,
+        expectedProvenance,
+        expectedRoutingPolicyVersion);
     return new CloudEnrichment(fallback, evidence);
   }
 
@@ -1603,7 +1812,7 @@ public class AnalysisService {
   }
 
   private Optional<Instant> acceptedPinnedCloudConsent(
-      String consentPolicyVersion, Instant authorizationInstant) {
+      UUID ownerId, String consentPolicyVersion, Instant authorizationInstant) {
     return db.sql(
             """
             select cloud_analysis_consent,
@@ -1613,7 +1822,7 @@ public class AnalysisService {
              where user_id = :ownerId
              for share
             """)
-        .param("ownerId", identity.ownerId())
+        .param("ownerId", ownerId)
         .query(
             (resultSet, rowNumber) ->
                 new CloudConsentState(
@@ -1671,7 +1880,7 @@ public class AnalysisService {
     return values.toString();
   }
 
-  private void requireOwnedActiveTags(Set<UUID> tagIds) {
+  private void requireOwnedActiveTags(UUID ownerId, Set<UUID> tagIds) {
     if (tagIds.isEmpty()) {
       return;
     }
@@ -1686,7 +1895,7 @@ public class AnalysisService {
                  order by id
                  for key share
                 """)
-            .param("ownerId", identity.ownerId())
+            .param("ownerId", ownerId)
             .param("tagIds", List.copyOf(tagIds))
             .query(UUID.class)
             .list();
@@ -1752,6 +1961,19 @@ public class AnalysisService {
       implements StartDecision {}
 
   private record DispatchIdentity(UUID runId, UUID proposalId, UUID memoId, int memoRevision) {}
+
+  private record RecoveryCandidate(
+      UUID ownerId,
+      UUID runId,
+      UUID proposalId,
+      String idempotencyKeyHash,
+      String requestHash,
+      String key) {
+    @Override
+    public String toString() {
+      return "RecoveryCandidate[redacted]";
+    }
+  }
 
   private record DispatchSnapshot(
       UUID runId,

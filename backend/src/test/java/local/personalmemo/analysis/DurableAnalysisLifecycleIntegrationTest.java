@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import local.personalmemo.analysis.application.AnalysisService;
 import local.personalmemo.analysis.domain.CloudAnalysisGateway;
 import local.personalmemo.analysis.domain.CloudAnalysisResult;
 import local.personalmemo.analysis.domain.CloudGatewayBinding;
@@ -27,6 +28,8 @@ import local.personalmemo.support.PostgresIntegration;
 import local.personalmemo.support.PostgresIntegrationTestSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MvcResult;
@@ -45,6 +48,7 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
           CloudTransferMode.NO_NETWORK);
 
   @MockitoBean private CloudAnalysisGateway cloudGateway;
+  @Autowired private AnalysisService analysisService;
 
   @BeforeEach
   void useSuccessfulBoundGatewayByDefault() {
@@ -428,6 +432,334 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
         .isEqualTo(1L);
   }
 
+  @Test
+  void recoveryWithoutSecurityContextCompletesAnExpiredRunningDispatch() throws Exception {
+    AtomicInteger gatewayCalls = new AtomicInteger();
+    AbandonedDispatch abandoned = abandonRunningDispatch("recovery-expired", gatewayCalls);
+    expireLease(abandoned.runId());
+    when(cloudGateway.bind())
+        .thenReturn(
+            binding(
+                request -> {
+                  gatewayCalls.incrementAndGet();
+                  return CloudAnalysisResult.success(request.validatedLocalProposal());
+                }));
+
+    SecurityContextHolder.clearContext();
+    assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    int recovered = analysisService.recoverPendingDispatches(10);
+
+    assertThat(recovered).isEqualTo(1);
+    assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    RunLifecycle completed = runLifecycle(abandoned.memoId());
+    DispatchLifecycle finalized = dispatchLifecycle(abandoned.runId());
+    assertThat(completed.status()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(completed.cloudOutcome()).isEqualTo("SUCCESS");
+    assertThat(completed.completedAt()).isNotNull();
+    assertThat(finalized.state()).isEqualTo("FINALIZED");
+    assertThat(finalized.fenceToken()).isEqualTo(2L);
+    assertThat(finalized.hasPreparedProposal()).isFalse();
+    assertThat(finalized.leaseExpiresAt()).isNull();
+    assertThat(proposalCount(abandoned.runId())).isEqualTo(1L);
+    assertThat(storedStartStatus(abandoned.key())).isEqualTo("REVIEW_REQUIRED");
+    assertThat(gatewayCalls).hasValue(2);
+    assertNoCanonicalAnalysisWrites();
+  }
+
+  @Test
+  void recoveryWithoutSecurityContextClaimsAPreparedRestartDispatch() throws Exception {
+    AtomicInteger gatewayCalls = new AtomicInteger();
+    AbandonedDispatch abandoned = abandonRunningDispatch("recovery-prepared", gatewayCalls);
+    resetToPrepared(abandoned.runId());
+    when(cloudGateway.bind())
+        .thenReturn(
+            binding(
+                request -> {
+                  gatewayCalls.incrementAndGet();
+                  return CloudAnalysisResult.success(request.validatedLocalProposal());
+                }));
+
+    SecurityContextHolder.clearContext();
+    int recovered = analysisService.recoverPendingDispatches(10);
+
+    assertThat(recovered).isEqualTo(1);
+    RunLifecycle completed = runLifecycle(abandoned.memoId());
+    DispatchLifecycle finalized = dispatchLifecycle(abandoned.runId());
+    assertThat(completed.status()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(completed.cloudOutcome()).isEqualTo("SUCCESS");
+    assertThat(finalized.state()).isEqualTo("FINALIZED");
+    assertThat(finalized.fenceToken()).isEqualTo(1L);
+    assertThat(finalized.hasPreparedProposal()).isFalse();
+    assertThat(proposalCount(abandoned.runId())).isEqualTo(1L);
+    assertThat(storedStartStatus(abandoned.key())).isEqualTo("REVIEW_REQUIRED");
+    assertThat(gatewayCalls).hasValue(2);
+    assertNoCanonicalAnalysisWrites();
+  }
+
+  @Test
+  void recoverySkipsALiveLeaseWithoutCallingOrChangingTheDispatch() throws Exception {
+    AtomicInteger gatewayCalls = new AtomicInteger();
+    AbandonedDispatch abandoned = abandonRunningDispatch("recovery-live", gatewayCalls);
+    extendLeaseToDeadline(abandoned.runId());
+    when(cloudGateway.bind())
+        .thenReturn(
+            binding(
+                request -> {
+                  gatewayCalls.incrementAndGet();
+                  return CloudAnalysisResult.success(request.validatedLocalProposal());
+                }));
+    DispatchLifecycle before = dispatchLifecycle(abandoned.runId());
+
+    SecurityContextHolder.clearContext();
+    int recovered = analysisService.recoverPendingDispatches(10);
+
+    assertThat(recovered).isZero();
+    assertThat(dispatchLifecycle(abandoned.runId())).isEqualTo(before);
+    assertThat(runLifecycle(abandoned.memoId()).status()).isEqualTo("RUNNING");
+    assertThat(proposalCount(abandoned.runId())).isZero();
+    assertThat(storedStartStatus(abandoned.key())).isEqualTo("RUNNING");
+    assertThat(gatewayCalls).hasValue(1);
+  }
+
+  @Test
+  void recoveryDoesNotCrossAnOwnerBoundaryToFindAnIdempotencyKey() throws Exception {
+    AtomicInteger gatewayCalls = new AtomicInteger();
+    AbandonedDispatch abandoned = abandonRunningDispatch("recovery-owner", gatewayCalls);
+    expireLease(abandoned.runId());
+    UUID otherOwnerId = UUID.fromString("00000000-0000-0000-0000-000000000002");
+    db.sql("insert into users(id,created_at,updated_at) values(:id,now(),now())")
+        .param("id", otherOwnerId)
+        .update();
+    db.sql(
+            """
+            update idempotency_records
+               set owner_id = :otherOwnerId
+             where owner_id = :ownerId
+               and operation = 'ANALYSIS_START'
+               and idempotency_key = :key
+            """)
+        .param("otherOwnerId", otherOwnerId)
+        .param("ownerId", OWNER_ID)
+        .param("key", abandoned.key())
+        .update();
+    when(cloudGateway.bind())
+        .thenReturn(
+            binding(
+                request -> {
+                  gatewayCalls.incrementAndGet();
+                  return CloudAnalysisResult.success(request.validatedLocalProposal());
+                }));
+    DispatchLifecycle before = dispatchLifecycle(abandoned.runId());
+
+    SecurityContextHolder.clearContext();
+    int recovered = analysisService.recoverPendingDispatches(10);
+
+    assertThat(recovered).isZero();
+    assertThat(dispatchLifecycle(abandoned.runId())).isEqualTo(before);
+    assertThat(runLifecycle(abandoned.memoId()).status()).isEqualTo("RUNNING");
+    assertThat(proposalCount(abandoned.runId())).isZero();
+    assertThat(gatewayCalls).hasValue(1);
+    assertThat(
+            db.sql(
+                    """
+                    select count(*)
+                      from idempotency_records
+                     where owner_id = :otherOwnerId
+                       and operation = 'ANALYSIS_START'
+                       and idempotency_key = :key
+                    """)
+                .param("otherOwnerId", otherOwnerId)
+                .param("key", abandoned.key())
+                .query(Long.class)
+                .single())
+        .isEqualTo(1L);
+  }
+
+  @Test
+  void malformedRecoveryKeyFailsClosedWithoutBlockingTheNextCandidate() throws Exception {
+    AtomicInteger firstAbandonedCalls = new AtomicInteger();
+    AbandonedDispatch malformed = abandonRunningDispatch("recovery-malformed", firstAbandonedCalls);
+    expireLease(malformed.runId());
+    db.sql(
+            """
+            update analysis_run_dispatches
+               set idempotency_key_hash = :wrongHash
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("wrongHash", "0".repeat(64))
+        .param("runId", malformed.runId())
+        .param("ownerId", OWNER_ID)
+        .update();
+
+    AtomicInteger secondAbandonedCalls = new AtomicInteger();
+    AbandonedDispatch valid = abandonRunningDispatch("recovery-valid", secondAbandonedCalls);
+    expireLease(valid.runId());
+    AtomicInteger recoveryCalls = new AtomicInteger();
+    when(cloudGateway.bind())
+        .thenReturn(
+            binding(
+                request -> {
+                  recoveryCalls.incrementAndGet();
+                  return CloudAnalysisResult.success(request.validatedLocalProposal());
+                }));
+
+    SecurityContextHolder.clearContext();
+    int recovered = analysisService.recoverPendingDispatches(10);
+
+    assertThat(recovered).isEqualTo(1);
+    assertThat(dispatchLifecycle(malformed.runId()).state()).isEqualTo("RUNNING");
+    assertThat(runLifecycle(malformed.memoId()).status()).isEqualTo("RUNNING");
+    assertThat(proposalCount(malformed.runId())).isZero();
+    assertThat(dispatchLifecycle(valid.runId()).state()).isEqualTo("FINALIZED");
+    assertThat(runLifecycle(valid.memoId()).status()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(proposalCount(valid.runId())).isEqualTo(1L);
+    assertThat(recoveryCalls).hasValue(1);
+  }
+
+  @Test
+  void callerAndRecoveryScannerRaceUsesOneNewGatewayAttemptAndOneFinalResponse() throws Exception {
+    AtomicInteger abandonedCalls = new AtomicInteger();
+    AbandonedDispatch abandoned = abandonRunningDispatch("recovery-race", abandonedCalls);
+    expireLease(abandoned.runId());
+    CountDownLatch gatewayEntered = new CountDownLatch(1);
+    CountDownLatch releaseGateway = new CountDownLatch(1);
+    AtomicInteger recoveryCalls = new AtomicInteger();
+    when(cloudGateway.bind())
+        .thenReturn(
+            binding(
+                request -> {
+                  recoveryCalls.incrementAndGet();
+                  gatewayEntered.countDown();
+                  awaitRelease(releaseGateway);
+                  return CloudAnalysisResult.success(request.validatedLocalProposal());
+                }));
+
+    ExecutorService actors = Executors.newFixedThreadPool(2);
+    Future<Integer> scanner = actors.submit(() -> analysisService.recoverPendingDispatches(10));
+    Future<MvcResult> caller = null;
+    try {
+      assertThat(gatewayEntered.await(5, TimeUnit.SECONDS)).isTrue();
+      assertThat(dispatchLifecycle(abandoned.runId()).fenceToken()).isEqualTo(2L);
+      caller = actors.submit(() -> startAnalysis(abandoned.memoId(), abandoned.key(), 1));
+      Future<MvcResult> waitingCaller = caller;
+      assertThatThrownBy(() -> waitingCaller.get(250, TimeUnit.MILLISECONDS))
+          .isInstanceOf(TimeoutException.class);
+
+      releaseGateway.countDown();
+      assertThat(scanner.get(5, TimeUnit.SECONDS)).isEqualTo(1);
+      MvcResult replay = caller.get(5, TimeUnit.SECONDS);
+
+      assertThat(replay.getResponse().getStatus()).isEqualTo(200);
+      assertThat(response(replay).path("id").asText()).isEqualTo(abandoned.runId().toString());
+      assertThat(response(replay).path("status").asText()).isEqualTo("REVIEW_REQUIRED");
+      assertThat(dispatchLifecycle(abandoned.runId()).state()).isEqualTo("FINALIZED");
+      assertThat(proposalCount(abandoned.runId())).isEqualTo(1L);
+      assertThat(storedStartStatus(abandoned.key())).isEqualTo("REVIEW_REQUIRED");
+      assertThat(recoveryCalls).hasValue(1);
+    } finally {
+      releaseGateway.countDown();
+      scanner.cancel(true);
+      if (caller != null) {
+        caller.cancel(true);
+      }
+      actors.shutdownNow();
+      assertThat(actors.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+    }
+  }
+
+  private AbandonedDispatch abandonRunningDispatch(String keyPrefix, AtomicInteger gatewayCalls)
+      throws Exception {
+    CountDownLatch gatewayEntered = new CountDownLatch(1);
+    CountDownLatch gatewayInterrupted = new CountDownLatch(1);
+    when(cloudGateway.bind())
+        .thenReturn(
+            binding(
+                request -> {
+                  gatewayCalls.incrementAndGet();
+                  gatewayEntered.countDown();
+                  try {
+                    new CountDownLatch(1).await();
+                  } catch (InterruptedException exception) {
+                    gatewayInterrupted.countDown();
+                    Thread.currentThread().interrupt();
+                  }
+                  return CloudAnalysisResult.success(request.validatedLocalProposal());
+                }));
+    UUID memoId = createAmbiguousMemo(keyPrefix);
+    String key = keyPrefix + "-start";
+    ExecutorService caller = Executors.newSingleThreadExecutor();
+    Future<MvcResult> start = caller.submit(() -> startAnalysis(memoId, key, 1));
+    try {
+      assertThat(gatewayEntered.await(5, TimeUnit.SECONDS)).isTrue();
+      RunLifecycle running = runLifecycle(memoId);
+      assertThat(dispatchLifecycle(running.runId()).state()).isEqualTo("RUNNING");
+      assertThat(start.cancel(true)).isTrue();
+      assertThat(gatewayInterrupted.await(5, TimeUnit.SECONDS)).isTrue();
+      return new AbandonedDispatch(memoId, running.runId(), key);
+    } finally {
+      start.cancel(true);
+      caller.shutdownNow();
+      assertThat(caller.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+    }
+  }
+
+  private void expireLease(UUID runId) {
+    db.sql(
+            """
+            update analysis_run_dispatches
+               set last_attempt_started_at = prepared_at,
+                   lease_expires_at = prepared_at + interval '1 millisecond',
+                   updated_at = greatest(updated_at, prepared_at)
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("runId", runId)
+        .param("ownerId", OWNER_ID)
+        .update();
+  }
+
+  private void resetToPrepared(UUID runId) {
+    db.sql(
+            """
+            update analysis_run_dispatches
+               set state = 'PREPARED',
+                   fence_token = 0,
+                   last_attempt_started_at = null,
+                   lease_expires_at = null,
+                   updated_at = greatest(updated_at, prepared_at)
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("runId", runId)
+        .param("ownerId", OWNER_ID)
+        .update();
+    db.sql(
+            """
+            update analysis_runs
+               set status = 'QUEUED',
+                   cloud_outcome = 'PENDING'
+             where id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("runId", runId)
+        .param("ownerId", OWNER_ID)
+        .update();
+  }
+
+  private void extendLeaseToDeadline(UUID runId) {
+    db.sql(
+            """
+            update analysis_run_dispatches
+               set lease_expires_at = deadline_at
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("runId", runId)
+        .param("ownerId", OWNER_ID)
+        .update();
+  }
+
   private UUID createAmbiguousMemo(String keyPrefix) throws Exception {
     UUID memoId = UUID.randomUUID();
     MvcResult created = createMemo(memoId, keyPrefix + "-create", AMBIGUOUS_MEMO);
@@ -602,4 +934,6 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
       int callTimeoutMs,
       Instant leaseExpiresAt,
       Instant finalizedAt) {}
+
+  private record AbandonedDispatch(UUID memoId, UUID runId, String key) {}
 }

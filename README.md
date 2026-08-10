@@ -63,6 +63,7 @@
 - V13의 owner·policy-version·granted-at 동의 pin과 legacy boolean grant 폐기, server-owned cloud transfer/gateway/provider/model/policy/outcome evidence
 - V14의 내부 authorization/grant snapshot과 결정론적 provider-request token, legacy row의 정직한 `legacy-v0` 보존
 - V15의 호출 전 durable prepare commit, immutable gateway binding·descriptor 검증, deadline/lease/fence 기반 caller-driven retry, DB transaction 밖 bounded gateway 실행과 revision 재검사 finalize
+- 운영 프로필에서 30초 간격으로 `PREPARED` 또는 lease가 만료된 `RUNNING` dispatch를 한 번에 최대 25건 복구하는 bounded scheduler; owner와 기존 idempotency key는 owner 일치 DB row에서만 가져오며 live lease는 건너뜀
 - LOCAL·cloud SUCCESS·fallback 모두에 같은 `providerMetadata` allowlist canonicalizer를 적용해 임의 provider detail 제거
 - 직렬화된 proposal 64 KiB, `providerMetadata` 8 KiB 상한으로 분석 결과 저장 크기 제한
 - authoritative routing reason을 전달하는 provider-independent cloud request, typed success/failure 결과와 no-tool `NO_NETWORK` Fake adapter
@@ -82,7 +83,7 @@
 - Testcontainers PostgreSQL + MockMvc 통합 테스트
 - primary flow, 중복 요청, owner 격리, stale revision, apply rollback, memo lifecycle/recovery, task 상태/overdue, undo 원문 보존 검증
 - exact consent pin, 미동의 external gateway 0-call, typed/exception/invalid cloud fallback, server-owned evidence와 provider 오류 문구 비노출 통합 검증
-- V15 fresh/V14-upgrade migration, durable prepare·binding mismatch·bounded timeout·caller-driven recovery·fence·stale finalize·owner 격리 통합 검증
+- V15 fresh/V14-upgrade migration, durable prepare·binding mismatch·bounded timeout·caller-driven 및 운영 scheduler recovery·fence·stale finalize·owner 격리 통합 검증
 - Playwright의 모바일 viewport에서 보류·새로고침·승인·그래프·되돌리기와 설치 가능한 오프라인 app shell 검증
 - 로컬 초안 owner 격리·저장 실패, 교차 탭 인증 전이, 미저장 편집 guard와 prompt형 service-worker 업데이트 단위 테스트
 - GitHub Actions에서 OpenAPI/JSON Schema, backend, frontend, 브라우저 E2E 검사를 실행
@@ -293,14 +294,14 @@ docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.p
 
 - 실제 로컬 AI 모델 또는 클라우드 LLM
 - 실제 external provider 설정과 사용자 consent grant/revoke API, top-k retrieval context
-- 분석 background worker와 process 재시작 뒤 자동 recovery, 개별 attempt history·duration·model-token·cost 계측
+- 분석 개별 attempt history·duration·model-token·cost 계측
 - local email 검증·비밀번호 재설정 delivery, IP·edge rate limit/abuse protection, MFA/passkey, 완전한 계정 삭제 자동화
 - 완전한 오프라인 동기화와 IndexedDB outbox
 - Web Push 및 reminder dispatcher
 - 자동 태그 병합·분리, 의미 검색, 노드 압축
 - Neo4j, Kafka, Redis, 별도 AI 마이크로서비스
 
-local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 적용되며 잠금 중 추가 시도로 만료가 연장되지 않습니다. 만료 뒤 정상 로그인하면 실패 기록을 초기화합니다. V13은 과거 boolean-only cloud consent를 모두 폐기하고, true consent가 owner row의 정확한 policy version과 승인 시각을 함께 갖도록 강제합니다. V14는 내부 authorization/grant/token snapshot을 도입했고, V15는 `analysis_runs`의 `QUEUED`/`PENDING` row와 `analysis_run_dispatches`의 검증된 local proposal·reserved proposal ID·idempotency/request hash·immutable executor binding·deadline을 gateway 호출 전에 함께 commit합니다. 각 caller는 lease와 fence를 claim한 뒤 DB transaction 밖에서 bounded gateway 호출을 수행하며, 같은 key/body retry가 남은 deadline 안에서 같은 provider token으로 복구를 이어갑니다. finalize는 memo owner·활성 상태·revision을 다시 잠가 확인하고, 변경되었으면 결과를 `STALE`로 확정한 transaction을 commit한 뒤 `409 STALE_MEMO_REVISION`을 반환합니다. 공개 POST는 여전히 최종 `RunView`를 동기로 반환하며 내부 `PENDING`/`CANCELLED_STALE`, dispatch의 raw proposal, binding, token은 HTTP·proposal metadata에 노출하지 않습니다. 현재 Fake descriptor는 `NO_NETWORK`라 동의 없이 동작하며, 실제 external provider도 consent grant/revoke HTTP API도 구성되어 있지 않습니다. 네트워크 경계는 at-least-once이므로 실제 provider는 동일 token의 중복 호출을 멱등하게 처리해야 합니다.
+local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 적용되며 잠금 중 추가 시도로 만료가 연장되지 않습니다. 만료 뒤 정상 로그인하면 실패 기록을 초기화합니다. V13은 과거 boolean-only cloud consent를 모두 폐기하고, true consent가 owner row의 정확한 policy version과 승인 시각을 함께 갖도록 강제합니다. V14는 내부 authorization/grant/token snapshot을 도입했고, V15는 `analysis_runs`의 `QUEUED`/`PENDING` row와 `analysis_run_dispatches`의 검증된 local proposal·reserved proposal ID·idempotency/request hash·immutable executor binding·deadline을 gateway 호출 전에 함께 commit합니다. caller는 lease와 fence를 claim한 뒤 DB transaction 밖에서 bounded gateway 호출을 수행하며, 같은 key/body retry가 남은 deadline 안에서 같은 provider token으로 복구를 이어갑니다. 운영 프로필에서는 bounded scheduler도 30초 fixed delay로 DB에서 `PREPARED` 또는 lease가 만료된 `RUNNING`을 최대 25건 고르고, row가 가리키는 owner와 기존 raw idempotency key에 같은 owner+operation+key advisory lock을 적용해 동일 lifecycle을 실행합니다. live lease는 호출하지 않고 다음 주기로 넘기며, process 재시작 뒤에도 남은 dispatch가 같은 상한 안에서 다시 선택됩니다. finalize는 memo owner·활성 상태·revision을 다시 잠가 확인하고, 변경되었으면 결과를 `STALE`로 확정한 transaction을 commit한 뒤 caller에게 `409 STALE_MEMO_REVISION`을 반환합니다. 공개 POST는 여전히 최종 `RunView`를 동기로 반환하며 caller의 같은 key/body 복구도 유지됩니다. 내부 `QUEUED`/`RUNNING`/`PENDING` 상태, 복구용 key, prepared context, binding, lease, fence와 provider token은 HTTP·proposal metadata에 노출하지 않습니다. 현재 Fake descriptor는 `NO_NETWORK`라 동의 없이 동작하며, 실제 external provider, Ollama/LiquidAI와 consent grant/revoke HTTP API는 구성되어 있지 않습니다. 이 경계는 exactly-once가 아니라 at-least-once이므로 실제 provider는 동일 token의 중복 호출을 멱등하게 처리해야 합니다. 개별 attempt history·duration·model-token·cost와 top-k context는 아직 구현하지 않았습니다.
 
 결정론적 평가 v2는 regression의 proposal schema/domain 유효성, wrong-local 0, 정밀 날짜 발명 0, local overflow 0, 누락된 overflow 신호 0, 미해결 action/object 환각 0을 hard gate로 검사합니다. `fake-v6` / `korean-rules-v4`는 순차 item과 immutable 원문의 UTF-16 source span을 보존하면서 proposal schema v2의 날짜 candidate ID와 TASK별 정밀 due candidate 참조를 제안합니다. 과거 schema v1 proposal은 복구할 수 있고 기존의 단일 TASK·단일 정밀 날짜 보수적 기본값만 유지합니다. 현재 공개 합성 자료에서 item 수는 regression/challenge 각각 12/12 case, source span은 15/15·14/14개가 일치하지만, dataset v2에는 date-to-item binding gold가 없으므로 report capability는 `SUPPORTED_NOT_SCORED_DATASET_V2`이며 binding 품질을 hard gate로 사용하지 않습니다. 엄격한 v2 2인 review manifest schema/verifier와 immutable v2 release를 참조하는 ID-only v3 binding overlay integrity validator는 준비됐지만, 실제 human manifest·adjudication·v3 dataset·binding score·`PASS`는 없습니다. [평가 label 정책](docs/EVALUATION_LABEL_POLICY.md)도 아직 human approval이 필요한 draft입니다. 외부 blind runner는 원문을 저장소나 CI에 넣지 않는 aggregate-only 경계까지만 준비됐고 metric gate는 `NOT_CONFIGURED`입니다. 실제 AI provider와 로컬 모델 연결은 독립적인 gold 검토, 사전 승인된 threshold, provider/region·보존·비용·실패 수명주기 경계가 준비되기 전까지 보류합니다.
 

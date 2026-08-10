@@ -281,8 +281,9 @@ A real provider remains blocked until all of the following are true:
    limits, monthly budget, and outage behavior are explicitly decided and enforced fail-closed. The
    V14 final-run authorization/grant/token evidence and V15's durable descriptor/executor binding
    must be retained. V15 commits that authority before execution and reuses the original token during
-   caller-driven recovery for Fake/test gateways. Any approved external provider must honor the same
-   token as its deduplication identity and preserve the fail-closed consent and finalization checks.
+   caller-driven or bounded production recovery for Fake/test gateways. Any approved external
+   provider must honor the same token as its deduplication identity and preserve the fail-closed
+   consent and finalization checks.
 4. A Shadow mode can persist validated proposals and metrics without applying them; only explicit
    user approval may continue to create tags, tasks, or relations.
 5. Fake failure tests cover timeout, retry exhaustion, invalid structured output, stale revision,
@@ -302,11 +303,14 @@ This list distinguishes remaining blockers from the execution mechanics V15 now 
   recheck. Typed cloud failure, binding/execution exception, and invalid enriched output persist the
   revalidated local proposal with a bounded outcome. Raw and canonical data remain unchanged, and
   provider error text is not stored or returned.
-- Same-key recovery is caller-driven. An interrupted or crashed attempt may be reclaimed only after
-  its lease expires and only within the persisted attempt ceiling and deadline, while reusing the
-  same deterministic provider-request token. This is bounded at-least-once execution, not automatic
-  retry or exactly-once delivery. There is no background consumer, retry scheduler, or automatic
-  restart recovery; duration, per-attempt history, model-token, and cost metrics remain unimplemented.
+- Same-key caller recovery remains available. In the production profile, a scheduler also scans at a
+  30-second fixed delay and selects at most 25 `PREPARED` or expired-lease `RUNNING` dispatches from
+  owner-consistent database rows. It uses the selected owner and existing raw key under the same
+  owner+operation+key advisory lock, skips live leases, and reuses the V15 binding, fence, deadline,
+  bounded out-of-transaction Fake call, revision-rechecking finalize, and deterministic provider
+  token. This supports recovery after a process restart but remains bounded at-least-once execution,
+  not exactly-once delivery. Duration, per-attempt history, model-token, and cost metrics remain
+  unimplemented.
 - V13 enforces an owner-scoped exact consent pin: boolean true, the descriptor's exact policy
   version, and a non-null grant timestamp no later than the authorization-check instant. It revokes
   legacy boolean-only grants and rejects future-dated grants. `NO_NETWORK` Fake needs no consent;

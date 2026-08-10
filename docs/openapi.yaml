@@ -432,14 +432,20 @@ paths:
         CANCELLED_STALE outcome and makes zero gateway calls. The endpoint remains synchronous and
         never returns its internal QUEUED, RUNNING, or PENDING states. A same-key live lease or call
         that exceeds the coordination window returns 409 ANALYSIS_IN_PROGRESS; the caller retries
-        with the same idempotency key and identical body. Expired-lease recovery is caller-driven,
-        bounded by the persisted deadline and attempt count, fenced against late finalization, and
-        reuses the same provider-request token. This is an at-least-once transport boundary, so a
-        real provider must honor that token idempotently. Internal authorization/grant evidence,
-        provider token, dispatch proposal, binding, lease, and fence are never returned in RunView,
-        proposal JSON, providerMetadata, or recovery responses. There is no background worker,
-        automatic restart recovery, per-attempt history, duration/model-token/cost metrics, top-k
-        context, or configured real provider.
+        with the same idempotency key and identical body. Caller-driven expired-lease recovery
+        remains available. In the production profile, a bounded scheduler also runs with a 30-second
+        initial/fixed delay and selects at most 25 PREPARED or expired-lease RUNNING dispatches per
+        cycle. Owner and the existing raw idempotency key come only from owner-consistent database
+        rows; each candidate reuses the owner+operation+raw-key advisory transaction lock and live
+        leases are skipped. Recovery after restart therefore reuses the persisted binding, deadline,
+        attempt count, lease/fence, bounded out-of-transaction Fake call, revision-rechecking
+        finalization, and the same provider-request token. This is an at-least-once transport
+        boundary, not exactly-once, so a real provider must honor that token idempotently. Internal
+        authorization/grant evidence, raw recovery key, provider token, prepared context, dispatch
+        binding, queued/running state, lease, and fence are never returned in RunView, proposal JSON,
+        providerMetadata, or recovery responses. The public POST remains synchronous. Per-attempt
+        history, duration/model-token/cost metrics, top-k context, and a configured real provider or
+        Ollama/LiquidAI adapter remain absent.
       parameters:
         - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"

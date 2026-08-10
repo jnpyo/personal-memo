@@ -146,7 +146,13 @@ public class MemoService {
   /** Locks the memo identity row so revision-sensitive work serializes with memo updates. */
   @Transactional
   public MemoSnapshot getCurrentForUpdate(UUID id) {
-    return findCurrent(id, true);
+    return getCurrentForUpdate(identity.ownerId(), id);
+  }
+
+  /** Owner-explicit variant for trusted background work without a request identity. */
+  @Transactional
+  public MemoSnapshot getCurrentForUpdate(UUID ownerId, UUID id) {
+    return findCurrent(ownerId, id, true);
   }
 
   @Transactional
@@ -306,6 +312,10 @@ public class MemoService {
   }
 
   private MemoSnapshot findCurrent(UUID id, boolean forUpdate) {
+    return findCurrent(identity.ownerId(), id, forUpdate);
+  }
+
+  private MemoSnapshot findCurrent(UUID ownerId, UUID id, boolean forUpdate) {
     String lockingClause = forUpdate ? " for update of m" : "";
     return db.sql(
             """
@@ -335,7 +345,7 @@ public class MemoService {
             """
                 + lockingClause)
         .param("memoId", id)
-        .param("ownerId", identity.ownerId())
+        .param("ownerId", ownerId)
         .query(this::mapSnapshot)
         .optional()
         .orElseThrow(() -> DomainException.notFound("Memo"));

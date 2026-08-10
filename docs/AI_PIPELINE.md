@@ -25,6 +25,9 @@ The repository now implements the model-free portion of Milestone 2:
   hash, timeout, attempt ceiling, deadline, fence, and lease are committed before gateway execution;
   the bounded invocation runs outside the database transaction and finalization locks and rechecks
   the memo revision and fence before publishing one proposal;
+- production-profile bounded recovery: every 30 seconds, a scheduler selects at most 25
+  `PREPARED` or expired-lease `RUNNING` dispatches, obtains owner and the existing idempotency key
+  only from owner-consistent database rows, and reuses the same claim/invoke/finalize lifecycle;
 - validated-local fallback for missing consent, typed failures, gateway exceptions, and invalid
   cloud proposals, with no provider error text and detailed UI review instead of a concise approval;
 - Draft 2020-12 contract, domain, and owner-reference validation before routing and again after enrichment;
@@ -46,13 +49,14 @@ The repository now implements the model-free portion of Milestone 2:
   version-3 TASK-due binding overlay. No real manifests, human adjudication, version-3 dataset,
   binding score, or passing result exists; `EVALUATION_LABEL_POLICY.md` remains a draft.
 
-No real local model or cloud provider is connected. There is no consent grant/revoke HTTP API and no
-external provider configuration. The analysis HTTP operation remains synchronous: its caller waits
-for final review or stale-revision handling even though the gateway attempt runs in a bounded
-in-process executor outside database transactions. V15 does not add an autonomous queue consumer,
-scheduled or automatic retry, restart-triggered recovery, per-attempt history, duration, model-token
-usage, cost tracking, or top-k context. The roadmap's real-provider adapter remains deferred by the
-project decision until explicitly authorized.
+No real local model, Ollama/LiquidAI adapter, or cloud provider is connected. There is no consent
+grant/revoke HTTP API or external provider configuration. The analysis HTTP operation remains
+synchronous: its caller waits for final review or stale-revision handling even though the gateway
+attempt runs in a bounded in-process executor outside database transactions. The production profile
+also enables a bounded periodic recovery worker, so a committed dispatch can resume after a caller
+interruption or process restart without changing the public contract. Per-attempt history, duration,
+model-token usage, cost tracking, and top-k context remain unimplemented. The roadmap's real-provider
+adapter remains deferred by the project decision until explicitly authorized.
 
 ## Pipeline boundaries
 
@@ -292,17 +296,28 @@ revision, writes exactly one final proposal, and clears the prepared proposal te
 its hash.
 
 If a caller is interrupted or a process stops after a claim, the committed row remains recoverable.
-Recovery is caller-driven: a later request with the same idempotency key binds the currently
-configured gateway, requires the persisted descriptor/binding identity to match, and may reclaim an
-expired lease within the persisted attempt ceiling and deadline. It always reuses the same
-deterministic `pmr1_...` provider-request token. This is bounded at-least-once execution, not an
-exactly-once promise; a future external provider must honor the token as its deduplication identity.
-There is no background scanner, automatic retry scheduler, or automatic restart recovery. The
-prepared payload, token, binding ID, fence, and lease remain internal database/application values;
-they are not added to `RunView`, proposal metadata, recovery responses, ordinary logs, or browser
-storage. If a same-key live lease or invocation outlasts the coordination window, the public caller
-receives `409 ANALYSIS_IN_PROGRESS` and retries the identical key/body. A stale finalization commits
-before the request returns `409 STALE_MEMO_REVISION`.
+A later request with the same idempotency key still binds the currently configured gateway, requires
+the persisted descriptor/binding identity to match, and may reclaim an expired lease within the
+persisted attempt ceiling and deadline. In the production profile, a scheduler additionally runs
+after an initial 30-second delay and then with a 30-second fixed delay. Each cycle selects at most 25
+`PREPARED` or expired-lease `RUNNING` rows. It takes the owner and existing raw idempotency key only
+from owner-matched dispatch/run/idempotency joins, verifies the stored key hash, and enters the same
+owner + `ANALYSIS_START` + raw-key advisory transaction lock used by callers. A live lease is not
+selected, and a row made live by a race is skipped by the claim, so no second call is started for
+that lease. One malformed or concurrently changed candidate does not stop the rest of the bounded
+cycle.
+
+Both recovery paths reuse the same deterministic `pmr1_...` provider-request token and the V15
+binding, fence, lease, deadline, out-of-transaction bounded invocation, and revision-rechecking
+finalization. This is bounded at-least-once execution, not an exactly-once promise; a future external
+provider must honor the token as its deduplication identity. The raw idempotency key, prepared
+payload, provider token, binding ID, fence, lease, and internal queued/running state remain internal
+database/application values; they are not added to `RunView`, proposal metadata, recovery responses,
+ordinary logs, or browser storage. The public POST remains synchronous, and if a same-key live lease
+or invocation outlasts its coordination window the caller receives `409 ANALYSIS_IN_PROGRESS` and
+may retry the identical key/body. A stale finalization commits before a caller request returns
+`409 STALE_MEMO_REVISION`. Per-attempt history, duration, model-token usage, cost, and top-k context
+are still not recorded or supplied.
 
 ## Future Agent tools before confirmation — not implemented
 
@@ -486,14 +501,15 @@ analyzer/prompt/local-model/embedding-model/routing-policy provenance and are se
 `Cache-Control: no-store`.
 
 This evidence makes personal review behavior observable, but it does not open the real-LLM gate.
-V15 supplies durable pre-call, descriptor-bound, bounded out-of-transaction execution for the
-current Fake/test boundary; it does not authorize a real provider or expose its internal dispatch
-contract over HTTP. Completed independent adjudication of the version-2 date/item gold, an approved
-and independently reviewed version-3 binding label policy/dataset, a separately held blind release
+V15 plus the bounded production recovery worker supply durable pre-call, descriptor-bound,
+out-of-transaction Fake/test execution and restart recovery; they do not authorize a real provider or
+expose the internal dispatch contract over HTTP. Completed independent adjudication of the
+version-2 date/item gold, an approved and independently reviewed version-3 binding label
+policy/dataset, a separately held blind release
 with a pre-registered gate, approved provider/region/retention/cost limits, a consent grant/revoke UX
 and API, provider-side token deduplication, and the remaining criteria in
-[EVALUATION.md](EVALUATION.md) are still required. Autonomous recovery, operational metrics, and
-top-k context also remain separate work.
+[EVALUATION.md](EVALUATION.md) are still required. Per-attempt operational metrics and top-k context
+also remain separate work.
 
 ## Personalization without fine-tuning
 

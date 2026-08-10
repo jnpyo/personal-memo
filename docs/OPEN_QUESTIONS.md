@@ -82,19 +82,22 @@ operational approval. Resolved decisions are not implementation prompts.
   error text, changes no canonical data, and opens detailed review.
 - Every new LOCAL, cloud-success, and fallback proposal rebuilds `providerMetadata` from one bounded
   server allow-list, so a provider cannot retain arbitrary metadata fields.
-- No consent grant/revoke HTTP API or actual external provider is configured. Top-k context,
-  autonomous background processing, automatic retry/restart recovery, per-attempt history, duration,
-  model-token, and cost tracking remain open work.
+- No consent grant/revoke HTTP API, actual external provider, or Ollama/LiquidAI adapter is
+  configured. Top-k context, per-attempt history, duration, model-token, and cost tracking remain
+  open work.
 - V14 stores an internal final-run authorization/grant snapshot and deterministic provider-request
   token for gateway calls, while legacy rows remain explicitly unsnapshotted. V15 now commits a
   provider-call-only dispatch before execution, binds descriptor and executor identity, claims work
   with a fence and lease, runs each claimed attempt outside the database transaction, and finalizes
   only after rechecking the memo revision and fence. Historical rows receive no invented dispatch.
-- V15 recovery is caller-driven, not an autonomous worker: a later request with the same idempotency
-  key may reclaim an expired lease within the attempt/deadline limits and always reuses the same
-  provider token. This is bounded at-least-once execution, so an eventual provider must deduplicate
-  by that token. The prepared payload, token, binding, fence, and lease remain internal and do not
-  change the public HTTP, proposal, or recovery contracts.
+- V15 same-key caller recovery remains available. The production profile also enables a bounded
+  scheduler that every 30 seconds selects at most 25 `PREPARED` or expired-lease `RUNNING` rows using
+  only DB-selected owner/idempotency evidence. It uses the existing owner+operation+raw-key advisory
+  lock, skips live leases, and reuses the same binding/fence/deadline, out-of-transaction Fake call,
+  revision-rechecking finalize, and provider token after process restart. This is bounded
+  at-least-once execution, so an eventual provider must deduplicate by that token. The internal raw
+  key, prepared context, token, binding, fence, lease, and queued/running states do not change the
+  public synchronous HTTP, proposal, or recovery contracts.
 - No real local model or cloud provider is selected or connected without a separate product,
   privacy, evaluation, and cost decision.
 - Public regression and `VISIBLE_CHALLENGE` fixtures are diagnostic synthetic data, never blind

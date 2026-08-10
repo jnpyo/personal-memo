@@ -36,8 +36,15 @@ public class IdempotencyService {
   /** Must be called inside the transaction that performs the protected mutation. */
   @Transactional(propagation = Propagation.MANDATORY)
   public Optional<StoredResult> find(String operation, String key, String requestHash) {
+    return find(identity.ownerId(), operation, key, requestHash);
+  }
+
+  /** Owner-explicit variant for trusted background work without a request identity. */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<StoredResult> find(
+      UUID ownerId, String operation, String key, String requestHash) {
     String validatedKey = validateKey(key);
-    acquireTransactionLock(operation, validatedKey);
+    acquireTransactionLock(ownerId, operation, validatedKey);
 
     Optional<StoredRecord> stored =
         db.sql(
@@ -48,7 +55,7 @@ public class IdempotencyService {
                    and operation = :operation
                    and idempotency_key = :key
                 """)
-            .param("ownerId", identity.ownerId())
+            .param("ownerId", ownerId)
             .param("operation", operation)
             .param("key", validatedKey)
             .query(this::mapStoredRecord)
@@ -70,6 +77,18 @@ public class IdempotencyService {
   @Transactional(propagation = Propagation.MANDATORY)
   public void store(
       String operation, String key, String requestHash, UUID resourceId, Object response) {
+    store(identity.ownerId(), operation, key, requestHash, resourceId, response);
+  }
+
+  /** Owner-explicit variant for trusted background work without a request identity. */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void store(
+      UUID ownerId,
+      String operation,
+      String key,
+      String requestHash,
+      UUID resourceId,
+      Object response) {
     String responseJson = write(response);
     db.sql(
             """
@@ -91,7 +110,7 @@ public class IdempotencyService {
               :createdAt
             )
             """)
-        .param("ownerId", identity.ownerId())
+        .param("ownerId", ownerId)
         .param("operation", operation)
         .param("key", validateKey(key))
         .param("requestHash", requestHash)
@@ -105,8 +124,20 @@ public class IdempotencyService {
   @Transactional(propagation = Propagation.MANDATORY)
   public void complete(
       String operation, String key, String requestHash, UUID resourceId, Object response) {
+    complete(identity.ownerId(), operation, key, requestHash, resourceId, response);
+  }
+
+  /** Owner-explicit variant for trusted background work without a request identity. */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void complete(
+      UUID ownerId,
+      String operation,
+      String key,
+      String requestHash,
+      UUID resourceId,
+      Object response) {
     String validatedKey = validateKey(key);
-    acquireTransactionLock(operation, validatedKey);
+    acquireTransactionLock(ownerId, operation, validatedKey);
     int updated =
         db.sql(
                 """
@@ -120,7 +151,7 @@ public class IdempotencyService {
                 """)
             .param("resourceId", resourceId)
             .param("responseJson", write(response))
-            .param("ownerId", identity.ownerId())
+            .param("ownerId", ownerId)
             .param("operation", operation)
             .param("key", validatedKey)
             .param("requestHash", requestHash)
@@ -142,8 +173,8 @@ public class IdempotencyService {
     }
   }
 
-  private void acquireTransactionLock(String operation, String key) {
-    String lockScope = identity.ownerId() + ":" + operation + ":" + key;
+  private void acquireTransactionLock(UUID ownerId, String operation, String key) {
+    String lockScope = ownerId + ":" + operation + ":" + key;
     db.sql("select pg_advisory_xact_lock(hashtextextended(:lockScope, 0))")
         .param("lockScope", lockScope)
         .query(
