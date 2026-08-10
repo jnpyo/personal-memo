@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -16,10 +17,12 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import local.personalmemo.analysis.domain.AnalysisProvenance;
+import local.personalmemo.analysis.domain.CloudAnalysisExecutor;
 import local.personalmemo.analysis.domain.CloudAnalysisFailureReason;
 import local.personalmemo.analysis.domain.CloudAnalysisGateway;
 import local.personalmemo.analysis.domain.CloudAnalysisRequest;
 import local.personalmemo.analysis.domain.CloudAnalysisResult;
+import local.personalmemo.analysis.domain.CloudGatewayBinding;
 import local.personalmemo.analysis.domain.CloudGatewayDescriptor;
 import local.personalmemo.analysis.domain.CloudTransferMode;
 import local.personalmemo.analysis.domain.LocalAnalyzer;
@@ -53,10 +56,12 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
   @MockitoBean private CloudAnalysisGateway cloudGateway;
 
   private FakeAnalyzer deterministicAnalyzer;
+  private CloudAnalysisExecutor cloudExecutor;
 
   @BeforeEach
   void useDeterministicLocalAnalysisAndNoNetworkCloudSuccess() {
     deterministicAnalyzer = new FakeAnalyzer(json);
+    cloudExecutor = mock(CloudAnalysisExecutor.class);
     when(localAnalyzer.proposalSchemaVersion()).thenReturn("2");
     when(localAnalyzer.provenance()).thenReturn(FAKE_PROVENANCE);
     when(localAnalyzer.analyze(
@@ -69,12 +74,16 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
                     invocation.getArgument(2),
                     invocation.getArgument(3),
                     invocation.getArgument(4)));
-    when(cloudGateway.descriptor()).thenReturn(NO_NETWORK);
-    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
+    useGateway(NO_NETWORK);
+    when(cloudExecutor.execute(any(CloudAnalysisRequest.class)))
         .thenAnswer(
             invocation ->
                 CloudAnalysisResult.success(
                     ((CloudAnalysisRequest) invocation.getArgument(0)).validatedLocalProposal()));
+  }
+
+  private void useGateway(CloudGatewayDescriptor descriptor) {
+    when(cloudGateway.bind()).thenReturn(new CloudGatewayBinding(descriptor, cloudExecutor));
   }
 
   @Test
@@ -92,7 +101,7 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
 
   @Test
   void externalGatewayIsSkippedWithoutConsentAndReplayDoesNotReenterIt() throws Exception {
-    when(cloudGateway.descriptor()).thenReturn(EXTERNAL);
+    useGateway(EXTERNAL);
     UUID memoId = createAmbiguousMemo("consent-denied");
 
     var started = startAnalysis(memoId, "consent-denied-start", 1);
@@ -101,13 +110,13 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
     assertThat(response(replay)).isEqualTo(response(started));
     UUID runId = assertReviewRequired(started, memoId, "CONSENT_REQUIRED");
     assertEvidence(runId, EXTERNAL, "CONSENT_REQUIRED");
-    verify(cloudGateway, times(1)).descriptor();
-    verify(cloudGateway, never()).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudGateway, times(1)).bind();
+    verify(cloudExecutor, never()).execute(any(CloudAnalysisRequest.class));
   }
 
   @Test
   void exactPinnedConsentAllowsTheExternalGateway() throws Exception {
-    when(cloudGateway.descriptor()).thenReturn(EXTERNAL);
+    useGateway(EXTERNAL);
     grantCurrentOwner("memo-transfer-v1");
     UUID memoId = createAmbiguousMemo("consent-exact");
 
@@ -120,7 +129,7 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
 
   @Test
   void anotherOwnersExactGrantDoesNotAuthorizeTheCurrentOwner() throws Exception {
-    when(cloudGateway.descriptor()).thenReturn(EXTERNAL);
+    useGateway(EXTERNAL);
     grantOtherOwner("memo-transfer-v1");
     UUID memoId = createAmbiguousMemo("consent-other-owner");
 
@@ -128,12 +137,12 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
 
     UUID runId = assertReviewRequired(started, memoId, "CONSENT_REQUIRED");
     assertEvidence(runId, EXTERNAL, "CONSENT_REQUIRED");
-    verify(cloudGateway, never()).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, never()).execute(any(CloudAnalysisRequest.class));
   }
 
   @Test
   void aMismatchedOrRevokedGrantDoesNotAuthorizeTheGateway() throws Exception {
-    when(cloudGateway.descriptor()).thenReturn(EXTERNAL);
+    useGateway(EXTERNAL);
     grantCurrentOwner("older-policy-v1");
     UUID mismatchedMemo = createAmbiguousMemo("consent-mismatch");
 
@@ -148,12 +157,12 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
 
     UUID revokedRun = assertReviewRequired(revoked, revokedMemo, "CONSENT_REQUIRED");
     assertEvidence(revokedRun, EXTERNAL, "CONSENT_REQUIRED");
-    verify(cloudGateway, never()).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, never()).execute(any(CloudAnalysisRequest.class));
   }
 
   @Test
   void aFutureDatedGrantDoesNotAuthorizeTheGateway() throws Exception {
-    when(cloudGateway.descriptor()).thenReturn(EXTERNAL);
+    useGateway(EXTERNAL);
     grantCurrentOwner("memo-transfer-v1", Instant.parse("2099-01-01T00:00:00Z"));
     UUID memoId = createAmbiguousMemo("consent-future-grant");
 
@@ -161,16 +170,16 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
 
     UUID runId = assertReviewRequired(started, memoId, "CONSENT_REQUIRED");
     assertEvidence(runId, EXTERNAL, "CONSENT_REQUIRED");
-    verify(cloudGateway, never()).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, never()).execute(any(CloudAnalysisRequest.class));
   }
 
   @ParameterizedTest
   @EnumSource(CloudAnalysisFailureReason.class)
   void externalTypedFailurePersistsTheLocalProposalWithoutCanonicalChanges(
       CloudAnalysisFailureReason reason) throws Exception {
-    when(cloudGateway.descriptor()).thenReturn(EXTERNAL);
+    useGateway(EXTERNAL);
     grantCurrentOwner("memo-transfer-v1");
-    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
+    when(cloudExecutor.execute(any(CloudAnalysisRequest.class)))
         .thenReturn(CloudAnalysisResult.failure(reason));
     UUID memoId = createAmbiguousMemo("consent-" + reason.name().toLowerCase());
 
@@ -178,12 +187,12 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
 
     UUID runId = assertReviewRequired(started, memoId, reason.name());
     assertEvidence(runId, EXTERNAL, reason.name());
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, times(1)).execute(any(CloudAnalysisRequest.class));
   }
 
   @Test
   void descriptorExceptionFallsBackWithoutCallingOrLeakingTheGateway() throws Exception {
-    when(cloudGateway.descriptor())
+    when(cloudGateway.bind())
         .thenThrow(new IllegalStateException("provider descriptor secret failure"));
     UUID memoId = createAmbiguousMemo("consent-descriptor-error");
 
@@ -198,11 +207,17 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
     assertThat(evidence.consentPolicyVersion()).isEqualTo("unavailable");
     assertThat(evidence.outcome()).isEqualTo("UNEXPECTED_FAILURE");
     assertThat(evidence.executionContractVersion()).isEqualTo("snapshot-v1");
+    assertThat(
+            db.sql("select count(*) from analysis_run_dispatches where analysis_run_id=:runId")
+                .param("runId", runId)
+                .query(Long.class)
+                .single())
+        .isZero();
     assertThat(evidence.authorizationCheckedAt()).isNull();
     assertThat(evidence.acceptedConsentGrantedAt()).isNull();
     assertThat(evidence.providerRequestToken()).isNull();
     assertThat(response(started).toString()).doesNotContain("descriptor secret");
-    verify(cloudGateway, never()).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, never()).execute(any(CloudAnalysisRequest.class));
   }
 
   @Test
@@ -221,7 +236,7 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
               ((ObjectNode) proposal.path("providerMetadata")).put("padding", "x".repeat(7600));
               return proposal;
             });
-    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
+    when(cloudExecutor.execute(any(CloudAnalysisRequest.class)))
         .thenReturn(CloudAnalysisResult.failure(CloudAnalysisFailureReason.TIMEOUT));
     UUID memoId = createAmbiguousMemo("consent-near-limit");
 
@@ -240,7 +255,7 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
 
   @Test
   void reservedCloudMetadataIsAlwaysOverwrittenByTheServer() throws Exception {
-    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
+    when(cloudExecutor.execute(any(CloudAnalysisRequest.class)))
         .thenAnswer(
             invocation -> {
               ObjectNode proposal =
@@ -364,7 +379,15 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
     assertThat(evidence.modelVersion()).isEqualTo(descriptor.modelVersion());
     assertThat(evidence.consentPolicyVersion()).isEqualTo(descriptor.consentPolicyVersion());
     assertThat(evidence.outcome()).isEqualTo(expectedOutcome);
-    assertThat(evidence.executionContractVersion()).isEqualTo("snapshot-v1");
+    boolean gatewayWasCalled = !"CONSENT_REQUIRED".equals(expectedOutcome);
+    assertThat(evidence.executionContractVersion())
+        .isEqualTo(gatewayWasCalled ? "durable-v1" : "snapshot-v1");
+    assertThat(
+            db.sql("select count(*) from analysis_run_dispatches where analysis_run_id=:runId")
+                .param("runId", runId)
+                .query(Long.class)
+                .single())
+        .isEqualTo(gatewayWasCalled ? 1L : 0L);
     if (descriptor.transferMode() == CloudTransferMode.NO_NETWORK) {
       assertThat(evidence.authorizationCheckedAt()).isNull();
       assertThat(evidence.acceptedConsentGrantedAt()).isNull();
@@ -395,7 +418,7 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
       UUID runId, CloudGatewayDescriptor descriptor, Instant acceptedGrant) {
     ArgumentCaptor<CloudAnalysisRequest> captor =
         ArgumentCaptor.forClass(CloudAnalysisRequest.class);
-    verify(cloudGateway, times(1)).enrich(captor.capture());
+    verify(cloudExecutor, times(1)).execute(captor.capture());
     CloudAnalysisRequest request = captor.getValue();
     CloudEvidence evidence = readEvidence(runId);
 

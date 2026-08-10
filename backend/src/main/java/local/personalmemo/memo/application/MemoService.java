@@ -260,7 +260,7 @@ public class MemoService {
                  set status = 'STALE'
                where memo_id = :memoId
                  and owner_id = :ownerId
-                 and status in ('REVIEW_REQUIRED', 'POSTPONED')
+                 and status in ('QUEUED', 'RUNNING', 'REVIEW_REQUIRED', 'POSTPONED')
               """)
           .param("memoId", id)
           .param("ownerId", identity.ownerId())

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -15,9 +16,11 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.UUID;
 import local.personalmemo.analysis.domain.AnalysisProvenance;
+import local.personalmemo.analysis.domain.CloudAnalysisExecutor;
 import local.personalmemo.analysis.domain.CloudAnalysisGateway;
 import local.personalmemo.analysis.domain.CloudAnalysisRequest;
 import local.personalmemo.analysis.domain.CloudAnalysisResult;
+import local.personalmemo.analysis.domain.CloudGatewayBinding;
 import local.personalmemo.analysis.domain.LocalAnalyzer;
 import local.personalmemo.analysis.infrastructure.FakeAnalyzer;
 import local.personalmemo.analysis.infrastructure.FakeCloudAnalysisGateway;
@@ -38,14 +41,18 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
 
   private FakeAnalyzer deterministicAnalyzer;
   private FakeCloudAnalysisGateway fakeCloudGateway;
+  private CloudAnalysisExecutor cloudExecutor;
 
   @BeforeEach
   void useDeterministicFakesByDefault() {
     deterministicAnalyzer = new FakeAnalyzer(json);
     fakeCloudGateway = new FakeCloudAnalysisGateway();
+    cloudExecutor = mock(CloudAnalysisExecutor.class);
+    CloudGatewayBinding fakeBinding = fakeCloudGateway.bind();
     when(localAnalyzer.proposalSchemaVersion()).thenReturn("2");
     when(localAnalyzer.provenance()).thenReturn(FAKE_PROVENANCE);
-    when(cloudGateway.descriptor()).thenReturn(fakeCloudGateway.descriptor());
+    when(cloudGateway.bind())
+        .thenReturn(new CloudGatewayBinding(fakeBinding.descriptor(), cloudExecutor));
     when(localAnalyzer.analyze(
             any(UUID.class), anyInt(), anyString(), any(Instant.class), anyString()))
         .thenAnswer(
@@ -56,8 +63,8 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
                     invocation.getArgument(2),
                     invocation.getArgument(3),
                     invocation.getArgument(4)));
-    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
-        .thenAnswer(invocation -> fakeCloudGateway.enrich(invocation.getArgument(0)));
+    when(cloudExecutor.execute(any(CloudAnalysisRequest.class)))
+        .thenAnswer(invocation -> fakeBinding.execute(invocation.getArgument(0)));
   }
 
   @Test
@@ -81,7 +88,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
         .isEqualTo(ASSIGNMENT_TAG_ID.toString());
     assertThat(response(proposal).path("ambiguityReasons").toString()).doesNotContain("NEW_TOPIC");
     assertThat(response(proposal).at("/providerMetadata/route").asText()).isEqualTo("LOCAL_REVIEW");
-    verify(cloudGateway, never()).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, never()).execute(any(CloudAnalysisRequest.class));
     assertCanonicalDataWasNotChanged();
   }
 
@@ -119,7 +126,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(response(proposal).at("/providerMetadata/providerFailureText").isMissingNode())
         .isTrue();
     assertThat(response(proposal).at("/providerMetadata/rawMemoFragment").isMissingNode()).isTrue();
-    verify(cloudGateway, never()).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, never()).execute(any(CloudAnalysisRequest.class));
     assertCanonicalDataWasNotChanged();
   }
 
@@ -170,7 +177,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
 
     assertThat(started.getResponse().getStatus()).isEqualTo(200);
     assertRun(runId, "HYBRID");
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, times(1)).execute(any(CloudAnalysisRequest.class));
     assertThat(proposal.getResponse().getStatus()).isEqualTo(200);
     assertThat(response(proposal).at("/providerMetadata/cloudGatewayVersion").asText())
         .isEqualTo("fake-cloud-v2");
@@ -198,7 +205,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(response(proposal).at("/typeCandidates/0/value").asText()).isEqualTo("EVENT");
     assertThat(response(proposal).at("/itemCandidates/0/kind").asText()).isEqualTo("EVENT");
     assertThat(response(proposal).path("ambiguityReasons").toString()).contains("MULTI_INTENT");
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, times(1)).execute(any(CloudAnalysisRequest.class));
     assertCanonicalDataWasNotChanged();
   }
 
@@ -226,7 +233,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
 
     assertThat(failed.getResponse().getStatus()).isEqualTo(422);
     assertThat(response(failed).path("code").asText()).isEqualTo("INVALID_ANALYSIS_PROPOSAL");
-    verify(cloudGateway, never()).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, never()).execute(any(CloudAnalysisRequest.class));
     assertFailedAnalysisLeftOnlyRawMemo(memoId, raw);
   }
 
@@ -261,7 +268,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
         .contains("LOW_TYPE_MARGIN");
     assertThat(response(proposal).at("/providerMetadata/receivedRoutingPolicyVersion").asText())
         .isEqualTo("field-policy-v1");
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, times(1)).execute(any(CloudAnalysisRequest.class));
   }
 
   @Test
@@ -279,14 +286,14 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(started.getResponse().getStatus()).isEqualTo(200);
     assertRun(runId, "HYBRID");
     assertThat(runAmbiguityReasons(runId)).contains("CANDIDATE_LIMIT_EXCEEDED");
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, times(1)).execute(any(CloudAnalysisRequest.class));
   }
 
   @Test
   void hybridRunKeepsTheLocalRoutingReasonsWhenCloudResolvesThem() throws Exception {
     UUID memoId = UUID.randomUUID();
     createMemo(memoId, "route-provenance-create", "다음 주쯤 과제 제출");
-    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
+    when(cloudExecutor.execute(any(CloudAnalysisRequest.class)))
         .thenAnswer(
             invocation -> {
               CloudAnalysisRequest request = invocation.getArgument(0);
@@ -311,7 +318,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     assertRun(runId, "HYBRID");
     assertThat(runAmbiguityReasons(runId)).contains("IMPRECISE_DATE");
     assertThat(response(proposal).path("ambiguityReasons")).isEmpty();
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, times(1)).execute(any(CloudAnalysisRequest.class));
   }
 
   @Test
@@ -326,7 +333,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(response(replay)).isEqualTo(response(first));
     verify(localAnalyzer, times(1))
         .analyze(any(UUID.class), anyInt(), anyString(), any(Instant.class), anyString());
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, times(1)).execute(any(CloudAnalysisRequest.class));
     assertThat(db.sql("select count(*) from analysis_runs").query(Long.class).single())
         .isEqualTo(1L);
     assertThat(db.sql("select count(*) from analysis_proposals").query(Long.class).single())
@@ -357,7 +364,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
 
     assertThat(failed.getResponse().getStatus()).isEqualTo(422);
     assertThat(response(failed).path("code").asText()).isEqualTo("INVALID_ANALYSIS_PROPOSAL");
-    verify(cloudGateway, never()).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, never()).execute(any(CloudAnalysisRequest.class));
     assertFailedAnalysisLeftOnlyRawMemo(memoId, raw);
   }
 
@@ -366,7 +373,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     UUID memoId = UUID.randomUUID();
     String raw = "전에 교수님이 말한 거 다음 주쯤 올리기";
     createMemo(memoId, "route-cloud-invalid-create", raw);
-    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
+    when(cloudExecutor.execute(any(CloudAnalysisRequest.class)))
         .thenAnswer(
             invocation -> {
               CloudAnalysisRequest request = invocation.getArgument(0);
@@ -378,7 +385,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     var started = startAnalysis(memoId, "route-cloud-invalid-start", 1);
 
     assertCloudFallback(started, memoId, raw, "INVALID_RESPONSE");
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, times(1)).execute(any(CloudAnalysisRequest.class));
   }
 
   @Test
@@ -386,7 +393,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     UUID memoId = UUID.randomUUID();
     String raw = "전에 교수님이 말한 거 다음 주쯤 올리기";
     createMemo(memoId, "route-cloud-reference-create", raw);
-    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
+    when(cloudExecutor.execute(any(CloudAnalysisRequest.class)))
         .thenAnswer(
             invocation -> {
               CloudAnalysisRequest request = invocation.getArgument(0);
@@ -406,7 +413,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     var started = startAnalysis(memoId, "route-cloud-reference-start", 1);
 
     assertCloudFallback(started, memoId, raw, "INVALID_RESPONSE");
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, times(1)).execute(any(CloudAnalysisRequest.class));
   }
 
   @Test
@@ -414,7 +421,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     UUID memoId = UUID.randomUUID();
     String raw = "전에 교수님이 말한 거 다음 주쯤 올리기";
     createMemo(memoId, "route-cloud-error-create", raw);
-    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
+    when(cloudExecutor.execute(any(CloudAnalysisRequest.class)))
         .thenThrow(new IllegalStateException("simulated provider failure"));
 
     var started = startAnalysis(memoId, "route-cloud-error-start", 1);
@@ -423,7 +430,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(response(replay)).isEqualTo(response(started));
     assertThat(response(started).toString()).doesNotContain("simulated provider");
     assertCloudFallback(started, memoId, raw, "UNEXPECTED_FAILURE");
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, times(1)).execute(any(CloudAnalysisRequest.class));
   }
 
   @Test
@@ -451,7 +458,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
 
     assertThat(failed.getResponse().getStatus()).isEqualTo(422);
     assertThat(response(failed).path("code").asText()).isEqualTo("INVALID_ANALYSIS_PROPOSAL");
-    verify(cloudGateway, never()).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, never()).execute(any(CloudAnalysisRequest.class));
     assertFailedAnalysisLeftOnlyRawMemo(memoId, raw);
   }
 
@@ -477,7 +484,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
 
     assertThat(failed.getResponse().getStatus()).isEqualTo(422);
     assertThat(response(failed).path("code").asText()).isEqualTo("INVALID_ANALYSIS_PROPOSAL");
-    verify(cloudGateway, never()).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, never()).execute(any(CloudAnalysisRequest.class));
     assertFailedAnalysisLeftOnlyRawMemo(memoId, raw);
   }
 
@@ -486,7 +493,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     UUID memoId = UUID.randomUUID();
     String raw = "전에 교수님이 말한 거 다음 주쯤 올리기";
     createMemo(memoId, "route-cloud-schema-create", raw);
-    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
+    when(cloudExecutor.execute(any(CloudAnalysisRequest.class)))
         .thenAnswer(
             invocation ->
                 CloudAnalysisResult.success(
@@ -497,7 +504,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     var started = startAnalysis(memoId, "route-cloud-schema-start", 1);
 
     assertCloudFallback(started, memoId, raw, "INVALID_RESPONSE");
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, times(1)).execute(any(CloudAnalysisRequest.class));
   }
 
   @Test
@@ -505,7 +512,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     UUID memoId = UUID.randomUUID();
     String raw = "전에 교수님이 말한 거 다음 주쯤 올리기";
     createMemo(memoId, "route-cloud-provenance-create", raw);
-    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
+    when(cloudExecutor.execute(any(CloudAnalysisRequest.class)))
         .thenAnswer(
             invocation -> {
               ObjectNode enriched =
@@ -517,7 +524,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     var started = startAnalysis(memoId, "route-cloud-provenance-start", 1);
 
     assertCloudFallback(started, memoId, raw, "INVALID_RESPONSE");
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, times(1)).execute(any(CloudAnalysisRequest.class));
   }
 
   @Test
@@ -525,7 +532,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     UUID memoId = UUID.randomUUID();
     String raw = "전에 교수님이 말한 거 다음 주쯤 올리기";
     createMemo(memoId, "route-cloud-policy-provenance-create", raw);
-    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
+    when(cloudExecutor.execute(any(CloudAnalysisRequest.class)))
         .thenAnswer(
             invocation -> {
               ObjectNode enriched =
@@ -538,7 +545,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     var started = startAnalysis(memoId, "route-cloud-policy-provenance-start", 1);
 
     assertCloudFallback(started, memoId, raw, "INVALID_RESPONSE");
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    verify(cloudExecutor, times(1)).execute(any(CloudAnalysisRequest.class));
   }
 
   @Test

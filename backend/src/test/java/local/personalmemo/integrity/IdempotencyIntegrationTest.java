@@ -2,6 +2,7 @@ package local.personalmemo.integrity;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -14,9 +15,11 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import local.personalmemo.analysis.domain.CloudAnalysisExecutor;
 import local.personalmemo.analysis.domain.CloudAnalysisGateway;
 import local.personalmemo.analysis.domain.CloudAnalysisRequest;
 import local.personalmemo.analysis.domain.CloudAnalysisResult;
+import local.personalmemo.analysis.domain.CloudGatewayBinding;
 import local.personalmemo.analysis.domain.CloudGatewayDescriptor;
 import local.personalmemo.analysis.domain.CloudTransferMode;
 import local.personalmemo.support.PostgresIntegration;
@@ -40,8 +43,9 @@ class IdempotencyIntegrationTest extends PostgresIntegrationTestSupport {
   @Test
   void concurrentAnalysisStartWithOneKeyProducesOneRunProposalAndGatewayInvocation()
       throws Exception {
-    when(cloudGateway.descriptor()).thenReturn(NO_NETWORK);
-    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
+    CloudAnalysisExecutor cloudExecutor = mock(CloudAnalysisExecutor.class);
+    when(cloudGateway.bind()).thenReturn(new CloudGatewayBinding(NO_NETWORK, cloudExecutor));
+    when(cloudExecutor.execute(any(CloudAnalysisRequest.class)))
         .thenAnswer(
             invocation ->
                 CloudAnalysisResult.success(
@@ -89,7 +93,7 @@ class IdempotencyIntegrationTest extends PostgresIntegrationTestSupport {
             .single();
     ArgumentCaptor<CloudAnalysisRequest> requestCaptor =
         ArgumentCaptor.forClass(CloudAnalysisRequest.class);
-    verify(cloudGateway, times(1)).enrich(requestCaptor.capture());
+    verify(cloudExecutor, times(1)).execute(requestCaptor.capture());
     assertThat(requestCaptor.getValue().providerRequestToken().value()).isEqualTo(storedToken);
     assertThat(
             db.sql(

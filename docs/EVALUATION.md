@@ -279,9 +279,10 @@ A real provider remains blocked until all of the following are true:
    transfer/gateway/provider/model/policy/outcome evidence are retained, and an approved provider,
    region, retention/deletion policy, consent grant UX/API, per-request context/tool/token/time
    limits, monthly budget, and outage behavior are explicitly decided and enforced fail-closed. The
-   V14 final-run authorization/grant/token evidence must be retained. Before any external call, the
-   same snapshot and descriptor must additionally be committed durably and bound to the immutable
-   executor so crash recovery reuses the original token and authority.
+   V14 final-run authorization/grant/token evidence and V15's durable descriptor/executor binding
+   must be retained. V15 commits that authority before execution and reuses the original token during
+   caller-driven recovery for Fake/test gateways. Any approved external provider must honor the same
+   token as its deduplication identity and preserve the fail-closed consent and finalization checks.
 4. A Shadow mode can persist validated proposals and metrics without applying them; only explicit
    user approval may continue to create tags, tasks, or relations.
 5. Fake failure tests cover timeout, retry exhaustion, invalid structured output, stale revision,
@@ -289,29 +290,36 @@ A real provider remains blocked until all of the following are true:
 
 ## Known Milestone 2 blockers
 
-These are documented blockers, not features implemented by this baseline:
+This list distinguishes remaining blockers from the execution mechanics V15 now supplies:
 
 - Runtime `AnalysisRoute` currently implements only `LOCAL_REVIEW` and `CLOUD_ENRICH`.
   `USER_INPUT_NEEDED` and `PENDING_OFFLINE` in the pipeline document are conceptual states, not
   executable routes yet.
-- Analysis starts synchronously. Clear and cloud-success runs are inserted directly as
-  `REVIEW_REQUIRED`; typed cloud failure, gateway exception, and invalid enriched output now persist
-  the revalidated local proposal as `HYBRID` / `REVIEW_REQUIRED` with a bounded outcome. Raw and
-  canonical data remain unchanged, and provider error text is not stored or returned. Queued/running
-  execution, bounded out-of-transaction timeout, automatic retry, durable pre-call reservation,
-  duration, model-token, and cost metrics are not yet implemented. V14's deterministic internal
-  provider-request token exists only in the gateway request and final run evidence; it is not yet a
-  committed-before-call dispatch record.
+- Analysis remains synchronous at the HTTP boundary. Clear local runs are finalized directly as
+  `REVIEW_REQUIRED`; a cloud-bound run is first committed as `QUEUED` / `PENDING` with a V15
+  `PREPARED` dispatch, claimed as `RUNNING`, executed with a persisted timeout outside the database
+  transaction, and finalized as `REVIEW_REQUIRED` or `STALE` after a locked revision and fence
+  recheck. Typed cloud failure, binding/execution exception, and invalid enriched output persist the
+  revalidated local proposal with a bounded outcome. Raw and canonical data remain unchanged, and
+  provider error text is not stored or returned.
+- Same-key recovery is caller-driven. An interrupted or crashed attempt may be reclaimed only after
+  its lease expires and only within the persisted attempt ceiling and deadline, while reusing the
+  same deterministic provider-request token. This is bounded at-least-once execution, not automatic
+  retry or exactly-once delivery. There is no background consumer, retry scheduler, or automatic
+  restart recovery; duration, per-attempt history, model-token, and cost metrics remain unimplemented.
 - V13 enforces an owner-scoped exact consent pin: boolean true, the descriptor's exact policy
   version, and a non-null grant timestamp no later than the authorization-check instant. It revokes
   legacy boolean-only grants and rejects future-dated grants. `NO_NETWORK` Fake needs no consent;
   `EXTERNAL_MEMO_CONTENT` gets zero gateway calls without a valid pin. V14 records a coherent
   authorization/grant/token snapshot in each new final run and passes it with the descriptor to the
-  current gateway request. It still lacks a durable pre-call commit and immutable adapter binding,
-  and there is no grant/revoke API or configured external provider.
-- The gateway descriptor and every new run now carry server-owned transfer mode,
-  gateway/provider/model/consent-policy versions, and outcome. Token/cost usage and bounded
-  timeout/retry execution are not implemented.
+  current gateway request. V15 adds a durable pre-call dispatch and immutable descriptor/executor
+  binding for Fake/test execution, but there is still no grant/revoke API or configured external
+  provider.
+- Every new run carries server-owned transfer mode, gateway/provider/model/consent-policy versions,
+  and outcome; provider-call runs additionally pin an immutable gateway binding. V15 stores internal
+  dispatch/fence/lease evidence and scrubs the prepared payload at finalization. None of the payload,
+  token, binding, fence, or lease is exposed through the public analysis contract. Model-token/cost
+  usage and complete operational attempt/duration metrics are not implemented.
 - Every new LOCAL, cloud-success, and fallback proposal canonicalizes `providerMetadata` through one
   bounded server allow-list; this is metadata hygiene, not provider authorization.
 - Top-k owner-scoped retrieval context is not implemented.

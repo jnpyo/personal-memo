@@ -3,6 +3,7 @@ package local.personalmemo.analysis.infrastructure;
 import local.personalmemo.analysis.domain.CloudAnalysisGateway;
 import local.personalmemo.analysis.domain.CloudAnalysisRequest;
 import local.personalmemo.analysis.domain.CloudAnalysisResult;
+import local.personalmemo.analysis.domain.CloudGatewayBinding;
 import local.personalmemo.analysis.domain.CloudGatewayDescriptor;
 import local.personalmemo.analysis.domain.CloudTransferMode;
 import org.springframework.stereotype.Component;
@@ -14,15 +15,11 @@ public class FakeCloudAnalysisGateway implements CloudAnalysisGateway {
           "fake-cloud-v2", "fake", "none", "no-network-v1", CloudTransferMode.NO_NETWORK);
 
   @Override
-  public CloudGatewayDescriptor descriptor() {
-    return DESCRIPTOR;
+  public CloudGatewayBinding bind() {
+    return new CloudGatewayBinding(DESCRIPTOR, this::fakeEnrich);
   }
 
-  @Override
-  public CloudAnalysisResult enrich(CloudAnalysisRequest request) {
-    if (!DESCRIPTOR.equals(request.descriptor())) {
-      throw new IllegalArgumentException("The request descriptor does not match this gateway.");
-    }
+  private CloudAnalysisResult fakeEnrich(CloudAnalysisRequest request) {
     return CloudAnalysisResult.success(request.validatedLocalProposal());
   }
 }

@@ -1,6 +1,6 @@
 # Data model — authenticated deterministic-analysis MVP
 
-이 문서는 현재 Flyway `V1`–`V14`가 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다. `V11`은 owner별 proposal의 최신 application을 bounded read로 찾는 review-outcome 조회 인덱스를 추가하고, `V12`는 최신 `APPLIED` selection과 활성 memo item을 사용하는 graph projection에 맞춘 partial lookup index만 추가한다. `V13`은 cloud consent를 정확한 policy와 승인 시각에 고정하고 run에 server-owned cloud evidence를 추가한다. `V14`는 새 run에 호출 권한 확인 시각·실제로 수락한 grant 시각·결정론적 provider-request token을 일관된 실행 snapshot으로 저장하고, 과거 row는 증거를 추정하지 않은 `legacy-v0`로 보존한다. 이 migration들은 새 raw-content 복제본이나 일반 clickstream table을 만들지 않는다.
+이 문서는 현재 Flyway `V1`–`V15`가 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다. `V11`은 owner별 proposal의 최신 application을 bounded read로 찾는 review-outcome 조회 인덱스를 추가하고, `V12`는 최신 `APPLIED` selection과 활성 memo item을 사용하는 graph projection에 맞춘 partial lookup index만 추가한다. `V13`은 cloud consent를 정확한 policy와 승인 시각에 고정하고 run에 server-owned cloud evidence를 추가한다. `V14`는 새 run에 호출 권한 확인 시각·실제로 수락한 grant 시각·결정론적 provider-request token을 일관된 실행 snapshot으로 저장하고, 과거 row는 증거를 추정하지 않은 `legacy-v0`로 보존한다. `V15`는 gateway 호출 전에 `durable-v1` run과 1:1 dispatch preparation을 commit하고 immutable binding, validated-local payload/hash, reserved proposal, idempotency evidence, deadline·lease·fence를 보존한다. V14까지의 기존 row에는 호출 전 준비가 있었다고 추정해 dispatch를 backfill하지 않는다. 이 migration들은 일반 clickstream table을 만들지 않는다.
 
 ## Invariants
 
@@ -22,8 +22,10 @@
 - request·browser·provider result·proposal metadata는 run의
   transfer/gateway/provider/model/policy/outcome evidence를 선택하지 못한다. 서버가
   구성한 descriptor와 application service가 그 값을 소유하고 V13 constraint가 조합을 제한한다.
-- 내부 authorization/grant snapshot과 provider-request token도 server-owned이고 V14 constraint가
-  호출 여부·transfer mode·outcome과의 nullability 및 token 유일성을 제한한다.
+- 내부 authorization/grant snapshot과 provider-request token도 server-owned이고 V14/V15
+  constraint가 호출 여부·transfer mode·outcome과의 nullability 및 token 유일성을 제한한다.
+- V15 dispatch는 run과 같은 owner의 1:1 row이며 caller가 선택할 수 없는 reserved proposal,
+  idempotency/request hash, immutable executor binding, deadline·lease·fence를 보존한다.
 
 ## Identity and raw memo
 
@@ -191,8 +193,8 @@ cloud_gateway_version VARCHAR(64)
 cloud_provider_id VARCHAR(64)
 cloud_model_version VARCHAR(64)
 cloud_consent_policy_version VARCHAR(64)
-cloud_outcome NOT_REQUIRED | LEGACY_UNKNOWN | SUCCESS | CONSENT_REQUIRED | UNAVAILABLE | TIMEOUT | RETRY_EXHAUSTED | PROVIDER_ERROR | INVALID_RESPONSE | UNEXPECTED_FAILURE
-cloud_execution_contract_version legacy-v0 | snapshot-v1
+cloud_outcome NOT_REQUIRED | LEGACY_UNKNOWN | PENDING | SUCCESS | CONSENT_REQUIRED | UNAVAILABLE | TIMEOUT | RETRY_EXHAUSTED | PROVIDER_ERROR | INVALID_RESPONSE | UNEXPECTED_FAILURE | CANCELLED_STALE
+cloud_execution_contract_version legacy-v0 | snapshot-v1 | durable-v1
 cloud_authorization_checked_at TIMESTAMPTZ NULL
 cloud_accepted_consent_granted_at TIMESTAMPTZ NULL
 cloud_provider_request_token VARCHAR(69) NULL
@@ -213,7 +215,7 @@ outcome이 저장된다. descriptor를 읽지 못한 새 `HYBRID` run은 `DESCRI
 `CONSENT_REQUIRED`는 gateway method를 호출하지 않았음을 나타낸다. typed failure, gateway 예외,
 invalid enriched result도 validated local proposal과 함께 `HYBRID`/`REVIEW_REQUIRED`로 남고
 canonical record를 만들지 않는다. provider error text는 저장하지 않는다.
-V14의 새 `snapshot-v1` row는 LOCAL/descriptor 실패면 세 내부 실행 값이 모두 null이고,
+V14의 `snapshot-v1` row는 LOCAL/descriptor 실패면 세 내부 실행 값이 모두 null이고,
 실제 `NO_NETWORK` gateway 호출에는 token만, 동의가 거절된 external 경로에는 권한 확인 시각만,
 허가되어 gateway를 호출한 external 경로에는 권한 확인 시각·수락한 grant 시각·token을 모두
 저장한다. 수락 grant는 권한 확인 시각보다 늦을 수 없고 token은 `pmr1_`과 lowercase SHA-256
@@ -221,16 +223,26 @@ V14의 새 `snapshot-v1` row는 LOCAL/descriptor 실패면 세 내부 실행 값
 노출하지 않는다. 기존 row는 전부 `legacy-v0`와 null 세 값으로 backfill하여 과거 승인이나 호출을
 소급 추정하지 않는다.
 
-현재 snapshot/token은 gateway 요청과 최종 run insert에 같은 값으로 전달되지만, run은 gateway
-호출 뒤 같은 긴 transaction에서 저장된다. 따라서 process crash나 transaction rollback 전에
-durable preparation row가 남는 구조는 아니며, descriptor를 반환한 adapter 설정과 실제 실행을
-하나의 immutable binding으로 강제하지도 않는다. 실제 provider 전에는 prepare transaction을 먼저
-commit하고 bounded 호출을 transaction 밖에서 수행한 뒤 같은 token으로 복구·재시도하는 lifecycle이
-필요하다.
+V15 `durable-v1`은 gateway 호출이 필요한 경우 `analysis_runs`를 `QUEUED` / `PENDING`으로,
+`analysis_run_dispatches`를 `PREPARED`로 먼저 commit한다. claim transaction은 현재 gateway를 다시
+bind하고 준비 시 저장한 immutable binding ID와 descriptor를 정확히 대조한 뒤 fence를 증가시키고
+run/dispatch를 `RUNNING`으로 바꾼다. gateway는 고정된 bounded executor에서 database transaction
+밖으로 호출된다. finalize transaction은 owner·memo 활성 상태·revision과 fence를 다시 확인하고
+현재 revision이면 `REVIEW_REQUIRED`, 바뀌었거나 휴지통이면 `STALE`을 저장한다. 호출 전에 이미
+stale이면 gateway 0-call로 `CANCELLED_STALE`을 남기며, 호출 뒤 revision이 바뀌면 `STALE` status와
+실제 cloud outcome을 함께 보존한다.
 
-`QUEUED`, `RUNNING`, `FAILED`는 문서상 lifecycle 어휘에 남아 있지만 현재 분석 시작은
-동기이고 새 정상/fallback run을 곧바로 `REVIEW_REQUIRED`로 저장한다. queue worker, retry attempt,
-duration, token, cost column과 top-k context table은 없다.
+`PENDING`은 `durable-v1`의 `QUEUED`/`RUNNING` 또는 아직 완료되지 않은 `STALE` run에만 허용되고
+`completed_at`은 null이다. `CANCELLED_STALE`은 완료된 `STALE` run에만 허용된다. 다른 final outcome은
+`QUEUED`/`RUNNING`과 함께 저장할 수 없고 `completed_at`이 필요하다. run과 dispatch 사이의 준비/완료
+일관성, 최종 proposal 존재 여부 같은 cross-table invariant는 단일 table `CHECK`로 표현할 수 없어
+application transaction과 restore 검증이 함께 강제한다.
+
+공개 분석 POST는 내부 상태를 polling DTO로 노출하지 않고 최종 run까지 기다리는 동기 계약을
+유지한다. background worker, 자동 재시작 recovery, 개별 attempt history, duration, model-token, cost와
+top-k context는 없다. 동일 key/body를 다시 호출하는 caller-driven recovery만 deadline과
+`max_attempts` 안에서 lease를 재claim하며, transport는 at-least-once다. 실제 provider는 같은
+`pmr1_...` token을 멱등하게 처리해야 한다.
 
 Proposal schema v2는 `dateCandidates[].candidateId`와 nullable
 `itemCandidates[].dueDateCandidateId`를 기존 `proposal_json` JSONB 안에 저장하고, run의 기존
@@ -245,6 +257,42 @@ GET/recovery의 schema negotiation은 저장 형식을 바꾸지 않는다. 헤�
 `itemCandidates[].dueDateCandidateId`만 제거하고 `schemaVersion`을 `1`로 내려 strict v1을
 만든다. `2` 요청은 저장된 version을 유지하므로 과거 v1은 v1로 남는다. 어떤 경로도
 `proposal_json`, `proposal_hash`, `analysis_runs.schema_version`을 update하지 않는다.
+
+### `analysis_run_dispatches`
+
+Gateway 호출이 필요한 `durable-v1` run에만 존재하는 내부 1:1 preparation row다. 공개 DTO나
+proposal metadata가 아니며 V14 이전 run에는 backfill하지 않는다.
+
+```text
+analysis_run_id UUID PK
+owner_id UUID NOT NULL
+reserved_proposal_id UUID UNIQUE NOT NULL
+idempotency_key_hash VARCHAR(64) NOT NULL
+request_hash VARCHAR(64) NOT NULL
+validated_local_proposal TEXT NULL
+validated_local_proposal_hash VARCHAR(64) NOT NULL
+executor_binding_id VARCHAR(69) NOT NULL
+call_timeout_ms INTEGER NOT NULL
+max_attempts INTEGER NOT NULL
+deadline_at TIMESTAMPTZ NOT NULL
+state PREPARED | RUNNING | FINALIZED
+fence_token BIGINT NOT NULL
+last_attempt_started_at TIMESTAMPTZ NULL
+lease_expires_at TIMESTAMPTZ NULL
+prepared_at TIMESTAMPTZ NOT NULL
+finalized_at TIMESTAMPTZ NULL
+updated_at TIMESTAMPTZ NOT NULL
+UNIQUE (owner_id, idempotency_key_hash)
+FK (analysis_run_id, owner_id) -> analysis_runs(id, owner_id)
+```
+
+세 hash는 lowercase SHA-256이고 binding ID는 `cgb1_` + lowercase SHA-256 형식이다. 준비 시 정확히
+검증한 local proposal text와 hash를 보존하며, `PREPARED`는 attempt/lease 없이 fence 0이다.
+`RUNNING`은 양수 fence, deadline보다 이른 attempt 시작, attempt보다 늦고 deadline을 넘지 않는
+lease가 필요하다. `FINALIZED`는 lease를 비우고 final 시각을 남기며 준비 payload text를 null로
+scrub하지만 hash와 reserved proposal ID는 보존한다. `updated_at`은 silent default 없이 각 write가
+명시한다. deadline과 최대 attempt는 동일 key recovery의 상한이며 자동 scheduler를 뜻하지 않는다.
+fence가 다른 늦은 attempt는 final 결과를 덮어쓸 수 없다.
 
 ### `analysis_proposals`
 
@@ -468,6 +516,7 @@ memos + analysis_applications + memo_items + task_details
 - Spring Session lookup/expiry/principal indexes
 - `memos(owner_id, status, updated_at DESC)`
 - `analysis_runs(memo_id, memo_revision, status)`
+- partial `analysis_run_dispatches(state, lease_expires_at, deadline_at, prepared_at, analysis_run_id)` for `PREPARED`/`RUNNING` recovery
 - `memo_items(owner_id, created_at DESC)`
 - `task_details(status, due_at_utc)`
 - `task_details(status, due_local_date)`
@@ -494,7 +543,7 @@ memos + analysis_applications + memo_items + task_details
 - local email verification and password-reset token/delivery state
 - login abuse/rate-limit audit state if the selected policy requires additional persistence
 - MFA/passkey authenticators and account recovery codes
-- asynchronous analysis queue/retry/attempt/duration/token/cost state and top-k retrieval context
-- durable pre-call preparation/finalization, descriptor-bound adapter execution, provider attempt history
+- background analysis worker, automatic restart recovery, per-attempt history, duration/model-token/cost state
+- top-k retrieval context
 
 필요한 vertical slice가 시작될 때 파괴적 변경 없이 새 Flyway migration으로 추가한다.

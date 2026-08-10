@@ -2,6 +2,7 @@ package local.personalmemo.analysis.domain;
 
 public enum CloudAnalysisOutcome {
   NOT_REQUIRED,
+  PENDING,
   SUCCESS,
   CONSENT_REQUIRED,
   UNAVAILABLE,
@@ -9,5 +10,6 @@ public enum CloudAnalysisOutcome {
   RETRY_EXHAUSTED,
   PROVIDER_ERROR,
   INVALID_RESPONSE,
-  UNEXPECTED_FAILURE
+  UNEXPECTED_FAILURE,
+  CANCELLED_STALE
 }

@@ -27,13 +27,14 @@ class FakeCloudAnalysisGatewayTest {
             .put("memoId", "f3341ab7-ace5-433f-9c1f-26ed115fe4ba")
             .set("providerMetadata", json.createObjectNode().put("route", "CLOUD_ENRICH"));
 
+    var binding = gateway.bind();
     CloudAnalysisResult result =
-        gateway.enrich(
+        binding.execute(
             new CloudAnalysisRequest(
                 local,
                 List.of(AmbiguityReason.LOW_TYPE_MARGIN),
                 "field-policy-v1",
-                gateway.descriptor(),
+                binding.descriptor(),
                 Optional.empty(),
                 Optional.empty(),
                 CloudProviderRequestToken.issue(
@@ -53,7 +54,7 @@ class FakeCloudAnalysisGatewayTest {
 
   @Test
   void declaresAStableNoNetworkDescriptor() {
-    var descriptor = gateway.descriptor();
+    var descriptor = gateway.bind().descriptor();
 
     assertThat(descriptor.gatewayVersion()).isEqualTo("fake-cloud-v2");
     assertThat(descriptor.providerId()).isEqualTo("fake");
@@ -83,7 +84,7 @@ class FakeCloudAnalysisGatewayTest {
                 "fake-cloud-mismatch",
                 "b".repeat(64)));
 
-    assertThatThrownBy(() -> gateway.enrich(request))
+    assertThatThrownBy(() -> gateway.bind().execute(request))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("descriptor");
   }

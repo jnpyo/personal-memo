@@ -4,5 +4,6 @@ public enum CloudAnalysisFailureReason {
   UNAVAILABLE,
   TIMEOUT,
   RETRY_EXHAUSTED,
-  PROVIDER_ERROR
+  PROVIDER_ERROR,
+  UNEXPECTED_FAILURE
 }

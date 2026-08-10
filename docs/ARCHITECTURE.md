@@ -5,8 +5,10 @@
 Use a modular monolith for the backend and a mobile-first PWA for the client.
 
 Do not introduce Neo4j, Kafka, Redis, a separate AI microservice, or a second search service in the
-MVP. PostgreSQL and clear module boundaries are sufficient now; if asynchronous work is approved
-later, add a bounded worker rather than a new infrastructure service.
+MVP. PostgreSQL and clear module boundaries are sufficient now. V15 uses a bounded in-process
+invocation pool only to keep one synchronous analysis request's gateway work outside database
+transactions. If autonomous background processing is approved later, add a bounded database-backed
+consumer rather than a new infrastructure service.
 
 ```mermaid
 flowchart TD
@@ -164,15 +166,17 @@ zone.
 
 ## Cloud Agent orchestration
 
-The current cloud boundary is one synchronous prepared request rather than an autonomous loop.
+The public cloud boundary is one synchronous request backed by an internal durable state machine,
+not an autonomous processing loop.
 
-For `CLOUD_ENRICH`, a server-configured adapter first provides a validated
-`CloudGatewayDescriptor` containing transfer mode and gateway/provider/model/consent-policy
-versions. A `NO_NETWORK` adapter needs no user consent. An `EXTERNAL_MEMO_CONTENT` adapter is not
-called unless the authenticated owner's setting pins `true`, the exact descriptor policy version,
-and a non-null grant time no later than the authorization-check instant. V13 revokes legacy
-boolean-only grants; a future-dated grant is also rejected. There is no consent grant/revoke API and
-no external provider configured in this checkpoint.
+For `CLOUD_ENRICH`, a server-configured adapter first provides one immutable
+`CloudGatewayBinding`: a validated `CloudGatewayDescriptor` containing transfer mode and
+gateway/provider/model/consent-policy versions plus the executor allowed to run it. A `NO_NETWORK`
+adapter needs no user consent. An `EXTERNAL_MEMO_CONTENT` adapter is not called unless the
+authenticated owner's setting pins `true`, the exact descriptor policy version, and a non-null grant
+time no later than the authorization-check instant. V13 revokes legacy boolean-only grants; a
+future-dated grant is also rejected. There is no consent grant/revoke API and no external provider
+configured in this checkpoint.
 
 The gateway returns a defensive success proposal or a typed failure enum without provider error
 text. Missing consent, typed failure, descriptor/enrichment exception, or invalid enriched output
@@ -184,14 +188,32 @@ Every new LOCAL, cloud-success, and fallback proposal rebuilds `providerMetadata
 bounded server allow-list; success output cannot preserve arbitrary provider fields. V14 carries the
 descriptor, accepted authorization values, and a deterministic opaque request token in the internal
 gateway request, while the request/token string and log representations are redacted, and stores the
-same final evidence on the run. Existing rows remain
-`legacy-v0`; these values are not part of any HTTP/proposal/metadata contract.
+same final evidence on the run. Existing pre-V14 rows remain `legacy-v0`; these values are not part
+of any HTTP/proposal/metadata contract.
 
-The synchronous gateway call still occurs inside the analysis database transaction and the run is
-inserted afterward. Descriptor lookup and execution are not yet one immutable adapter binding.
-Before a real provider, commit a preparation snapshot first, move provider work to a bounded
-out-of-transaction step with timeout, reuse the durable token on recovery, and finalize only after
-rechecking the memo revision.
+V15 commits the call-ready run and `analysis_run_dispatches` preparation before gateway execution.
+The run is initially `QUEUED` with `PENDING` cloud evidence; the dispatch is `PREPARED` with the
+reserved proposal identity, validated-local payload and hash, deterministic descriptor/executor
+binding ID, timeout, maximum attempts, and deadline. A claim transaction rechecks revision,
+consent, and binding, then marks the run and dispatch `RUNNING` with a new fence and lease. The
+bounded executor runs outside the database transaction, and a final transaction accepts only the
+current fence, rechecks the memo revision, persists one final proposal, and scrubs the prepared
+payload. Historical runs are not assigned invented dispatch rows.
+
+The HTTP request remains synchronous and normally returns only after the run reaches
+`REVIEW_REQUIRED`; an intervening edit or trash operation commits the final run as `STALE` before
+returning `409 STALE_MEMO_REVISION`. If a same-key live lease or invocation outlasts the coordination
+window, the caller receives `409 ANALYSIS_IN_PROGRESS` and retries the identical key/body. Recovery
+is driven only by that later caller. After a lease expires, it may re-execute within the persisted
+fence/deadline limits using the same provider-request token. This is bounded at-least-once execution,
+so an eventual external provider must deduplicate by that token.
+There is no automatic retry scheduler or restart-triggered recovery. Dispatch payloads, tokens,
+bindings, fences, and leases remain internal and are not added to public DTOs, proposal metadata, or
+ordinary logs.
+
+A stale revision detected before execution records `CANCELLED_STALE`. A revision that becomes stale
+while a claimed call is in flight preserves that attempt's bounded outcome when finalization marks
+the run `STALE`; neither branch applies canonical data.
 
 The following retrieval/tool flow is a future design and is not implemented:
 
@@ -211,9 +233,12 @@ specific provider.
 
 ## Background jobs
 
-This is a future design. No analysis job/outbox table, queued/running worker, retry scheduler, or
-duration/token/cost lifecycle exists in the current checkpoint. If implemented, use a
-PostgreSQL-backed job/outbox table and bounded Spring workers. For concurrent consumers, claim work
+This is a future autonomous-processing design. V15 has a durable dispatch row, transient
+queued/running run state, and a bounded invocation pool, but no background consumer scans that table,
+no scheduler automatically retries work, and a process restart does not resume calls by itself.
+Recovery requires a caller to repeat the same idempotent request. Per-attempt history and
+duration/model-token/cost observability also do not exist. If autonomous processing is approved, use
+a PostgreSQL-backed job consumer and bounded Spring workers. For concurrent consumers, claim work
 with a safe locking pattern such as `FOR UPDATE SKIP LOCKED`.
 
 Initial/P1 jobs:
@@ -287,11 +312,12 @@ The current authentication slice is not yet a public-account hardening release. 
 ## Observability
 
 The current database records route/proposal status, analyzer provenance, V13 cloud
-transfer/gateway/provider/model/policy/outcome evidence, and V14 internal execution-contract,
-authorization/grant snapshot, and request-token evidence. These V14 values are deliberately absent
+transfer/gateway/provider/model/policy/outcome evidence, V14 internal execution-contract,
+authorization/grant snapshot and request-token evidence, and V15 dispatch state, fence count, latest
+attempt start, lease, deadline, and finalization time. These internal values are deliberately absent
 from public DTOs and proposal metadata. The owner-scoped review summary exposes only bounded
-aggregate selection evidence. It does not record analysis duration, retry attempts, model token
-usage, cost, or provider error text.
+aggregate selection evidence. The dispatch row is not per-attempt history and does not record
+analysis duration, model token usage, cost, or provider error text.
 
 Future observability may record the following without recording sensitive text:
 
@@ -320,7 +346,7 @@ PostgreSQL
 Google OpenID Connect (optional external identity provider)
 ```
 
-One backend process hosts the API and authentication endpoints. Once asynchronous work is approved,
-the same process may also host bounded workers initially; separate them only when measured load or
-failure isolation requires it. Redis is not needed: session state remains in PostgreSQL for this
-stage.
+One backend process hosts the API and authentication endpoints and the current bounded gateway
+invocation pool. If autonomous background work is approved, the same process may also host its
+database-backed consumers initially; separate them only when measured load or failure isolation
+requires it. Redis is not needed: session state remains in PostgreSQL for this stage.

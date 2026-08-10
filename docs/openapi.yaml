@@ -402,33 +402,44 @@ paths:
         immutable memo revision, rather than request time or mutable user settings. A
         Draft 2020-12 and domain-validated local proposal is assessed by a versioned,
         field-level server policy. A clear proposal is persisted with route LOCAL and
-        NOT_REQUIRED cloud evidence. For critical ambiguity, the configured gateway first
-        supplies a server-owned descriptor containing transfer mode and gateway, provider,
-        model, and consent-policy versions. The current NO_NETWORK Fake adapter needs no
-        consent. An EXTERNAL_MEMO_CONTENT adapter is not called unless the authenticated
-        owner's consent pins the exact policy version and a grant timestamp no later than the
-        authorization-check instant; future-dated consent also makes zero gateway calls.
-        Otherwise the validated local proposal is persisted with route HYBRID, status
-        REVIEW_REQUIRED, and outcome CONSENT_REQUIRED. Typed gateway failures, exceptions,
-        and invalid enriched proposals also persist a revalidated local fallback with a
-        bounded server-owned outcome and never expose provider error text. HYBRID proposal
-        metadata is overwritten with the same transfer/gateway/provider/model/policy/outcome
-        evidence, zero tool and mutation calls, and the received routing policy/reasons. No
-        path creates canonical data before approval. Every new LOCAL, cloud-success, and
-        fallback proposal rebuilds
+        NOT_REQUIRED cloud evidence. For critical ambiguity, the configured gateway returns one
+        immutable binding containing an executor identity and a server-owned descriptor with
+        transfer mode and gateway, provider, model, and consent-policy versions. The current
+        NO_NETWORK Fake adapter needs no consent. An EXTERNAL_MEMO_CONTENT adapter is not called
+        unless the authenticated owner's consent pins the exact policy version and a grant
+        timestamp no later than the authorization-check instant; future-dated consent also makes
+        zero gateway calls. Otherwise the validated local proposal is persisted with route HYBRID,
+        status REVIEW_REQUIRED, and outcome CONSENT_REQUIRED. Typed gateway failures, exceptions,
+        and invalid enriched proposals also persist a revalidated local fallback with a bounded
+        server-owned outcome and never expose provider error text. HYBRID proposal metadata is
+        overwritten with the same transfer/gateway/provider/model/policy/outcome evidence, zero
+        tool and mutation calls, and the received routing policy/reasons. No path creates canonical
+        data before approval. Every new LOCAL, cloud-success, and fallback proposal rebuilds
         providerMetadata from the same bounded server allow-list, including server-matching
-        analyzer, prompt, local-model, embedding-model, and routing-policy versions (1–64
-        characters each) plus a required tool-call count from 0 through 100. Compact proposal
-        JSON is limited to 65,536 UTF-8 bytes and providerMetadata to 8,192 UTF-8 bytes. This
-        V14 passes the descriptor, accepted authorization/grant snapshot, and a deterministic
-        opaque provider-request token through the internal gateway request, while the request/token
-        string and log representations are redacted, and stores coherent final-run evidence. These
-        internal values are never returned in RunView, proposal JSON,
-        providerMetadata, or recovery responses. The endpoint remains synchronous, invokes the
-        gateway inside its database transaction, and inserts that run evidence only after the
-        call. Durable pre-call preparation, immutable descriptor/executor binding, bounded
-        out-of-transaction async/timeout execution, queued/running state, retry, duration,
-        model-token/cost metrics, and top-k context are not implemented.
+        analyzer, prompt, local-model, embedding-model, and routing-policy versions (1–64 characters
+        each) plus a required tool-call count from 0 through 100. Compact proposal JSON is limited
+        to 65,536 UTF-8 bytes and providerMetadata to 8,192 UTF-8 bytes. V15 commits a durable-v1
+        QUEUED/PENDING run and its PREPARED dispatch before an authorized gateway call. The dispatch
+        reserves the proposal identity and stores the idempotency/request hashes, exact validated
+        local proposal and hash, immutable executor binding identity, timeout, maximum attempts, and
+        deadline. A short claim transaction compares the current binding identity and exact
+        descriptor, rechecks authorization, and acquires a deadline-clipped lease with a new fence.
+        The bounded gateway invocation then runs outside every database transaction. Finalization
+        locks and rechecks memo ownership, active state, revision, and dispatch fence, then
+        atomically stores the proposal, final run evidence, finalized dispatch, and idempotency
+        response. A revision change is committed as STALE before this operation returns 409
+        STALE_MEMO_REVISION; stale detected before a provider attempt uses the internal
+        CANCELLED_STALE outcome and makes zero gateway calls. The endpoint remains synchronous and
+        never returns its internal QUEUED, RUNNING, or PENDING states. A same-key live lease or call
+        that exceeds the coordination window returns 409 ANALYSIS_IN_PROGRESS; the caller retries
+        with the same idempotency key and identical body. Expired-lease recovery is caller-driven,
+        bounded by the persisted deadline and attempt count, fenced against late finalization, and
+        reuses the same provider-request token. This is an at-least-once transport boundary, so a
+        real provider must honor that token idempotently. Internal authorization/grant evidence,
+        provider token, dispatch proposal, binding, lease, and fence are never returned in RunView,
+        proposal JSON, providerMetadata, or recovery responses. There is no background worker,
+        automatic restart recovery, per-attempt history, duration/model-token/cost metrics, top-k
+        context, or configured real provider.
       parameters:
         - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -440,7 +451,7 @@ paths:
               $ref: "#/components/schemas/StartAnalysisRequest"
       responses:
         "200":
-          description: Synchronous deterministic analysis completed and requires review.
+          description: Synchronous analysis finalized and returned a review-required run.
           content:
             application/json:
               schema:

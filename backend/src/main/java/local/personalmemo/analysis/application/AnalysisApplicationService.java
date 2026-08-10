@@ -432,6 +432,40 @@ public class AnalysisApplicationService {
   }
 
   private void removeOrphanedTagsFromUndoneApplications() {
+    // A preparing analysis locks every canonical tag reference through its dispatch commit. Use a
+    // separate lock statement so a cleanup that had to wait gets a fresh READ COMMITTED snapshot
+    // before deciding whether the now-committed dispatch protects the tag.
+    db.sql(
+            """
+            select t.id
+              from tags t
+             where t.owner_id = :ownerId
+               and t.created_by_application_id is not null
+               and exists (
+                 select 1
+                   from analysis_applications creator
+                  where creator.id = t.created_by_application_id
+                    and creator.owner_id = t.owner_id
+                    and creator.status = 'UNDONE'
+               )
+               and not exists (
+                 select 1
+                   from item_tags it
+                  where it.tag_id = t.id
+                    and it.owner_id = t.owner_id
+               )
+               and not exists (
+                 select 1
+                   from tag_aliases ta
+                  where ta.tag_id = t.id
+                    and ta.owner_id = t.owner_id
+               )
+             order by t.id
+             for update of t
+            """)
+        .param("ownerId", identity.ownerId())
+        .query(UUID.class)
+        .list();
     db.sql(
             """
             delete from tags t
@@ -455,6 +489,36 @@ public class AnalysisApplicationService {
                    from tag_aliases ta
                   where ta.tag_id = t.id
                     and ta.owner_id = t.owner_id
+               )
+               and not exists (
+                 select 1
+                   from analysis_run_dispatches d
+                  where d.owner_id = t.owner_id
+                    and d.state in ('PREPARED', 'RUNNING')
+                    and (
+                      d.validated_local_proposal is null
+                      or exists (
+                        select 1
+                          from jsonb_array_elements(
+                            coalesce(
+                              d.validated_local_proposal::jsonb -> 'tagCandidates',
+                              '[]'::jsonb
+                            )
+                          ) candidate
+                         where lower(candidate ->> 'existingTagId') = t.id::text
+                      )
+                      or exists (
+                        select 1
+                          from jsonb_array_elements(
+                            coalesce(
+                              d.validated_local_proposal::jsonb -> 'relationCandidates',
+                              '[]'::jsonb
+                            )
+                          ) relation
+                         where relation ->> 'targetType' = 'TAG'
+                           and lower(relation ->> 'targetId') = t.id::text
+                      )
+                    )
                )
             """)
         .param("ownerId", identity.ownerId())

@@ -21,13 +21,19 @@ The repository now implements the model-free portion of Milestone 2:
   gateway, provider, model, consent-policy, and outcome evidence;
 - V14 internal authorization/grant snapshot and deterministic provider-request token evidence for
   actual gateway calls, without adding either value to the proposal or HTTP contract;
+- V15 durable cloud preparation: a descriptor-bound executor identity, validated-local payload and
+  hash, timeout, attempt ceiling, deadline, fence, and lease are committed before gateway execution;
+  the bounded invocation runs outside the database transaction and finalization locks and rechecks
+  the memo revision and fence before publishing one proposal;
 - validated-local fallback for missing consent, typed failures, gateway exceptions, and invalid
   cloud proposals, with no provider error text and detailed UI review instead of a concise approval;
 - Draft 2020-12 contract, domain, and owner-reference validation before routing and again after enrichment;
 - server-side reconstruction of field-level routing signals instead of trusting only an analyzer summary;
 - general Korean action/reference/event rules plus all-weekday relative date/time parsing, while
   approximate weekends and event-relative deadlines remain null-valued review candidates;
-- server-owned analyzer, prompt, local-model, embedding-model, and routing-policy provenance for both `LOCAL` and `HYBRID` runs while every result remains `REVIEW_REQUIRED`;
+- server-owned analyzer, prompt, local-model, embedding-model, and routing-policy provenance for both
+  `LOCAL` and `HYBRID` runs. A durable `HYBRID` run may be internally `QUEUED` or `RUNNING`; each
+  non-stale finalized proposal remains `REVIEW_REQUIRED`;
 - one common allow-list canonicalizer for every new LOCAL, cloud-success, and fallback
   `providerMetadata` object, plus UTF-8 payload limits before anything is persisted;
 - explicit user resolution of `UNKNOWN` types and partial item application;
@@ -41,9 +47,12 @@ The repository now implements the model-free portion of Milestone 2:
   binding score, or passing result exists; `EVALUATION_LABEL_POLICY.md` remains a draft.
 
 No real local model or cloud provider is connected. There is no consent grant/revoke HTTP API and no
-external provider configuration. Top-k context, asynchronous queued/running execution, retry,
-duration, model-token usage, and cost tracking are also not implemented. The roadmap's real-provider adapter
-remains deferred by the project decision until explicitly authorized.
+external provider configuration. The analysis HTTP operation remains synchronous: its caller waits
+for final review or stale-revision handling even though the gateway attempt runs in a bounded
+in-process executor outside database transactions. V15 does not add an autonomous queue consumer,
+scheduled or automatic retry, restart-triggered recovery, per-attempt history, duration, model-token
+usage, cost tracking, or top-k context. The roadmap's real-provider adapter remains deferred by the
+project decision until explicitly authorized.
 
 ## Pipeline boundaries
 
@@ -54,11 +63,16 @@ Raw memo
   → schema, domain, and owner-reference validation
   → deterministic field-level ambiguity assessment
       → local proposal, or
-      → server-owned gateway descriptor and consent gate
-          → typed enrichment result, or
-          → validated local fallback
-  → final proposal validation and cloud-run evidence
-  → user review
+      → immutable gateway binding and consent gate
+          → durable run/dispatch prepare commit
+          → claim with descriptor/binding comparison, fence, lease, and deadline
+          → bounded gateway execution outside a database transaction
+          → revision/fence-rechecking finalize
+              → typed enrichment result or validated local fallback, or
+              → committed STALE result
+  → final proposal validation and cloud-run evidence, when reviewable
+  → synchronous HTTP result
+  → user review, when current
   → transactional application
 ```
 
@@ -226,10 +240,12 @@ server-issued provider-request token whose string/log representation is redacted
 provider result, browser, and memo text
 cannot choose owner identity, this token, or canonical write authority.
 
-Before a `CLOUD_ENRICH` call, the configured server adapter supplies a bounded
-`CloudGatewayDescriptor`: `transferMode`, `gatewayVersion`, `providerId`, `modelVersion`, and
-`consentPolicyVersion`. These values and the final `cloudOutcome` are stamped by the application
-service into `analysis_runs`; a gateway response cannot spoof them through proposal metadata.
+Before a `CLOUD_ENRICH` call, the configured server adapter supplies one immutable
+`CloudGatewayBinding`: a `CloudGatewayDescriptor` plus the executor that may run that descriptor.
+The descriptor contains `transferMode`, `gatewayVersion`, `providerId`, `modelVersion`, and
+`consentPolicyVersion`; its deterministic binding ID is persisted before execution. These values and
+the final `cloudOutcome` are stamped by the application service into `analysis_runs`; a gateway
+response cannot spoof them through proposal metadata.
 
 - `NO_NETWORK` needs no user consent. The current `FakeCloudAnalysisGateway` uses this mode,
   performs no external transfer, has no tools, and returns a defensive copy.
@@ -241,32 +257,52 @@ service into `analysis_runs`; a gateway response cannot spoof them through propo
   requires policy and timestamp to be both present for a true grant and both null for a false grant.
 - The repository has no public grant/revoke API and no actual external provider configuration, so
   this is a fail-closed integration boundary rather than provider authorization.
-- V14 stores the final internal execution evidence on each new run. LOCAL and descriptor failure
-  have no authorization/token values; a `NO_NETWORK` call has only a deterministic token; denied
-  external transfer has only its authorization-check instant; an allowed external call has that
-  instant, the exact accepted grant timestamp, and the token. Historical rows remain
-  `legacy-v0` with no invented snapshot.
+- V14 introduced the final internal execution-evidence shape. LOCAL and descriptor failure have no
+  authorization/token values; a `NO_NETWORK` call has only a deterministic token; denied external
+  transfer has only its authorization-check instant; an allowed external call has that instant, the
+  exact accepted grant timestamp, and the token. Historical rows remain `legacy-v0` with no invented
+  snapshot, while V15 call-ready rows use the same evidence under `durable-v1`.
+- V15 stores provider-call-only preparation in `analysis_run_dispatches`. Existing V14 and older
+  runs receive no synthetic dispatch row because none was committed before its historical call.
 
 `CloudAnalysisResult` is either a defensive success proposal or a typed failure reason
-(`UNAVAILABLE`, `TIMEOUT`, `RETRY_EXHAUSTED`, or `PROVIDER_ERROR`). Descriptor/enrichment exceptions
-become `UNEXPECTED_FAILURE`, and a success proposal that fails schema/domain/owner validation becomes
-`INVALID_RESPONSE`. No exception or provider error text is copied into an API response, proposal,
-run, or UI notice.
+(`UNAVAILABLE`, `TIMEOUT`, `RETRY_EXHAUSTED`, `PROVIDER_ERROR`, or `UNEXPECTED_FAILURE`). Binding or
+execution exceptions become `UNEXPECTED_FAILURE`, and a success proposal that fails
+schema/domain/owner validation becomes `INVALID_RESPONSE`. No exception or provider error text is
+copied into an API response, proposal, run, or UI notice.
 
-Every non-success branch minimizes untrusted provider metadata, stamps bounded server evidence,
-validates the original local proposal again, and stores it as `HYBRID` / `REVIEW_REQUIRED`. Raw memo
-and canonical tag/task/relation data remain unchanged. The PWA opens the detailed alternatives editor
-for every cloud outcome other than `SUCCESS` or `NOT_REQUIRED`; `CONSENT_REQUIRED` has a specific
-safe notice and all other failures share one generic notice.
+Every non-stale, non-success branch minimizes untrusted provider metadata, stamps bounded server
+evidence, validates the original local proposal again, and stores it as `HYBRID` /
+`REVIEW_REQUIRED`. Raw memo and canonical tag/task/relation data remain unchanged. The PWA opens the
+detailed alternatives editor for every reviewable cloud outcome other than `SUCCESS` or
+`NOT_REQUIRED`; `CONSENT_REQUIRED` has a specific safe notice and all other failures share one
+generic notice. If the memo changes or is trashed before a claim, finalization uses
+`CANCELLED_STALE`; if it changes during an in-flight call, the run becomes `STALE` while retaining
+the bounded outcome of that completed attempt. Neither stale branch creates canonical data.
 
-The same descriptor, authorization values, and deterministic `pmr1_...` token are passed to the
-current gateway request and persisted in the final V14 run row, but none is exposed through the
-proposal/API/metadata/log boundary. This is not yet crash-safe provider execution: the synchronous
-gateway call still occurs inside `AnalysisService.start`'s database transaction and the run is
-inserted only after that call. The interface also does not yet bind descriptor lookup and execution
-to one immutable adapter instance. A real provider remains blocked until a prepare row is committed
-before any transfer, the bounded call runs outside the transaction with timeout, retries reuse the
-durable descriptor/token, and finalization rechecks the memo revision.
+V15 commits an `analysis_runs` row as `QUEUED` / `PENDING` and an
+`analysis_run_dispatches` row as `PREPARED` before gateway execution. The preparation reserves the
+proposal identity and same-key request, retains the validated local proposal plus its integrity
+hash, and pins the binding ID, timeout, maximum attempts, and deadline. A separate claim transaction
+rechecks the current revision, current external-transfer consent, and binding; it then changes the
+run to `RUNNING`, increments a fence, and records a bounded lease. The bound executor runs through a
+fixed-capacity invocation pool outside the database transaction while the public HTTP caller still
+waits. A final transaction locks the run and dispatch, rejects an obsolete fence, rechecks the memo
+revision, writes exactly one final proposal, and clears the prepared proposal text while retaining
+its hash.
+
+If a caller is interrupted or a process stops after a claim, the committed row remains recoverable.
+Recovery is caller-driven: a later request with the same idempotency key binds the currently
+configured gateway, requires the persisted descriptor/binding identity to match, and may reclaim an
+expired lease within the persisted attempt ceiling and deadline. It always reuses the same
+deterministic `pmr1_...` provider-request token. This is bounded at-least-once execution, not an
+exactly-once promise; a future external provider must honor the token as its deduplication identity.
+There is no background scanner, automatic retry scheduler, or automatic restart recovery. The
+prepared payload, token, binding ID, fence, and lease remain internal database/application values;
+they are not added to `RunView`, proposal metadata, recovery responses, ordinary logs, or browser
+storage. If a same-key live lease or invocation outlasts the coordination window, the public caller
+receives `409 ANALYSIS_IN_PROGRESS` and retries the identical key/body. A stale finalization commits
+before the request returns `409 STALE_MEMO_REVISION`.
 
 ## Future Agent tools before confirmation — not implemented
 
@@ -387,7 +423,7 @@ and mutation calls, and resolved fields. Matching columns on `analysis_runs` are
 clear `LOCAL` run stores `NOT_REQUIRED`/`none` evidence in the run. Historical pre-V13 `CLOUD` or
 `HYBRID` rows are marked `LEGACY_UNKNOWN`, never retroactively described as no-network or successful.
 Historical pre-V14 execution rows likewise remain `legacy-v0` without invented authorization or
-provider-request evidence.
+provider-request evidence, and V15 does not backfill a durable dispatch for any historical run.
 
 ## Application
 
@@ -450,12 +486,14 @@ analyzer/prompt/local-model/embedding-model/routing-policy provenance and are se
 `Cache-Control: no-store`.
 
 This evidence makes personal review behavior observable, but it does not open the real-LLM gate.
-Completed independent adjudication of the version-2 date/item gold, an approved and independently
-reviewed version-3 binding label policy/dataset, a separately held blind release with a
-pre-registered gate, approved provider/region/retention/cost limits, and durable pre-call,
-descriptor-bound, bounded out-of-transaction idempotent provider execution are still required along
-with the remaining criteria in [EVALUATION.md](EVALUATION.md). V14's final-run snapshot/token evidence
-does not by itself satisfy that execution gate.
+V15 supplies durable pre-call, descriptor-bound, bounded out-of-transaction execution for the
+current Fake/test boundary; it does not authorize a real provider or expose its internal dispatch
+contract over HTTP. Completed independent adjudication of the version-2 date/item gold, an approved
+and independently reviewed version-3 binding label policy/dataset, a separately held blind release
+with a pre-registered gate, approved provider/region/retention/cost limits, a consent grant/revoke UX
+and API, provider-side token deduplication, and the remaining criteria in
+[EVALUATION.md](EVALUATION.md) are still required. Autonomous recovery, operational metrics, and
+top-k context also remain separate work.
 
 ## Personalization without fine-tuning
 

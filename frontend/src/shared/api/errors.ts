@@ -24,6 +24,9 @@ export function errorMessage(error: unknown): string {
   }
 
   if (error instanceof ApiError) {
+    if (error.code === 'ANALYSIS_IN_PROGRESS') {
+      return '분석이 아직 진행 중입니다. 잠시 후 같은 요청으로 다시 시도해 주세요.';
+    }
     if (error.code === 'STALE_MEMO_REVISION' || error.status === 409) {
       return '메모 상태가 다른 곳에서 변경되었습니다. 최신 목록을 불러온 뒤 다시 시도해 주세요.';
     }

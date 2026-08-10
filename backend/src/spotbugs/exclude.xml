@@ -8,6 +8,11 @@
   <Match>
     <Bug pattern="EI_EXPOSE_REP2"/>
     <Class name="local.personalmemo.analysis.api.AnalysisController"/>
+    <Field name="analysisService"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.analysis.api.AnalysisController"/>
     <Field name="applicationService"/>
   </Match>
   <Match>

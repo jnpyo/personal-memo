@@ -38,7 +38,12 @@ describe('memo model', () => {
 
   it('maps canonical analysis states to user-facing labels and tones', () => {
     expect(analysisStateLabel('REVIEW_REQUIRED')).toBe('제안 검토 필요');
+    expect(analysisStateLabel('QUEUED')).toBe('분석 대기 중');
+    expect(analysisStateLabel('RUNNING')).toBe('분석 중');
+    expect(analysisStateLabel('FAILED')).toBe('분석 실패');
     expect(analysisStateTone('REVIEW_REQUIRED')).toBe('attention');
+    expect(analysisStateTone('FAILED')).toBe('attention');
+    expect(analysisStateTone('RUNNING')).toBe('neutral');
     expect(analysisStateTone('APPLIED')).toBe('complete');
     expect(analysisStateLabel('FUTURE_STATE')).toBe('FUTURE_STATE');
   });

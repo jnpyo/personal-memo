@@ -101,6 +101,35 @@ public class IdempotencyService {
         .update();
   }
 
+  /** Replaces a provisional response while holding the same operation/key transaction lock. */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void complete(
+      String operation, String key, String requestHash, UUID resourceId, Object response) {
+    String validatedKey = validateKey(key);
+    acquireTransactionLock(operation, validatedKey);
+    int updated =
+        db.sql(
+                """
+                update idempotency_records
+                   set response_json = cast(:responseJson as jsonb)
+                 where owner_id = :ownerId
+                   and operation = :operation
+                   and idempotency_key = :key
+                   and request_hash = :requestHash
+                   and resource_id = :resourceId
+                """)
+            .param("resourceId", resourceId)
+            .param("responseJson", write(response))
+            .param("ownerId", identity.ownerId())
+            .param("operation", operation)
+            .param("key", validatedKey)
+            .param("requestHash", requestHash)
+            .update();
+    if (updated != 1) {
+      throw new IllegalStateException("The provisional idempotency response is missing.");
+    }
+  }
+
   public String hashRequest(Object request) {
     return Hashing.sha256(write(request));
   }
