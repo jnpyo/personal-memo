@@ -19,6 +19,8 @@ The repository now implements the model-free portion of Milestone 2:
 - a server-owned `CloudGatewayDescriptor` and typed `CloudAnalysisResult` boundary, exact
   owner/policy/timestamp consent enforcement for `EXTERNAL_MEMO_CONTENT`, and persisted transfer,
   gateway, provider, model, consent-policy, and outcome evidence;
+- V14 internal authorization/grant snapshot and deterministic provider-request token evidence for
+  actual gateway calls, without adding either value to the proposal or HTTP contract;
 - validated-local fallback for missing consent, typed failures, gateway exceptions, and invalid
   cloud proposals, with no provider error text and detailed UI review instead of a concise approval;
 - Draft 2020-12 contract, domain, and owner-reference validation before routing and again after enrichment;
@@ -40,7 +42,7 @@ The repository now implements the model-free portion of Milestone 2:
 
 No real local model or cloud provider is connected. There is no consent grant/revoke HTTP API and no
 external provider configuration. Top-k context, asynchronous queued/running execution, retry,
-duration, token, and cost tracking are also not implemented. The roadmap's real-provider adapter
+duration, model-token usage, and cost tracking are also not implemented. The roadmap's real-provider adapter
 remains deferred by the project decision until explicitly authorized.
 
 ## Pipeline boundaries
@@ -218,8 +220,11 @@ Thresholds are configuration, not hard-coded business truth. Calibrate them usin
 ## Current cloud gateway, consent, and fallback boundary
 
 `CloudAnalysisRequest` carries a defensive copy of the already validated local proposal, the
-server-reconstructed routing reasons, and the routing-policy version. The request DTO, provider
-result, browser, and memo text cannot choose owner identity or canonical write authority.
+server-reconstructed routing reasons and routing-policy version, the descriptor used for this
+decision, the accepted authorization snapshot when external transfer is allowed, and an opaque
+server-issued provider-request token whose string/log representation is redacted. The request DTO,
+provider result, browser, and memo text
+cannot choose owner identity, this token, or canonical write authority.
 
 Before a `CLOUD_ENRICH` call, the configured server adapter supplies a bounded
 `CloudGatewayDescriptor`: `transferMode`, `gatewayVersion`, `providerId`, `modelVersion`, and
@@ -236,6 +241,11 @@ service into `analysis_runs`; a gateway response cannot spoof them through propo
   requires policy and timestamp to be both present for a true grant and both null for a false grant.
 - The repository has no public grant/revoke API and no actual external provider configuration, so
   this is a fail-closed integration boundary rather than provider authorization.
+- V14 stores the final internal execution evidence on each new run. LOCAL and descriptor failure
+  have no authorization/token values; a `NO_NETWORK` call has only a deterministic token; denied
+  external transfer has only its authorization-check instant; an allowed external call has that
+  instant, the exact accepted grant timestamp, and the token. Historical rows remain
+  `legacy-v0` with no invented snapshot.
 
 `CloudAnalysisResult` is either a defensive success proposal or a typed failure reason
 (`UNAVAILABLE`, `TIMEOUT`, `RETRY_EXHAUSTED`, or `PROVIDER_ERROR`). Descriptor/enrichment exceptions
@@ -249,11 +259,14 @@ and canonical tag/task/relation data remain unchanged. The PWA opens the detaile
 for every cloud outcome other than `SUCCESS` or `NOT_REQUIRED`; `CONSENT_REQUIRED` has a specific
 safe notice and all other failures share one generic notice.
 
-This authorization-check instant and the accepted grant timestamp are not yet snapshotted on the
-run or cryptographically/relationally bound to its descriptor. The synchronous gateway call also
-still occurs inside `AnalysisService.start`'s database transaction. A real provider remains blocked
-until a run-bound consent snapshot, bounded out-of-transaction async/timeout execution, and a
-server-issued idempotent provider-request token prevent ambiguous authorization and duplicate calls.
+The same descriptor, authorization values, and deterministic `pmr1_...` token are passed to the
+current gateway request and persisted in the final V14 run row, but none is exposed through the
+proposal/API/metadata/log boundary. This is not yet crash-safe provider execution: the synchronous
+gateway call still occurs inside `AnalysisService.start`'s database transaction and the run is
+inserted only after that call. The interface also does not yet bind descriptor lookup and execution
+to one immutable adapter instance. A real provider remains blocked until a prepare row is committed
+before any transfer, the bounded call runs outside the transaction with timeout, retries reuse the
+durable descriptor/token, and finalization rechecks the memo revision.
 
 ## Future Agent tools before confirmation — not implemented
 
@@ -373,6 +386,8 @@ gateway/provider/model/consent-policy versions, outcome, received routing policy
 and mutation calls, and resolved fields. Matching columns on `analysis_runs` are authoritative. A
 clear `LOCAL` run stores `NOT_REQUIRED`/`none` evidence in the run. Historical pre-V13 `CLOUD` or
 `HYBRID` rows are marked `LEGACY_UNKNOWN`, never retroactively described as no-network or successful.
+Historical pre-V14 execution rows likewise remain `legacy-v0` without invented authorization or
+provider-request evidence.
 
 ## Application
 
@@ -437,9 +452,10 @@ analyzer/prompt/local-model/embedding-model/routing-policy provenance and are se
 This evidence makes personal review behavior observable, but it does not open the real-LLM gate.
 Completed independent adjudication of the version-2 date/item gold, an approved and independently
 reviewed version-3 binding label policy/dataset, a separately held blind release with a
-pre-registered gate, approved provider/region/retention/cost limits, a descriptor-bound run snapshot
-of the consent grant, and bounded out-of-transaction idempotent provider execution are still required
-along with the remaining criteria in [EVALUATION.md](EVALUATION.md).
+pre-registered gate, approved provider/region/retention/cost limits, and durable pre-call,
+descriptor-bound, bounded out-of-transaction idempotent provider execution are still required along
+with the remaining criteria in [EVALUATION.md](EVALUATION.md). V14's final-run snapshot/token evidence
+does not by itself satisfy that execution gate.
 
 ## Personalization without fine-tuning
 

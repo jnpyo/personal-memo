@@ -420,11 +420,15 @@ paths:
         analyzer, prompt, local-model, embedding-model, and routing-policy versions (1–64
         characters each) plus a required tool-call count from 0 through 100. Compact proposal
         JSON is limited to 65,536 UTF-8 bytes and providerMetadata to 8,192 UTF-8 bytes. This
-        endpoint remains synchronous and invokes the gateway inside its database transaction.
-        It does not snapshot the authorization/grant pair on the run, bind that pair to the
-        descriptor, or issue a provider-call idempotency token. Bounded out-of-transaction
-        async/timeout execution, queued/running state, retry, duration, token/cost metrics,
-        and top-k context are not implemented.
+        V14 passes the descriptor, accepted authorization/grant snapshot, and a deterministic
+        opaque provider-request token through the internal gateway request, while the request/token
+        string and log representations are redacted, and stores coherent final-run evidence. These
+        internal values are never returned in RunView, proposal JSON,
+        providerMetadata, or recovery responses. The endpoint remains synchronous, invokes the
+        gateway inside its database transaction, and inserts that run evidence only after the
+        call. Durable pre-call preparation, immutable descriptor/executor binding, bounded
+        out-of-transaction async/timeout execution, queued/running state, retry, duration,
+        model-token/cost metrics, and top-k context are not implemented.
       parameters:
         - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"

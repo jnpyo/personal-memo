@@ -363,7 +363,7 @@ class AnalysisReviewOutcomeIntegrationTest extends PostgresIntegrationTestSuppor
         .param("owner", owner)
         .update();
     db.sql(
-            "insert into analysis_runs(id,owner_id,memo_id,memo_revision,route,status,schema_version,analyzer_version,ambiguity_reasons,created_at,completed_at,routing_policy_version,prompt_version,local_model_version,embedding_model_version) values(:run,:owner,:memo,1,'LOCAL','POSTPONED','1','foreign-v1','[]',:now,:now,'foreign-policy','none','none','none')")
+            "insert into analysis_runs(id,owner_id,memo_id,memo_revision,route,status,schema_version,analyzer_version,ambiguity_reasons,created_at,completed_at,routing_policy_version,prompt_version,local_model_version,embedding_model_version,cloud_execution_contract_version) values(:run,:owner,:memo,1,'LOCAL','POSTPONED','1','foreign-v1','[]',:now,:now,'foreign-policy','none','none','none','legacy-v0')")
         .param("run", run)
         .param("owner", owner)
         .param("memo", memo)
@@ -386,12 +386,12 @@ class AnalysisReviewOutcomeIntegrationTest extends PostgresIntegrationTestSuppor
               id, owner_id, memo_id, memo_revision, route, status, schema_version,
               analyzer_version, ambiguity_reasons, created_at, completed_at,
               routing_policy_version, prompt_version, local_model_version,
-              embedding_model_version
+              embedding_model_version, cloud_execution_contract_version
             )
             select md5('review-outcome-run-' || value)::uuid, :owner, :memo, 1,
                    'LOCAL', 'REVIEW_REQUIRED', '1', 'cap-v1', '[]',
                    current_timestamp - interval '1 minute', current_timestamp - interval '1 minute',
-                   'cap-policy', 'none', 'none', 'none'
+                   'cap-policy', 'none', 'none', 'none', 'legacy-v0'
               from generate_series(1, 1001) value
             """)
         .param("owner", OWNER_ID)

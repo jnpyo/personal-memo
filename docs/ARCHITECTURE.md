@@ -181,11 +181,17 @@ transfer/gateway/provider/model/policy/outcome evidence, and forces detailed UI 
 modify raw or canonical data.
 
 Every new LOCAL, cloud-success, and fallback proposal rebuilds `providerMetadata` from the same
-bounded server allow-list; success output cannot preserve arbitrary provider fields. The current
-authorization instant and accepted grant are not snapshotted on the run or bound to the descriptor,
-and the synchronous gateway call still occurs inside the analysis database transaction. Before a
-real provider, persist that binding and move provider work to a bounded out-of-transaction async
-step with timeout and a server-issued idempotent provider-request token.
+bounded server allow-list; success output cannot preserve arbitrary provider fields. V14 carries the
+descriptor, accepted authorization values, and a deterministic opaque request token in the internal
+gateway request, while the request/token string and log representations are redacted, and stores the
+same final evidence on the run. Existing rows remain
+`legacy-v0`; these values are not part of any HTTP/proposal/metadata contract.
+
+The synchronous gateway call still occurs inside the analysis database transaction and the run is
+inserted afterward. Descriptor lookup and execution are not yet one immutable adapter binding.
+Before a real provider, commit a preparation snapshot first, move provider work to a bounded
+out-of-transaction step with timeout, reuse the durable token on recovery, and finalize only after
+rechecking the memo revision.
 
 The following retrieval/tool flow is a future design and is not implemented:
 
@@ -280,9 +286,11 @@ The current authentication slice is not yet a public-account hardening release. 
 
 ## Observability
 
-The current database records route/proposal status, analyzer provenance, and V13 cloud
-transfer/gateway/provider/model/policy/outcome evidence. The owner-scoped review summary exposes only
-bounded aggregate selection evidence. It does not record analysis duration, retry attempts, token
+The current database records route/proposal status, analyzer provenance, V13 cloud
+transfer/gateway/provider/model/policy/outcome evidence, and V14 internal execution-contract,
+authorization/grant snapshot, and request-token evidence. These V14 values are deliberately absent
+from public DTOs and proposal metadata. The owner-scoped review summary exposes only bounded
+aggregate selection evidence. It does not record analysis duration, retry attempts, model token
 usage, cost, or provider error text.
 
 Future observability may record the following without recording sensitive text:

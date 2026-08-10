@@ -1,6 +1,10 @@
 package local.personalmemo.integrity;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 import java.util.List;
@@ -10,17 +14,40 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import local.personalmemo.analysis.domain.CloudAnalysisGateway;
+import local.personalmemo.analysis.domain.CloudAnalysisRequest;
+import local.personalmemo.analysis.domain.CloudAnalysisResult;
+import local.personalmemo.analysis.domain.CloudGatewayDescriptor;
+import local.personalmemo.analysis.domain.CloudTransferMode;
 import local.personalmemo.support.PostgresIntegration;
 import local.personalmemo.support.PostgresIntegrationTestSupport;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 @PostgresIntegration
 class IdempotencyIntegrationTest extends PostgresIntegrationTestSupport {
+  private static final CloudGatewayDescriptor NO_NETWORK =
+      new CloudGatewayDescriptor(
+          "idempotency-test-gateway-v1",
+          "test-fake",
+          "none",
+          "no-network-v1",
+          CloudTransferMode.NO_NETWORK);
+
+  @MockitoBean private CloudAnalysisGateway cloudGateway;
 
   @Test
-  void concurrentAnalysisStartWithOneKeyProducesOneRunAndOneProposal() throws Exception {
+  void concurrentAnalysisStartWithOneKeyProducesOneRunProposalAndGatewayInvocation()
+      throws Exception {
+    when(cloudGateway.descriptor()).thenReturn(NO_NETWORK);
+    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
+        .thenAnswer(
+            invocation ->
+                CloudAnalysisResult.success(
+                    ((CloudAnalysisRequest) invocation.getArgument(0)).validatedLocalProposal()));
     UUID memoId = UUID.randomUUID();
-    createMemo(memoId, "create-before-concurrent-start", "11.25 OS과제 제출");
+    createMemo(memoId, "create-before-concurrent-start", "전에 교수님이 말한 거 다음 주쯤 올리기");
     CountDownLatch ready = new CountDownLatch(2);
     CountDownLatch go = new CountDownLatch(1);
 
@@ -56,6 +83,14 @@ class IdempotencyIntegrationTest extends PostgresIntegrationTestSupport {
         .isEqualTo(1);
     assertThat(db.sql("select count(*) from analysis_proposals").query(Long.class).single())
         .isEqualTo(1);
+    String storedToken =
+        db.sql("select cloud_provider_request_token from analysis_runs")
+            .query(String.class)
+            .single();
+    ArgumentCaptor<CloudAnalysisRequest> requestCaptor =
+        ArgumentCaptor.forClass(CloudAnalysisRequest.class);
+    verify(cloudGateway, times(1)).enrich(requestCaptor.capture());
+    assertThat(requestCaptor.getValue().providerRequestToken().value()).isEqualTo(storedToken);
     assertThat(
             db.sql(
                     "select count(*) from idempotency_records "

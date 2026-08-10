@@ -1,6 +1,6 @@
 # Data model — authenticated deterministic-analysis MVP
 
-이 문서는 현재 Flyway `V1`–`V13`이 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다. `V11`은 owner별 proposal의 최신 application을 bounded read로 찾는 review-outcome 조회 인덱스를 추가하고, `V12`는 최신 `APPLIED` selection과 활성 memo item을 사용하는 graph projection에 맞춘 partial lookup index만 추가한다. `V13`은 cloud consent를 정확한 policy와 승인 시각에 고정하고 run에 server-owned cloud evidence를 추가한다. 이 migration들은 새 raw-content 복제본이나 일반 clickstream table을 만들지 않는다.
+이 문서는 현재 Flyway `V1`–`V14`가 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다. `V11`은 owner별 proposal의 최신 application을 bounded read로 찾는 review-outcome 조회 인덱스를 추가하고, `V12`는 최신 `APPLIED` selection과 활성 memo item을 사용하는 graph projection에 맞춘 partial lookup index만 추가한다. `V13`은 cloud consent를 정확한 policy와 승인 시각에 고정하고 run에 server-owned cloud evidence를 추가한다. `V14`는 새 run에 호출 권한 확인 시각·실제로 수락한 grant 시각·결정론적 provider-request token을 일관된 실행 snapshot으로 저장하고, 과거 row는 증거를 추정하지 않은 `legacy-v0`로 보존한다. 이 migration들은 새 raw-content 복제본이나 일반 clickstream table을 만들지 않는다.
 
 ## Invariants
 
@@ -22,6 +22,8 @@
 - request·browser·provider result·proposal metadata는 run의
   transfer/gateway/provider/model/policy/outcome evidence를 선택하지 못한다. 서버가
   구성한 descriptor와 application service가 그 값을 소유하고 V13 constraint가 조합을 제한한다.
+- 내부 authorization/grant snapshot과 provider-request token도 server-owned이고 V14 constraint가
+  호출 여부·transfer mode·outcome과의 nullability 및 token 유일성을 제한한다.
 
 ## Identity and raw memo
 
@@ -190,6 +192,10 @@ cloud_provider_id VARCHAR(64)
 cloud_model_version VARCHAR(64)
 cloud_consent_policy_version VARCHAR(64)
 cloud_outcome NOT_REQUIRED | LEGACY_UNKNOWN | SUCCESS | CONSENT_REQUIRED | UNAVAILABLE | TIMEOUT | RETRY_EXHAUSTED | PROVIDER_ERROR | INVALID_RESPONSE | UNEXPECTED_FAILURE
+cloud_execution_contract_version legacy-v0 | snapshot-v1
+cloud_authorization_checked_at TIMESTAMPTZ NULL
+cloud_accepted_consent_granted_at TIMESTAMPTZ NULL
+cloud_provider_request_token VARCHAR(69) NULL
 ambiguity_reasons JSONB
 created_at TIMESTAMPTZ
 completed_at TIMESTAMPTZ NULL
@@ -207,9 +213,20 @@ outcome이 저장된다. descriptor를 읽지 못한 새 `HYBRID` run은 `DESCRI
 `CONSENT_REQUIRED`는 gateway method를 호출하지 않았음을 나타낸다. typed failure, gateway 예외,
 invalid enriched result도 validated local proposal과 함께 `HYBRID`/`REVIEW_REQUIRED`로 남고
 canonical record를 만들지 않는다. provider error text는 저장하지 않는다.
-현재 run은 호출 권한을 판정한 instant와 사용한 grant timestamp를 snapshot하거나
-descriptor에 bind하지 않는다. 이 evidence와 provider-request token/attempt state는 실제 provider
-전 새 Flyway migration으로 추가해야 한다.
+V14의 새 `snapshot-v1` row는 LOCAL/descriptor 실패면 세 내부 실행 값이 모두 null이고,
+실제 `NO_NETWORK` gateway 호출에는 token만, 동의가 거절된 external 경로에는 권한 확인 시각만,
+허가되어 gateway를 호출한 external 경로에는 권한 확인 시각·수락한 grant 시각·token을 모두
+저장한다. 수락 grant는 권한 확인 시각보다 늦을 수 없고 token은 `pmr1_`과 lowercase SHA-256
+형식이며 전체 table에서 유일하다. 이 세 값은 proposal, provider metadata, HTTP DTO, 일반 log에
+노출하지 않는다. 기존 row는 전부 `legacy-v0`와 null 세 값으로 backfill하여 과거 승인이나 호출을
+소급 추정하지 않는다.
+
+현재 snapshot/token은 gateway 요청과 최종 run insert에 같은 값으로 전달되지만, run은 gateway
+호출 뒤 같은 긴 transaction에서 저장된다. 따라서 process crash나 transaction rollback 전에
+durable preparation row가 남는 구조는 아니며, descriptor를 반환한 adapter 설정과 실제 실행을
+하나의 immutable binding으로 강제하지도 않는다. 실제 provider 전에는 prepare transaction을 먼저
+commit하고 bounded 호출을 transaction 밖에서 수행한 뒤 같은 token으로 복구·재시도하는 lifecycle이
+필요하다.
 
 `QUEUED`, `RUNNING`, `FAILED`는 문서상 lifecycle 어휘에 남아 있지만 현재 분석 시작은
 동기이고 새 정상/fallback run을 곧바로 `REVIEW_REQUIRED`로 저장한다. queue worker, retry attempt,
@@ -478,6 +495,6 @@ memos + analysis_applications + memo_items + task_details
 - login abuse/rate-limit audit state if the selected policy requires additional persistence
 - MFA/passkey authenticators and account recovery codes
 - asynchronous analysis queue/retry/attempt/duration/token/cost state and top-k retrieval context
-- descriptor-bound consent authorization/grant snapshot and idempotent provider-request token state
+- durable pre-call preparation/finalization, descriptor-bound adapter execution, provider attempt history
 
 필요한 vertical slice가 시작될 때 파괴적 변경 없이 새 Flyway migration으로 추가한다.

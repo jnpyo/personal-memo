@@ -279,8 +279,9 @@ A real provider remains blocked until all of the following are true:
    transfer/gateway/provider/model/policy/outcome evidence are retained, and an approved provider,
    region, retention/deletion policy, consent grant UX/API, per-request context/tool/token/time
    limits, monthly budget, and outage behavior are explicitly decided and enforced fail-closed. The
-   accepted grant timestamp and authorization instant must be snapshotted on the run and bound to
-   its descriptor before any external call.
+   V14 final-run authorization/grant/token evidence must be retained. Before any external call, the
+   same snapshot and descriptor must additionally be committed durably and bound to the immutable
+   executor so crash recovery reuses the original token and authority.
 4. A Shadow mode can persist validated proposals and metrics without applying them; only explicit
    user approval may continue to create tags, tasks, or relations.
 5. Fake failure tests cover timeout, retry exhaustion, invalid structured output, stale revision,
@@ -297,14 +298,17 @@ These are documented blockers, not features implemented by this baseline:
   `REVIEW_REQUIRED`; typed cloud failure, gateway exception, and invalid enriched output now persist
   the revalidated local proposal as `HYBRID` / `REVIEW_REQUIRED` with a bounded outcome. Raw and
   canonical data remain unchanged, and provider error text is not stored or returned. Queued/running
-  execution, bounded out-of-transaction timeout, automatic retry, a server-issued idempotent
-  provider-request token, duration, token, and cost metrics are not yet implemented.
+  execution, bounded out-of-transaction timeout, automatic retry, durable pre-call reservation,
+  duration, model-token, and cost metrics are not yet implemented. V14's deterministic internal
+  provider-request token exists only in the gateway request and final run evidence; it is not yet a
+  committed-before-call dispatch record.
 - V13 enforces an owner-scoped exact consent pin: boolean true, the descriptor's exact policy
   version, and a non-null grant timestamp no later than the authorization-check instant. It revokes
   legacy boolean-only grants and rejects future-dated grants. `NO_NETWORK` Fake needs no consent;
-  `EXTERNAL_MEMO_CONTENT` gets zero gateway calls without a valid pin. The authorization/grant pair
-  is not yet snapshotted on the run or bound to the descriptor, and there is no grant/revoke API or
-  configured external provider.
+  `EXTERNAL_MEMO_CONTENT` gets zero gateway calls without a valid pin. V14 records a coherent
+  authorization/grant/token snapshot in each new final run and passes it with the descriptor to the
+  current gateway request. It still lacks a durable pre-call commit and immutable adapter binding,
+  and there is no grant/revoke API or configured external provider.
 - The gateway descriptor and every new run now carry server-owned transfer mode,
   gateway/provider/model/consent-policy versions, and outcome. Token/cost usage and bounded
   timeout/retry execution are not implemented.

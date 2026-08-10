@@ -54,8 +54,9 @@ class OwnerIsolationIntegrationTest extends PostgresIntegrationTestSupport {
         .update();
     db.sql(
             "insert into analysis_runs(id,owner_id,memo_id,memo_revision,route,status,"
-                + "schema_version,analyzer_version,ambiguity_reasons,created_at,completed_at) "
-                + "values(:id,:owner,:memo,1,'MOCK','APPLIED','1','fake-v1','[]',:now,:now)")
+                + "schema_version,analyzer_version,ambiguity_reasons,created_at,completed_at,"
+                + "cloud_execution_contract_version) "
+                + "values(:id,:owner,:memo,1,'MOCK','APPLIED','1','fake-v1','[]',:now,:now,'legacy-v0')")
         .param("id", otherRunId)
         .param("owner", otherOwnerId)
         .param("memo", otherMemoId)

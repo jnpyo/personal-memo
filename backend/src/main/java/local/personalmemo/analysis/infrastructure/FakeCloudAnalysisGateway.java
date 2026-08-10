@@ -20,6 +20,9 @@ public class FakeCloudAnalysisGateway implements CloudAnalysisGateway {
 
   @Override
   public CloudAnalysisResult enrich(CloudAnalysisRequest request) {
+    if (!DESCRIPTOR.equals(request.descriptor())) {
+      throw new IllegalArgumentException("The request descriptor does not match this gateway.");
+    }
     return CloudAnalysisResult.success(request.validatedLocalProposal());
   }
 }

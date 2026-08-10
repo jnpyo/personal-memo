@@ -83,10 +83,12 @@ operational approval. Resolved decisions are not implementation prompts.
 - Every new LOCAL, cloud-success, and fallback proposal rebuilds `providerMetadata` from one bounded
   server allow-list, so a provider cannot retain arbitrary metadata fields.
 - No consent grant/revoke HTTP API or actual external provider is configured. Top-k context,
-  asynchronous queued/running execution, retry, duration, token, and cost tracking remain open work.
-- The authorization instant/accepted grant are not snapshotted on the run or bound to the descriptor.
-  Bounded out-of-transaction timeout execution and a server-issued idempotent provider-request token
-  are also absent and remain hard gates before any real provider.
+  asynchronous queued/running execution, retry, duration, model-token, and cost tracking remain open work.
+- V14 stores an internal final-run authorization/grant snapshot and deterministic provider-request
+  token for actual gateway calls, while legacy rows remain explicitly unsnapshotted. It does not
+  durably commit that state before the call or bind descriptor lookup to immutable adapter execution.
+  Bounded out-of-transaction timeout/recovery and a preparation/finalization lifecycle remain hard
+  gates before any real provider.
 - No real local model or cloud provider is selected or connected without a separate product,
   privacy, evaluation, and cost decision.
 - Public regression and `VISIBLE_CHALLENGE` fixtures are diagnostic synthetic data, never blind

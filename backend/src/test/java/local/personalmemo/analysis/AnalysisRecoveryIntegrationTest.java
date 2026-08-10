@@ -229,10 +229,11 @@ class AnalysisRecoveryIntegrationTest extends PostgresIntegrationTestSupport {
             """
             insert into analysis_runs(
               id, owner_id, memo_id, memo_revision, route, status, schema_version,
-              analyzer_version, ambiguity_reasons, created_at, completed_at
+              analyzer_version, ambiguity_reasons, created_at, completed_at,
+              cloud_execution_contract_version
             ) values (
               :id, :ownerId, :memoId, 1, 'MOCK', :status, '1',
-              'fake-v1', '[]', :when, :when
+              'fake-v1', '[]', :when, :when, 'legacy-v0'
             )
             """)
         .param("id", runId)

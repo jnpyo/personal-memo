@@ -1,6 +1,7 @@
 package local.personalmemo.analysis;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -12,6 +13,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import local.personalmemo.analysis.domain.AnalysisProvenance;
 import local.personalmemo.analysis.domain.CloudAnalysisFailureReason;
@@ -28,6 +30,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -79,10 +82,12 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
     UUID memoId = createAmbiguousMemo("consent-no-network");
 
     var started = startAnalysis(memoId, "consent-no-network-start", 1);
+    var replay = startAnalysis(memoId, "consent-no-network-start", 1);
 
+    assertThat(response(replay)).isEqualTo(response(started));
     UUID runId = assertReviewRequired(started, memoId, "SUCCESS");
     assertEvidence(runId, NO_NETWORK, "SUCCESS");
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    assertGatewayRequestMatchesRun(runId, NO_NETWORK, null);
   }
 
   @Test
@@ -110,7 +115,7 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
 
     UUID runId = assertReviewRequired(started, memoId, "SUCCESS");
     assertEvidence(runId, EXTERNAL, "SUCCESS");
-    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    assertGatewayRequestMatchesRun(runId, EXTERNAL, Instant.parse("2026-08-10T00:00:00Z"));
   }
 
   @Test
@@ -192,6 +197,10 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
     assertThat(evidence.modelVersion()).isEqualTo("unavailable");
     assertThat(evidence.consentPolicyVersion()).isEqualTo("unavailable");
     assertThat(evidence.outcome()).isEqualTo("UNEXPECTED_FAILURE");
+    assertThat(evidence.executionContractVersion()).isEqualTo("snapshot-v1");
+    assertThat(evidence.authorizationCheckedAt()).isNull();
+    assertThat(evidence.acceptedConsentGrantedAt()).isNull();
+    assertThat(evidence.providerRequestToken()).isNull();
     assertThat(response(started).toString()).doesNotContain("descriptor secret");
     verify(cloudGateway, never()).enrich(any(CloudAnalysisRequest.class));
   }
@@ -247,6 +256,10 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
                   .put("toolCalls", 99)
                   .put("route", "spoofed-route")
                   .put("providerFailureText", "provider-secret-success-detail")
+                  .put("cloudExecutionContractVersion", "spoofed-contract-v9")
+                  .put("cloudProviderRequestToken", "pmr1_" + "9".repeat(64))
+                  .put("cloudAuthorizationCheckedAt", "2099-01-01T00:00:00Z")
+                  .put("cloudAcceptedConsentGrantedAt", "2098-01-01T00:00:00Z")
                   .put("rawMemoFragment", "must-not-be-stored");
               metadata.putArray("receivedRoutingReasons").add("spoofed-reason");
               return CloudAnalysisResult.success(proposal);
@@ -270,6 +283,21 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
     assertThat(response(proposal).at("/providerMetadata/route").asText()).isEqualTo("CLOUD_ENRICH");
     assertThat(response(proposal).at("/providerMetadata/providerFailureText").isMissingNode())
         .isTrue();
+    assertThat(
+            response(proposal)
+                .at("/providerMetadata/cloudExecutionContractVersion")
+                .isMissingNode())
+        .isTrue();
+    assertThat(response(proposal).at("/providerMetadata/cloudProviderRequestToken").isMissingNode())
+        .isTrue();
+    assertThat(
+            response(proposal).at("/providerMetadata/cloudAuthorizationCheckedAt").isMissingNode())
+        .isTrue();
+    assertThat(
+            response(proposal)
+                .at("/providerMetadata/cloudAcceptedConsentGrantedAt")
+                .isMissingNode())
+        .isTrue();
     assertThat(response(proposal).at("/providerMetadata/rawMemoFragment").isMissingNode()).isTrue();
     assertThat(response(proposal).at("/providerMetadata/receivedRoutingReasons").toString())
         .doesNotContain("spoofed");
@@ -290,12 +318,26 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
     UUID runId = UUID.fromString(response(started).path("id").asText());
     UUID proposalId = UUID.fromString(response(started).path("proposalId").asText());
     assertThat(response(started).path("status").asText()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(response(started).toString())
+        .doesNotContain(
+            "pmr1_",
+            "cloudExecutionContractVersion",
+            "cloudAuthorizationCheckedAt",
+            "cloudAcceptedConsentGrantedAt",
+            "cloudProviderRequestToken");
 
     var proposal = mvc.perform(get("/api/v1/analysis-proposals/{id}", proposalId)).andReturn();
     assertThat(proposal.getResponse().getStatus()).isEqualTo(200);
     assertThat(response(proposal).path("memoId").asText()).isEqualTo(memoId.toString());
     assertThat(response(proposal).at("/providerMetadata/cloudOutcome").asText())
         .isEqualTo(expectedCloudOutcome);
+    assertThat(response(proposal).toString())
+        .doesNotContain(
+            "pmr1_",
+            "cloudExecutionContractVersion",
+            "cloudAuthorizationCheckedAt",
+            "cloudAcceptedConsentGrantedAt",
+            "cloudProviderRequestToken");
     assertThat(response(proposal).toString()).doesNotContain("provider failure");
     assertThat(
             db.sql("select content from memo_revisions where memo_id=:memoId and owner_id=:ownerId")
@@ -322,6 +364,53 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
     assertThat(evidence.modelVersion()).isEqualTo(descriptor.modelVersion());
     assertThat(evidence.consentPolicyVersion()).isEqualTo(descriptor.consentPolicyVersion());
     assertThat(evidence.outcome()).isEqualTo(expectedOutcome);
+    assertThat(evidence.executionContractVersion()).isEqualTo("snapshot-v1");
+    if (descriptor.transferMode() == CloudTransferMode.NO_NETWORK) {
+      assertThat(evidence.authorizationCheckedAt()).isNull();
+      assertThat(evidence.acceptedConsentGrantedAt()).isNull();
+      assertThat(evidence.providerRequestToken()).matches("^pmr1_[0-9a-f]{64}$");
+    } else if ("CONSENT_REQUIRED".equals(expectedOutcome)) {
+      assertThat(evidence.authorizationCheckedAt()).isNotNull();
+      assertThat(evidence.acceptedConsentGrantedAt()).isNull();
+      assertThat(evidence.providerRequestToken()).isNull();
+    } else {
+      assertThat(evidence.authorizationCheckedAt()).isNotNull();
+      assertThat(evidence.acceptedConsentGrantedAt()).isNotNull();
+      assertThat(evidence.acceptedConsentGrantedAt())
+          .isBeforeOrEqualTo(evidence.authorizationCheckedAt());
+      assertThat(evidence.providerRequestToken()).matches("^pmr1_[0-9a-f]{64}$");
+    }
+    if (evidence.providerRequestToken() != null) {
+      assertThat(
+              db.sql(
+                      "select proposal_json::text from analysis_proposals where analysis_run_id=:runId")
+                  .param("runId", runId)
+                  .query(String.class)
+                  .single())
+          .doesNotContain(evidence.providerRequestToken());
+    }
+  }
+
+  private void assertGatewayRequestMatchesRun(
+      UUID runId, CloudGatewayDescriptor descriptor, Instant acceptedGrant) {
+    ArgumentCaptor<CloudAnalysisRequest> captor =
+        ArgumentCaptor.forClass(CloudAnalysisRequest.class);
+    verify(cloudGateway, times(1)).enrich(captor.capture());
+    CloudAnalysisRequest request = captor.getValue();
+    CloudEvidence evidence = readEvidence(runId);
+
+    assertThat(request.descriptor()).isEqualTo(descriptor);
+    assertThat(request.providerRequestToken().value()).isEqualTo(evidence.providerRequestToken());
+    if (acceptedGrant == null) {
+      assertThat(request.authorizationCheckedAt()).isEmpty();
+      assertThat(request.acceptedConsentGrantedAt()).isEmpty();
+    } else {
+      assertThat(request.authorizationCheckedAt()).isPresent();
+      assertThat(request.authorizationCheckedAt().orElseThrow())
+          .isCloseTo(evidence.authorizationCheckedAt(), within(1, ChronoUnit.MICROS));
+      assertThat(request.acceptedConsentGrantedAt()).contains(acceptedGrant);
+      assertThat(evidence.acceptedConsentGrantedAt()).isEqualTo(acceptedGrant);
+    }
   }
 
   private CloudEvidence readEvidence(UUID runId) {
@@ -334,7 +423,11 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
                    cloud_provider_id,
                    cloud_model_version,
                    cloud_consent_policy_version,
-                   cloud_outcome
+                   cloud_outcome,
+                   cloud_execution_contract_version,
+                   cloud_authorization_checked_at,
+                   cloud_accepted_consent_granted_at,
+                   cloud_provider_request_token
               from analysis_runs
              where id = :runId
                and owner_id = :ownerId
@@ -351,8 +444,16 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
                     resultSet.getString("cloud_provider_id"),
                     resultSet.getString("cloud_model_version"),
                     resultSet.getString("cloud_consent_policy_version"),
-                    resultSet.getString("cloud_outcome")))
+                    resultSet.getString("cloud_outcome"),
+                    resultSet.getString("cloud_execution_contract_version"),
+                    instantOrNull(resultSet.getTimestamp("cloud_authorization_checked_at")),
+                    instantOrNull(resultSet.getTimestamp("cloud_accepted_consent_granted_at")),
+                    resultSet.getString("cloud_provider_request_token")))
         .single();
+  }
+
+  private Instant instantOrNull(Timestamp value) {
+    return value == null ? null : value.toInstant();
   }
 
   private void grantCurrentOwner(String policyVersion) {
@@ -426,5 +527,9 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
       String providerId,
       String modelVersion,
       String consentPolicyVersion,
-      String outcome) {}
+      String outcome,
+      String executionContractVersion,
+      Instant authorizationCheckedAt,
+      Instant acceptedConsentGrantedAt,
+      String providerRequestToken) {}
 }

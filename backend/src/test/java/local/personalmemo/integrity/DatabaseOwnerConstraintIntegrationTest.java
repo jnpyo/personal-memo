@@ -38,10 +38,11 @@ class DatabaseOwnerConstraintIntegrationTest extends PostgresIntegrationTestSupp
                     """
                     insert into analysis_runs(
                       id, owner_id, memo_id, memo_revision, route, status, schema_version,
-                      analyzer_version, ambiguity_reasons, created_at, completed_at
+                      analyzer_version, ambiguity_reasons, created_at, completed_at,
+                      cloud_execution_contract_version
                     ) values (
                       :id, :ownerId, :memoId, 1, 'MOCK', 'REVIEW_REQUIRED', '1',
-                      'fake-v1', '[]', :now, :now
+                      'fake-v1', '[]', :now, :now, 'legacy-v0'
                     )
                     """)
                 .param("id", UUID.randomUUID())
@@ -180,9 +181,11 @@ class DatabaseOwnerConstraintIntegrationTest extends PostgresIntegrationTestSupp
             """
             insert into analysis_runs(
               id, owner_id, memo_id, memo_revision, route, status, schema_version,
-              analyzer_version, ambiguity_reasons, created_at, completed_at
+              analyzer_version, ambiguity_reasons, created_at, completed_at,
+              cloud_execution_contract_version
             ) values (
-              :id, :owner, :memo, 1, 'MOCK', 'APPLIED', '1', 'fake-v1', '[]', :now, :now
+              :id, :owner, :memo, 1, 'MOCK', 'APPLIED', '1', 'fake-v1', '[]', :now, :now,
+              'legacy-v0'
             )
             """)
         .param("id", run)
