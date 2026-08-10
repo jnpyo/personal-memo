@@ -93,6 +93,9 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 - If the analyzer returns `UNKNOWN` or different types tie for the top score, skip the yes path and ask the user to choose a supported type.
 - Present compact chips for type and tag candidates.
 - Show the interpreted date alongside the original date expression.
+- Associate a proposed due date with a specific task candidate. If that mapping is absent,
+  imprecise, or incompatible after editing, require field-level review instead of guessing by list
+  order or candidate count.
 - Explain only uncertain fields, not the entire model reasoning.
 - Allow partial apply.
 

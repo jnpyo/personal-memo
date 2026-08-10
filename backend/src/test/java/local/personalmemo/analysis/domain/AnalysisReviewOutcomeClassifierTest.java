@@ -85,6 +85,81 @@ class AnalysisReviewOutcomeClassifierTest {
   }
 
   @Test
+  void versionTwoUsesTheExplicitBindingForExactAndCorrectedDueOutcomes() {
+    proposal = versionTwoTaskProposal();
+    context = versionTwoReviewContext();
+
+    var exact = classifier.classify(proposal, selection, context);
+
+    assertThat(exact.outcome()).isEqualTo(Outcome.EXACT);
+    assertThat(exact.correctedFields().any()).isFalse();
+
+    ((ObjectNode) selection.path("items").get(0)).putNull("due");
+    var corrected = classifier.classify(proposal, selection, context);
+
+    assertThat(corrected.outcome()).isEqualTo(Outcome.CORRECTED);
+    assertThat(corrected.correctedFields().due()).isTrue();
+    assertThat(corrected.correctedFields().type()).isFalse();
+    assertThat(corrected.correctedFields().title()).isFalse();
+    assertThat(corrected.correctedFields().tags()).isFalse();
+    assertThat(corrected.correctedFields().items()).isFalse();
+  }
+
+  @Test
+  void versionTwoUnboundPreciseAndImpreciseDatesRequireUserResolution() {
+    proposal = versionTwoTaskProposal();
+    context = versionTwoReviewContext();
+    ((ObjectNode) proposal.path("itemCandidates").get(0)).putNull("dueDateCandidateId");
+    ((ObjectNode) selection.path("items").get(0)).putNull("due");
+
+    assertThat(classifier.classify(proposal, selection, context).outcome())
+        .isEqualTo(Outcome.USER_RESOLVED);
+
+    proposal = versionTwoTaskProposal();
+    proposal
+        .putArray("dateCandidates")
+        .addObject()
+        .put("candidateId", "date-approximate")
+        .put("surfaceText", "around the weekend")
+        .putNull("value")
+        .put("precision", "APPROXIMATE")
+        .put("timeSpecified", false)
+        .put("confidence", 0.5)
+        .putArray("ambiguityReasons")
+        .add("IMPRECISE_DATE");
+    proposal.putArray("ambiguityReasons").add("IMPRECISE_DATE");
+    ((ObjectNode) proposal.path("itemCandidates").get(0)).putNull("dueDateCandidateId");
+
+    assertThat(classifier.classify(proposal, selection, context).outcome())
+        .isEqualTo(Outcome.USER_RESOLVED);
+  }
+
+  @Test
+  void versionTwoDanglingAndDuplicateDateIdentitiesAreUnclassifiable() {
+    proposal = versionTwoTaskProposal();
+    context = versionTwoReviewContext();
+    ((ObjectNode) proposal.path("itemCandidates").get(0)).put("dueDateCandidateId", "date-missing");
+
+    assertThat(classifier.classify(proposal, selection, context).outcome())
+        .isEqualTo(Outcome.UNCLASSIFIABLE);
+
+    proposal = versionTwoTaskProposal();
+    proposal
+        .withArray("dateCandidates")
+        .addObject()
+        .put("candidateId", "date-1")
+        .put("surfaceText", "11.30")
+        .put("value", "2026-11-30")
+        .put("precision", "DATE_ONLY")
+        .put("timeSpecified", false)
+        .put("confidence", 0.7)
+        .putArray("ambiguityReasons");
+
+    assertThat(classifier.classify(proposal, selection, context).outcome())
+        .isEqualTo(Outcome.UNCLASSIFIABLE);
+  }
+
+  @Test
   void exactDoesNotGuessADueForMixedItemsOrAnImpreciseDate() {
     proposal
         .withArray("itemCandidates")
@@ -330,7 +405,18 @@ class AnalysisReviewOutcomeClassifierTest {
     return value;
   }
 
+  private ObjectNode versionTwoTaskProposal() {
+    ObjectNode value = taskProposal().put("schemaVersion", "2");
+    ((ObjectNode) value.path("dateCandidates").get(0)).put("candidateId", "date-1");
+    ((ObjectNode) value.path("itemCandidates").get(0)).put("dueDateCandidateId", "date-1");
+    return value;
+  }
+
   private ReviewContext reviewContext() {
     return new ReviewContext("1", MEMO_ID, 1, MEMO_ID, 1);
+  }
+
+  private ReviewContext versionTwoReviewContext() {
+    return new ReviewContext("2", MEMO_ID, 1, MEMO_ID, 1);
   }
 }

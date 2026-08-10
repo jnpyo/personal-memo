@@ -46,6 +46,37 @@ public class AnalysisApplicationValidator {
     return new ValidatedApply(request.expectedMemoRevision(), selectedType, title, tags, items);
   }
 
+  public ValidatedApply canonicalizeDueTimeZone(ValidatedApply selection, String sourceTimeZone) {
+    String canonicalTimeZone = requireTimeZone(sourceTimeZone, "memo source time zone");
+    List<ValidatedItem> items =
+        selection.items().stream()
+            .map(
+                item -> {
+                  ValidatedDue due = item.due();
+                  if (due == null) {
+                    return item;
+                  }
+                  return new ValidatedItem(
+                      item.kind(),
+                      item.title(),
+                      new ValidatedDue(
+                          due.surfaceText(),
+                          due.originalValue(),
+                          due.precision(),
+                          canonicalTimeZone,
+                          due.timeSpecified(),
+                          due.dueInstant(),
+                          due.dueLocalDate()));
+                })
+            .toList();
+    return new ValidatedApply(
+        selection.expectedMemoRevision(),
+        selection.selectedType(),
+        selection.title(),
+        selection.selectedTags(),
+        items);
+  }
+
   private List<ValidatedTag> validateTags(Apply request) {
     List<ValidatedTag> tags = new ArrayList<>();
     Set<UUID> existingIds = new HashSet<>();
@@ -100,9 +131,7 @@ public class AnalysisApplicationValidator {
     if (!DATE_PRECISIONS.contains(due.precision())) {
       throw invalid("INVALID_DATE_PRECISION", "The due date precision is not supported.");
     }
-    if (!ZoneId.getAvailableZoneIds().contains(due.timeZone())) {
-      throw invalid("INVALID_TIME_ZONE", "The due timeZone must be a recognized IANA identifier.");
-    }
+    requireTimeZone(due.timeZone(), "items.due.timeZone");
 
     return switch (due.precision()) {
       case "DATE_ONLY" -> validateDateOnly(due, surfaceText);
@@ -147,6 +176,13 @@ public class AnalysisApplicationValidator {
           "An approximate or unknown due expression cannot be stored as an exact date or time.");
     }
     return new ValidatedDue(surfaceText, null, due.precision(), due.timeZone(), false, null, null);
+  }
+
+  private String requireTimeZone(String timeZone, String field) {
+    if (!ZoneId.getAvailableZoneIds().contains(timeZone)) {
+      throw invalid("INVALID_TIME_ZONE", field + " must be a recognized IANA identifier.");
+    }
+    return timeZone;
   }
 
   private String requireItemKind(String rawKind, String field) {

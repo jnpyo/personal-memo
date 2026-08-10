@@ -24,6 +24,12 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' };
 export const AUTHENTICATION_REQUIRED_EVENT = 'personal-memo:authentication-required';
 export const SESSION_OWNER_CHANGED_EVENT = 'personal-memo:session-owner-changed';
 export const EXPECTED_OWNER_ID_HEADER = 'X-Expected-Owner-Id';
+export const ANALYSIS_PROPOSAL_SCHEMA_VERSION_HEADER =
+  'X-Analysis-Proposal-Schema-Version';
+const ANALYSIS_PROPOSAL_SCHEMA_VERSION = '2';
+const ANALYSIS_PROPOSAL_HEADERS = {
+  [ANALYSIS_PROPOSAL_SCHEMA_VERSION_HEADER]: ANALYSIS_PROPOSAL_SCHEMA_VERSION,
+};
 const SESSION_OWNER_CHANGED_CODE = 'SESSION_OWNER_CHANGED';
 const LOGOUT_PENDING_STORAGE_KEY = 'personal-memo.logout-pending.v1';
 const LOGOUT_EXPECTED_OWNER_STORAGE_KEY = 'personal-memo.logout-expected-owner.v1';
@@ -395,7 +401,10 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
 
     proposal: async (proposalId: string, expectedIdentity?: ExpectedProposalIdentity) =>
       decodeProposal(
-        await request<unknown>(`/api/v1/analysis-proposals/${proposalId}`),
+        await request<unknown>(`/api/v1/analysis-proposals/${proposalId}`, {
+          cache: 'no-store',
+          headers: ANALYSIS_PROPOSAL_HEADERS,
+        }),
         expectedIdentity,
       ),
 
@@ -403,6 +412,7 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
       decodeProposalSummaries(
         await request<unknown>(
           `/api/v1/analysis-proposals?status=${status}&limit=${Math.min(Math.max(limit, 1), 50)}`,
+          { cache: 'no-store', headers: ANALYSIS_PROPOSAL_HEADERS },
         ),
         status,
       ),

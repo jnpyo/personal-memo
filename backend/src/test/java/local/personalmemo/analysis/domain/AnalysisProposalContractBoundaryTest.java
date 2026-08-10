@@ -275,6 +275,7 @@ class AnalysisProposalContractBoundaryTest {
     }
     if (Set.of("APPROXIMATE", "UNKNOWN").contains(precision)) {
       date.putArray("ambiguityReasons").add("IMPRECISE_DATE");
+      ((ObjectNode) proposal.at("/itemCandidates/0")).putNull("dueDateCandidateId");
       ArrayNode summary = (ArrayNode) proposal.path("ambiguityReasons");
       summary.add("IMPRECISE_DATE");
     }

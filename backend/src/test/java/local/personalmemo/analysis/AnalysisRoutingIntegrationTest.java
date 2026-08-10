@@ -30,7 +30,7 @@ import tools.jackson.databind.node.ObjectNode;
 @PostgresIntegration
 class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
   private static final AnalysisProvenance FAKE_PROVENANCE =
-      new AnalysisProvenance("fake-v5", "none", "none", "none");
+      new AnalysisProvenance("fake-v6", "none", "none", "none");
 
   @MockitoBean private LocalAnalyzer localAnalyzer;
   @MockitoBean private CloudAnalysisGateway cloudGateway;
@@ -42,6 +42,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
   void useDeterministicFakesByDefault() {
     deterministicAnalyzer = new FakeAnalyzer(json);
     fakeCloudGateway = new FakeCloudAnalysisGateway();
+    when(localAnalyzer.proposalSchemaVersion()).thenReturn("2");
     when(localAnalyzer.provenance()).thenReturn(FAKE_PROVENANCE);
     when(localAnalyzer.analyze(
             any(UUID.class), anyInt(), anyString(), any(Instant.class), anyString()))
@@ -415,6 +416,52 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void localProposalCannotDowngradeTheServerOwnedSchemaContract() throws Exception {
+    UUID memoId = UUID.randomUUID();
+    String raw = "2026.11.25 18:00 OS 과제 제출";
+    createMemo(memoId, "route-local-schema-create", raw);
+    when(localAnalyzer.analyze(
+            any(UUID.class), anyInt(), anyString(), any(Instant.class), anyString()))
+        .thenAnswer(
+            invocation ->
+                deterministicAnalyzer
+                    .analyze(
+                        invocation.getArgument(0),
+                        invocation.getArgument(1),
+                        invocation.getArgument(2),
+                        invocation.getArgument(3),
+                        invocation.getArgument(4))
+                    .put("schemaVersion", "1"));
+
+    var failed = startAnalysis(memoId, "route-local-schema-start", 1);
+
+    assertThat(failed.getResponse().getStatus()).isEqualTo(422);
+    assertThat(response(failed).path("code").asText()).isEqualTo("INVALID_ANALYSIS_PROPOSAL");
+    verify(cloudGateway, never()).enrich(any(CloudAnalysisRequest.class));
+    assertFailedAnalysisLeftOnlyRawMemo(memoId, raw);
+  }
+
+  @Test
+  void cloudProposalCannotDowngradeTheServerOwnedSchemaContract() throws Exception {
+    UUID memoId = UUID.randomUUID();
+    String raw = "전에 교수님이 말한 거 다음 주쯤 올리기";
+    createMemo(memoId, "route-cloud-schema-create", raw);
+    when(cloudGateway.enrich(any(CloudAnalysisRequest.class)))
+        .thenAnswer(
+            invocation ->
+                ((CloudAnalysisRequest) invocation.getArgument(0))
+                    .validatedLocalProposal()
+                    .put("schemaVersion", "1"));
+
+    var failed = startAnalysis(memoId, "route-cloud-schema-start", 1);
+
+    assertThat(failed.getResponse().getStatus()).isEqualTo(422);
+    assertThat(response(failed).path("code").asText()).isEqualTo("INVALID_ANALYSIS_PROPOSAL");
+    verify(cloudGateway, times(1)).enrich(any(CloudAnalysisRequest.class));
+    assertFailedAnalysisLeftOnlyRawMemo(memoId, raw);
+  }
+
+  @Test
   void cloudProposalCannotRemoveServerOwnedProvenance() throws Exception {
     UUID memoId = UUID.randomUUID();
     String raw = "전에 교수님이 말한 거 다음 주쯤 올리기";
@@ -476,7 +523,8 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
   private void assertRun(UUID runId, String expectedRoute) {
     RunState state =
         db.sql(
-                "select route, status, analyzer_version, prompt_version, local_model_version, "
+                "select route, status, schema_version, analyzer_version, prompt_version, "
+                    + "local_model_version, "
                     + "embedding_model_version, routing_policy_version "
                     + "from analysis_runs "
                     + "where id=:runId and owner_id=:ownerId")
@@ -487,6 +535,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
                     new RunState(
                         resultSet.getString("route"),
                         resultSet.getString("status"),
+                        resultSet.getString("schema_version"),
                         resultSet.getString("analyzer_version"),
                         resultSet.getString("prompt_version"),
                         resultSet.getString("local_model_version"),
@@ -495,7 +544,8 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
             .single();
     assertThat(state.route()).isEqualTo(expectedRoute);
     assertThat(state.status()).isEqualTo("REVIEW_REQUIRED");
-    assertThat(state.analyzerVersion()).isEqualTo("fake-v5");
+    assertThat(state.schemaVersion()).isEqualTo("2");
+    assertThat(state.analyzerVersion()).isEqualTo("fake-v6");
     assertThat(state.promptVersion()).isEqualTo("none");
     assertThat(state.localModelVersion()).isEqualTo("none");
     assertThat(state.embeddingModelVersion()).isEqualTo("none");
@@ -542,6 +592,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
   private record RunState(
       String route,
       String status,
+      String schemaVersion,
       String analyzerVersion,
       String promptVersion,
       String localModelVersion,

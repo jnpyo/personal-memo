@@ -52,8 +52,9 @@ publishing raw evaluation text.
 Metrics are reported separately for regression, `VISIBLE_CHALLENGE`, and the combined set, keyed by
 `analyzerVersion`, `deterministicRulesVersion`, and `routingPolicyVersion`.
 
-- **Schema/domain-valid rate**: proposals accepted by the version-1 proposal JSON Schema and the
-  production domain validator.
+- **Schema/domain-valid rate**: proposals accepted by the supported proposal JSON Schema and the
+  production domain validator. Current `fake-v6` output is schema v2; recoverable v1 remains part of
+  the compatibility contract rather than the generated baseline format.
 - **Route confusion**: expected/actual `LOCAL_REVIEW` and `CLOUD_ENRICH` counts and accuracy.
 - **Wrong local**: an actual `LOCAL_REVIEW` result whose schema, route, preferred type, or complete
   ambiguity-signal set disagrees with the fixed gold label. This approximates the primary safety
@@ -64,6 +65,12 @@ Metrics are reported separately for regression, `VISIBLE_CHALLENGE`, and the com
   invented precise-date safety failures, and overflow that was incorrectly routed to local review.
 - **Item**: resolution, complete acceptable-set agreement, and title/action/object/source-span
   agreement without copying analyzer-generated values into gold.
+
+Proposal schema v2 supports explicit TASK-to-precise-date candidate references, but evaluation
+dataset v2 has no binding labels. Reports therefore publish
+`dateItemDueBinding: SUPPORTED_NOT_SCORED_DATASET_V2`. This is a capability statement, not a
+precision, recall, safety, or pass result. Binding quality requires a separately reviewed label
+policy and independently adjudicated evaluation dataset v3.
 
 Date, item, item-source-span, and semantic false-confident-local metrics are now reported. Their quality
 rates remain diagnostic until the labels have independent two-person adjudication and an external
@@ -78,10 +85,13 @@ missing fallback behavior with general action, reference, event, weekday/time, a
 rules. It is protected by different-wording unit cases, negative substring/date cases, and a source
 check that rejects copied full challenge sentences or three-token challenge branches.
 
-`fake-v5` / `korean-rules-v3` adds source-aligned UTF-16 item spans, sequential action facets, explicit
-three-item truncation after full detection, and fail-closed alternative handling. These changes do not
-turn the public fixture into blind evidence; the generated version-2 report remains the only current
-measurement artifact and its item quality fields remain diagnostic.
+`fake-v6` / `korean-rules-v4` retains source-aligned UTF-16 item spans, sequential action facets,
+explicit three-item truncation after full detection, and fail-closed alternative handling. It emits
+proposal schema v2 with proposal-local date IDs and nullable TASK due references. Historical schema
+v1 proposals remain recoverable, while the new default-review policy uses explicit v2 references.
+These changes do not turn the public fixture into blind evidence; the generated version-2 report
+remains the only current measurement artifact, its item quality fields remain diagnostic, and it
+does not score binding quality.
 
 The current generated report has schema/domain-valid proposals for all 12 regression and 12 visible
 challenge cases. Item cardinality matches in 12/12 cases in each split, and required source spans match
@@ -116,6 +126,11 @@ false-confident-local counts remain report-only until the labels receive two-per
 an independently held blind run. Thresholds must be approved before examining that blind run; they
 must not be chosen to fit observed output.
 
+The regression hard gate does not contain a binding-quality metric. Schema/domain validation does
+hard-fail malformed v2 candidate IDs, dangling references, non-TASK bindings, and references to
+approximate or unknown dates. Whether a structurally valid binding is semantically correct remains
+unscored under dataset v2 and must not be inferred from a green build.
+
 ## Separately held blind evaluation
 
 The external blind dataset is a separately controlled release, not a third public fixture split.
@@ -146,6 +161,12 @@ blind-gate policy is implemented. `sourcePolicy` is a curator attestation, not c
 independent authorship. The curator-assigned `releaseId` must be an opaque label; it must
 not encode raw text, a case identifier, or a content/ID hash. Blind case and gold identifiers must
 contain at least four characters so the summary's substring leakage check remains fail-closed.
+
+This version-2 blind envelope can score its existing date and item fields but has no date-to-item
+binding labels. Its aggregate summary therefore also reports
+`SUPPORTED_NOT_SCORED_DATASET_V2`, and no pre-registered policy may treat that capability value as a
+binding metric. A future binding gate must use an independently adjudicated version-3 case contract
+and freeze its binding thresholds before the first candidate run.
 
 From `backend/`, run it only against a clean, fixed candidate commit:
 
@@ -221,9 +242,11 @@ A real provider remains blocked until all of the following are true:
 1. At least 1–2 weeks and roughly 50–100 personally reviewed memos exist; exact and corrected
    outcomes must be distinguishable by latest `APPLIED` versus `UNDONE` state, while rejects and
    postponements remain separate, without exposing memo text.
-2. The representative evaluation set is expanded beyond fixture-specific rules, date/item gold is
-   independently adjudicated, tag gold is complete for the provider task, and the wrong-local safety
-   threshold is approved from measured results rather than chosen after seeing provider output.
+2. The representative evaluation set is expanded beyond fixture-specific rules, version-2
+   date/item gold is independently adjudicated, a version-3 binding-label policy and dataset are
+   independently adjudicated before binding quality is gated, tag gold is complete for the provider
+   task, and the wrong-local safety threshold is approved from measured results rather than chosen
+   after seeing provider output.
 3. Memo-text transfer consent, allowed provider/region, retention/deletion policy, provider and model
    provenance, per-request context/tool/token/time limits, monthly budget, and outage behavior are
    explicitly decided and enforced fail-closed.

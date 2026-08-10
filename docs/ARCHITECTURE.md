@@ -140,6 +140,25 @@ Each module may contain `api`, `application`, `domain`, and `infrastructure` pac
 - `sync`: client mutation handling and later cursor synchronization
 - `audit`: provenance, analysis applications and undo
 
+The analysis contract accepts recoverable proposal schema v1 and current schema v2. Version 2
+identifies date candidates and lets a TASK candidate reference one precise due-date candidate; the
+review projection never derives that relation from array order. Both shapes remain untrusted JSONB
+until the ordinary owner-scoped, idempotent application transaction succeeds. The existing run
+schema-version column and proposal JSONB carry this evolution, so no relational migration or
+historical JSON rewrite is introduced for the v2 contract.
+
+Proposal reads negotiate only the response representation. A missing
+`X-Analysis-Proposal-Schema-Version` header, or value `1`, projects stored v2 JSON to strict v1 in
+memory so an installed older PWA remains usable; value `2` preserves the stored version. The server
+never upgrades historical v1 JSON, never rewrites the persisted proposal or hash during projection,
+and returns `Cache-Control: no-store` plus `Vary` on the schema header.
+
+The apply request's due `timeZone` remains a validated compatibility field, not an authority over
+canonical context. Inside the application transaction the backend replaces it with the locked
+immutable memo revision's `source_time_zone` before task persistence. This keeps date-only overdue
+semantics tied to capture context even when review happens later on another device or in another
+zone.
+
 ## Cloud Agent orchestration
 
 The default cloud path should be one prepared request rather than an unconstrained autonomous loop.

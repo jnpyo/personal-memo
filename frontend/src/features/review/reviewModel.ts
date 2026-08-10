@@ -89,6 +89,24 @@ export function usableDateCandidates(proposal: Proposal): DateCandidate[] {
     });
 }
 
+export function sameDateCandidate(left: DateCandidate, right: DateCandidate): boolean {
+  if (
+    left.candidateId !== undefined &&
+    left.candidateId !== null &&
+    right.candidateId !== undefined &&
+    right.candidateId !== null &&
+    left.candidateId !== right.candidateId
+  ) {
+    return false;
+  }
+  return (
+    left.surfaceText === right.surfaceText &&
+    left.value === right.value &&
+    left.precision === right.precision &&
+    left.timeSpecified === right.timeSpecified
+  );
+}
+
 export function createCustomDateOnly(): DateCandidate {
   return {
     surfaceText: '사용자 지정 날짜',
@@ -119,7 +137,8 @@ export function createReviewDraft(proposalId: string, proposal: Proposal): Revie
   };
   const projectedDraft = selectedType ? changeSelectedType(baseDraft, selectedType) : baseDraft;
   const usableDates = usableDateCandidates(proposal);
-  const unambiguousDue =
+  const unambiguousLegacyDue =
+    proposal.schemaVersion === '1' &&
     projectedDraft.items.length === 1 &&
     projectedDraft.items[0].kind === 'TASK' &&
     usableDates.length === 1
@@ -127,11 +146,56 @@ export function createReviewDraft(proposalId: string, proposal: Proposal): Revie
       : null;
   return {
     ...projectedDraft,
-    items: projectedDraft.items.map((item) => ({
-      ...item,
-      due: item.kind === 'TASK' && unambiguousDue ? cloneDate(unambiguousDue) : null,
-    })),
+    items: projectedDraft.items.map((item) => {
+      let due: DateCandidate | null = null;
+      if (item.kind === 'TASK') {
+        if (proposal.schemaVersion === '2' && item.dueDateCandidateId) {
+          const explicitDue = usableDates.find(
+            (candidate) => candidate.candidateId === item.dueDateCandidateId,
+          );
+          due = explicitDue ? cloneDate(explicitDue) : null;
+        } else if (unambiguousLegacyDue) {
+          due = cloneDate(unambiguousLegacyDue);
+        }
+      }
+      return { ...item, due };
+    }),
   };
+}
+
+export function requiresExplicitDateMapping(review: ReviewDraft): boolean {
+  const dates = usableDateCandidates(review.proposal);
+  if (review.proposal.dateCandidates.length === 0) return false;
+  if (dates.length !== review.proposal.dateCandidates.length) return true;
+
+  if (review.proposal.schemaVersion === '1') {
+    if (review.items.length !== 1 || review.items[0].kind !== 'TASK' || dates.length !== 1) {
+      return true;
+    }
+    return review.items[0].due === null || !sameDateCandidate(review.items[0].due, dates[0]);
+  }
+
+  const referencedDateIds = new Set<string>();
+  for (const proposedItem of review.proposal.itemCandidates) {
+    const dueDateCandidateId = proposedItem.dueDateCandidateId;
+    if (!dueDateCandidateId) continue;
+    const expectedDate = dates.find((candidate) => candidate.candidateId === dueDateCandidateId);
+    const draftItem = review.items.find((item) => item.candidateId === proposedItem.candidateId);
+    if (
+      !expectedDate ||
+      !draftItem ||
+      draftItem.kind !== 'TASK' ||
+      !draftItem.due ||
+      !sameDateCandidate(draftItem.due, expectedDate)
+    ) {
+      return true;
+    }
+    referencedDateIds.add(dueDateCandidateId);
+  }
+
+  return dates.some(
+    (candidate) => !candidate.candidateId || !referencedDateIds.has(candidate.candidateId),
+  );
 }
 
 export function changeSelectedType(review: ReviewDraft, selectedType: ItemKind): ReviewDraft {

@@ -52,6 +52,7 @@ class AnalysisReviewOutcomeIntegrationTest extends PostgresIntegrationTestSuppor
     List<Map<String, Object>> correctedItems =
         (List<Map<String, Object>>) correctedApplication.get("items");
     correctedItems.getFirst().put("title", "사용자가 고친 제목");
+    correctedItems.getFirst().put("due", null);
     var correctedApplied =
         applyProposal(correctedProposal, "corrected-application", correctedApplication);
     assertThat(correctedApplied.getResponse().getStatus()).isEqualTo(200);
@@ -97,7 +98,7 @@ class AnalysisReviewOutcomeIntegrationTest extends PostgresIntegrationTestSuppor
     assertThat(result.getResponse().getStatus()).isEqualTo(200);
     assertThat(result.getResponse().getHeader("Cache-Control")).contains("no-store");
     assertThat(body.path("schemaVersion").asText()).isEqualTo("1");
-    assertThat(body.path("comparisonPolicyVersion").asText()).isEqualTo("review-default-v2");
+    assertThat(body.path("comparisonPolicyVersion").asText()).isEqualTo("review-default-v3");
     assertThat(body.at("/cohort/basis").asText()).isEqualTo("PROPOSAL_CREATED_AT");
     assertThat(body.at("/cohort/days").asInt()).isEqualTo(14);
     assertThat(body.at("/cohort/maxProposals").asInt()).isEqualTo(1000);
@@ -114,6 +115,7 @@ class AnalysisReviewOutcomeIntegrationTest extends PostgresIntegrationTestSuppor
     assertThat(body.at("/outcomes/userResolved").asInt()).isEqualTo(1);
     assertThat(body.at("/outcomes/unclassifiable").asInt()).isZero();
     assertThat(body.at("/outcomes/correctedFields/title").asInt()).isEqualTo(1);
+    assertThat(body.at("/outcomes/correctedFields/due").asInt()).isEqualTo(1);
     assertThat(sum(body.path("byAnalysisVersion"), "/proposals/total")).isEqualTo(5);
     assertThat(sum(body.path("byAnalysisVersion"), "/outcomes/exact")).isEqualTo(2);
     assertThat(body.toString())
@@ -134,21 +136,23 @@ class AnalysisReviewOutcomeIntegrationTest extends PostgresIntegrationTestSuppor
 
   @Test
   void persistedSchemaAndApplicationContextCorruptionFailClosed() throws Exception {
-    UUID malformedMemo = UUID.randomUUID();
-    UUID malformedProposal =
-        createProposal(malformedMemo, "malformed-outcome", "11.25 OS assignment submit");
-    var malformedApplied =
+    UUID danglingBindingMemo = UUID.randomUUID();
+    UUID danglingBindingProposal =
+        createProposal(danglingBindingMemo, "dangling-binding-outcome", "11.25 OS과제 제출");
+    var danglingBindingApplied =
         applyProposal(
-            malformedProposal,
-            "malformed-outcome-apply",
-            defaultApplication(proposal(malformedProposal)));
-    assertThat(malformedApplied.getResponse().getStatus()).isEqualTo(200);
+            danglingBindingProposal,
+            "dangling-binding-outcome-apply",
+            defaultApplication(proposal(danglingBindingProposal)));
+    assertThat(danglingBindingApplied.getResponse().getStatus()).isEqualTo(200);
     assertThat(
             db.sql(
                     "update analysis_proposals "
-                        + "set proposal_json=jsonb_set(proposal_json,'{futureRootField}','true'::jsonb,true) "
+                        + "set proposal_json=jsonb_set(proposal_json,"
+                        + "'{itemCandidates,0,dueDateCandidateId}',"
+                        + "'\"date-missing\"'::jsonb,false) "
                         + "where id=:proposal and owner_id=:owner")
-                .param("proposal", malformedProposal)
+                .param("proposal", danglingBindingProposal)
                 .param("owner", OWNER_ID)
                 .update())
         .isEqualTo(1);
@@ -272,7 +276,13 @@ class AnalysisReviewOutcomeIntegrationTest extends PostgresIntegrationTestSuppor
             .filter(candidate -> "TASK".equals(candidate.path("kind").asText()))
             .count();
     JsonNode dates = proposal.path("dateCandidates");
-    JsonNode preferredDue = taskCount == 1 && dates.size() == 1 ? dates.get(0) : null;
+    JsonNode legacyPreferredDue = taskCount == 1 && dates.size() == 1 ? dates.get(0) : null;
+    Map<String, JsonNode> datesById = new LinkedHashMap<>();
+    for (JsonNode date : dates) {
+      if (date.path("candidateId").isTextual()) {
+        datesById.put(date.path("candidateId").asText(), date);
+      }
+    }
     List<Map<String, Object>> items = new ArrayList<>();
     int index = 0;
     for (JsonNode candidate : proposal.path("itemCandidates")) {
@@ -280,6 +290,11 @@ class AnalysisReviewOutcomeIntegrationTest extends PostgresIntegrationTestSuppor
       String kind = candidate.path("kind").asText();
       item.put("kind", kind);
       item.put("title", index++ == 0 ? title : candidate.path("title").asText().strip());
+      JsonNode binding = candidate.path("dueDateCandidateId");
+      JsonNode preferredDue =
+          "2".equals(proposal.path("schemaVersion").asText())
+              ? datesById.get(binding.isTextual() ? binding.asText() : null)
+              : legacyPreferredDue;
       if ("TASK".equals(kind) && preferredDue != null) {
         Map<String, Object> due = new LinkedHashMap<>();
         due.put("surfaceText", preferredDue.path("surfaceText").asText());

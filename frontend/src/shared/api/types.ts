@@ -68,6 +68,7 @@ export type DatePrecision =
   | 'UNKNOWN';
 
 export type DateCandidate = {
+  candidateId?: string | null;
   surfaceText: string;
   value: string | null;
   precision: DatePrecision;
@@ -89,6 +90,7 @@ export type SemanticType = ItemKind | 'UNKNOWN';
 
 export type ItemCandidate = {
   candidateId?: string;
+  dueDateCandidateId?: string | null;
   kind: ItemKind;
   title: string;
   sourceSpan?: { start: number; end: number } | null;
@@ -98,6 +100,7 @@ export type ItemCandidate = {
 };
 
 export type ProposalDateCandidate = DateCandidate & {
+  candidateId: string | null;
   confidence: number;
   ambiguityReasons: string[];
 };
@@ -109,6 +112,7 @@ export type ProposalTagCandidate = TagCandidate & {
 
 export type ProposalItemCandidate = ItemCandidate & {
   candidateId: string;
+  dueDateCandidateId: string | null;
   sourceSpan: { start: number; end: number } | null;
   action: string | null;
   object: string | null;
@@ -124,7 +128,7 @@ export type RelationCandidate = {
 };
 
 export type Proposal = {
-  schemaVersion: '1';
+  schemaVersion: '1' | '2';
   memoId: string;
   memoRevision: number;
   suggestedTitle: {
@@ -231,7 +235,7 @@ export type ReviewOutcomeAnalysisVersion = {
 
 export type AnalysisReviewOutcomeSummary = {
   schemaVersion: '1';
-  comparisonPolicyVersion: 'review-default-v2';
+  comparisonPolicyVersion: 'review-default-v3';
   cohort: {
     basis: 'PROPOSAL_CREATED_AT';
     days: number;

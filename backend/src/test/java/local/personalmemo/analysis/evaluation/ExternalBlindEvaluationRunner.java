@@ -215,7 +215,7 @@ class ExternalBlindEvaluationRunner {
             analyzer.version(),
             analyzer.deterministicRulesVersion(),
             ambiguityGate.version(),
-            "NOT_SUPPORTED_BY_PROPOSAL_V1");
+            "SUPPORTED_NOT_SCORED_DATASET_V2");
     ObjectNode aggregateReport =
         EvaluationV2Report.aggregateOnly(json, metadata, Map.of("blind", aggregate));
     ObjectNode summary =
@@ -247,7 +247,7 @@ class ExternalBlindEvaluationRunner {
     summary
         .putObject("capabilities")
         .put("dateItemGold", "SCORED")
-        .put("dateItemDueBinding", "NOT_SUPPORTED_BY_PROPOSAL_V1");
+        .put("dateItemDueBinding", "SUPPORTED_NOT_SCORED_DATASET_V2");
     summary
         .putObject("metricGate")
         .put("status", "NOT_CONFIGURED")
@@ -401,7 +401,7 @@ class ExternalBlindEvaluationRunner {
         || !"INDEPENDENT_HUMAN_CURATED".equals(report.path("sourcePolicy").asText())
         || !COMMIT.matcher(report.path("candidateCommit").asText()).matches()
         || !"SCORED".equals(report.path("capabilities").path("dateItemGold").asText())
-        || !"NOT_SUPPORTED_BY_PROPOSAL_V1"
+        || !"SUPPORTED_NOT_SCORED_DATASET_V2"
             .equals(report.path("capabilities").path("dateItemDueBinding").asText())) {
       fail("The blind summary boundary is invalid.");
     }

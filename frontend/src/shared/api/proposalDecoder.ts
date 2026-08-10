@@ -164,9 +164,14 @@ function isDatePrecision(value: unknown): value is DatePrecision {
   return typeof value === 'string' && DATE_PRECISIONS.has(value as DatePrecision);
 }
 
-function decodeDateCandidate(value: unknown, index: number): ProposalDateCandidate {
+function decodeDateCandidate(
+  value: unknown,
+  index: number,
+  schemaVersion: Proposal['schemaVersion'],
+): ProposalDateCandidate {
   const field = `dateCandidates[${index}]`;
   const candidate = closedRecord(value, field, [
+    ...(schemaVersion === '2' ? ['candidateId'] : []),
     'surfaceText',
     'value',
     'precision',
@@ -192,6 +197,10 @@ function decodeDateCandidate(value: unknown, index: number): ProposalDateCandida
   }
 
   return {
+    candidateId:
+      schemaVersion === '2'
+        ? text(candidate.candidateId, `${field}.candidateId`, 100)
+        : null,
     surfaceText: text(candidate.surfaceText, `${field}.surfaceText`, 200),
     value: rawValue as string | null,
     precision,
@@ -230,14 +239,19 @@ function decodeSourceSpan(
   const span = closedRecord(value, field, ['start', 'end']);
   const start = integer(span.start, `${field}.start`);
   const end = integer(span.end, `${field}.end`);
-  if (end < start) fail(field);
+  if (end <= start) fail(field);
   return { start, end };
 }
 
-function decodeItemCandidate(value: unknown, index: number): ProposalItemCandidate {
+function decodeItemCandidate(
+  value: unknown,
+  index: number,
+  schemaVersion: Proposal['schemaVersion'],
+): ProposalItemCandidate {
   const field = `itemCandidates[${index}]`;
   const candidate = closedRecord(value, field, [
     'candidateId',
+    ...(schemaVersion === '2' ? ['dueDateCandidateId'] : []),
     'kind',
     'title',
     'sourceSpan',
@@ -249,6 +263,12 @@ function decodeItemCandidate(value: unknown, index: number): ProposalItemCandida
 
   return {
     candidateId: text(candidate.candidateId, `${field}.candidateId`, 100),
+    dueDateCandidateId:
+      schemaVersion === '2'
+        ? candidate.dueDateCandidateId === null
+          ? null
+          : text(candidate.dueDateCandidateId, `${field}.dueDateCandidateId`, 100)
+        : null,
     kind: candidate.kind,
     title: text(candidate.title, `${field}.title`, 200),
     sourceSpan: decodeSourceSpan(candidate.sourceSpan, `${field}.sourceSpan`),
@@ -288,6 +308,36 @@ function decodeRelationCandidate(value: unknown, index: number): RelationCandida
   };
 }
 
+function validateDateBindings(
+  schemaVersion: Proposal['schemaVersion'],
+  dates: ProposalDateCandidate[],
+  items: ProposalItemCandidate[],
+): void {
+  if (schemaVersion === '1') return;
+
+  const datesById = new Map<string, ProposalDateCandidate>();
+  dates.forEach((date, index) => {
+    if (date.candidateId === null || datesById.has(date.candidateId)) {
+      fail(`dateCandidates[${index}].candidateId`);
+    }
+    datesById.set(date.candidateId, date);
+  });
+
+  items.forEach((item, index) => {
+    if (item.dueDateCandidateId === null) return;
+    const date = datesById.get(item.dueDateCandidateId);
+    if (!date) fail(`itemCandidates[${index}].dueDateCandidateId`);
+    if (
+      item.kind !== 'TASK' ||
+      (date.precision !== 'DATE_ONLY' &&
+        date.precision !== 'EXACT_TIME' &&
+        date.precision !== 'RELATIVE_EXACT')
+    ) {
+      fail(`itemCandidates[${index}].dueDateCandidateId`);
+    }
+  });
+}
+
 export function decodeProposal(
   value: unknown,
   expectedIdentity?: ExpectedProposalIdentity,
@@ -305,7 +355,10 @@ export function decodeProposal(
     'ambiguityReasons',
     'providerMetadata',
   ]);
-  if (proposal.schemaVersion !== '1') fail('schemaVersion');
+  if (proposal.schemaVersion !== '1' && proposal.schemaVersion !== '2') {
+    fail('schemaVersion');
+  }
+  const schemaVersion = proposal.schemaVersion;
 
   const memoId = uuid(proposal.memoId, 'memoId');
   const memoRevision = integer(proposal.memoRevision, 'memoRevision', 1);
@@ -332,9 +385,16 @@ export function decodeProposal(
       return { value: candidate.value, score: score(candidate.score, `${field}.score`) };
     },
   );
+  const dateCandidates = array(proposal.dateCandidates, 'dateCandidates', 5).map(
+    (candidate, index) => decodeDateCandidate(candidate, index, schemaVersion),
+  );
+  const itemCandidates = array(proposal.itemCandidates, 'itemCandidates', 3).map(
+    (candidate, index) => decodeItemCandidate(candidate, index, schemaVersion),
+  );
+  validateDateBindings(schemaVersion, dateCandidates, itemCandidates);
 
   return {
-    schemaVersion: '1',
+    schemaVersion,
     memoId,
     memoRevision,
     suggestedTitle: {
@@ -346,15 +406,11 @@ export function decodeProposal(
       ),
     },
     typeCandidates,
-    dateCandidates: array(proposal.dateCandidates, 'dateCandidates', 5).map(
-      decodeDateCandidate,
-    ),
+    dateCandidates,
     tagCandidates: array(proposal.tagCandidates, 'tagCandidates', 10).map(
       decodeTagCandidate,
     ),
-    itemCandidates: array(proposal.itemCandidates, 'itemCandidates', 3).map(
-      decodeItemCandidate,
-    ),
+    itemCandidates,
     relationCandidates: array(proposal.relationCandidates, 'relationCandidates', 10).map(
       decodeRelationCandidate,
     ),

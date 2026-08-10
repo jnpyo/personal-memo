@@ -30,6 +30,7 @@ const taskProposal: Proposal = {
   itemCandidates: [
     {
       candidateId: 'item-1',
+      dueDateCandidateId: null,
       kind: 'TASK',
       title: '운영체제 과제 제출',
       sourceSpan: null,
@@ -42,6 +43,51 @@ const taskProposal: Proposal = {
   ambiguityReasons: [],
   providerMetadata: {},
 };
+
+function explicitDateProposal(shared = false): Proposal {
+  const dates: Proposal['dateCandidates'] = [
+    {
+      candidateId: 'date-1',
+      surfaceText: '11월 20일',
+      value: '2026-11-20',
+      precision: 'DATE_ONLY',
+      timeSpecified: false,
+      confidence: 0.92,
+      ambiguityReasons: [],
+    },
+    ...(shared
+      ? []
+      : [{
+          candidateId: 'date-2',
+          surfaceText: '11월 25일 오후 6시',
+          value: '2026-11-25T18:00:00+09:00',
+          precision: 'EXACT_TIME' as const,
+          timeSpecified: true,
+          confidence: 0.91,
+          ambiguityReasons: [],
+        }]),
+  ];
+  return {
+    ...taskProposal,
+    schemaVersion: '2',
+    suggestedTitle: { value: '보고서 제출', confidence: 0.94, needsConfirmation: true },
+    dateCandidates: dates,
+    itemCandidates: [
+      {
+        ...taskProposal.itemCandidates[0],
+        candidateId: 'item-1',
+        dueDateCandidateId: 'date-1',
+        title: '보고서 제출',
+      },
+      {
+        ...taskProposal.itemCandidates[0],
+        candidateId: 'item-2',
+        dueDateCandidateId: shared ? 'date-1' : 'date-2',
+        title: '발표 준비',
+      },
+    ],
+  };
+}
 
 function renderProposal(
   proposal: Proposal,
@@ -77,6 +123,36 @@ describe('proposal review dialog', () => {
     expect(markup).not.toContain('대표 제목');
   });
 
+  it('shows explicit v2 multi-task date bindings in the concise yes-or-no summary', () => {
+    const markup = renderProposal(explicitDateProposal());
+
+    expect(markup).toContain('AI는 이렇게 이해했어요.');
+    expect(markup).toContain('예, 이대로 적용');
+    expect(markup).toContain('마감 11월 20일 → 2026-11-20');
+    expect(markup).toContain('마감 11월 25일 오후 6시 → 2026-11-25T18:00:00+09:00');
+    expect(markup).not.toContain('(DATE_ONLY)');
+    expect(markup).not.toContain('(EXACT_TIME)');
+  });
+
+  it('supports one explicit v2 date shared by multiple task candidates', () => {
+    const markup = renderProposal(explicitDateProposal(true));
+
+    expect(markup).toContain('예, 이대로 적용');
+    expect(markup.match(/마감 11월 20일 → 2026-11-20/g)).toHaveLength(2);
+  });
+
+  it('states that a task has no due date before the user approves it', () => {
+    const markup = renderProposal({
+      ...taskProposal,
+      schemaVersion: '2',
+      dateCandidates: [],
+      itemCandidates: [{ ...taskProposal.itemCandidates[0], dueDateCandidateId: null }],
+    });
+
+    expect(markup).toContain('예, 이대로 적용');
+    expect(markup).toContain('마감 없음');
+  });
+
   it('starts an UNKNOWN proposal with explicit possible types and no yes action', () => {
     const markup = renderProposal({
       ...taskProposal,
@@ -108,6 +184,7 @@ describe('proposal review dialog', () => {
       ...taskProposal,
       dateCandidates: [
         {
+          candidateId: null,
           surfaceText: '11월 20일',
           value: '2026-11-20',
           precision: 'DATE_ONLY',
@@ -116,6 +193,7 @@ describe('proposal review dialog', () => {
           ambiguityReasons: ['MISSING_YEAR', 'MISSING_TIME'],
         },
         {
+          candidateId: null,
           surfaceText: '11월 25일',
           value: '2026-11-25',
           precision: 'DATE_ONLY',
@@ -134,6 +212,7 @@ describe('proposal review dialog', () => {
 
   it('requires detailed review for a mixed item set or an imprecise date', () => {
     const exactDate: Proposal['dateCandidates'][number] = {
+      candidateId: null,
       surfaceText: '11월 25일',
       value: '2026-11-25',
       precision: 'DATE_ONLY' as const,
@@ -153,6 +232,7 @@ describe('proposal review dialog', () => {
       ...taskProposal,
       dateCandidates: [
         {
+          candidateId: null,
           surfaceText: '주말쯤',
           value: null,
           precision: 'APPROXIMATE',
@@ -167,6 +247,47 @@ describe('proposal review dialog', () => {
     expect(mixedMarkup).not.toContain('예, 이대로 적용');
     expect(approximateMarkup).toContain('어떤 부분이 다른가요?');
     expect(approximateMarkup).not.toContain('예, 이대로 적용');
+  });
+
+  it('forces alternatives for an unbound precise v2 date', () => {
+    const explicit = explicitDateProposal();
+    const markup = renderProposal({
+      ...explicit,
+      itemCandidates: explicit.itemCandidates.map((item) => ({
+        ...item,
+        dueDateCandidateId: null,
+      })),
+    });
+
+    expect(markup).toContain('어떤 부분이 다른가요?');
+    expect(markup).toContain('날짜·내용 확인');
+    expect(markup).toContain('안전하게 연결하지 못해 자동 적용하지');
+    expect(markup).toContain('11월 20일');
+    expect(markup).not.toContain('예, 이대로 적용');
+  });
+
+  it('forces alternatives for an approximate v2 date', () => {
+    const markup = renderProposal({
+      ...taskProposal,
+      schemaVersion: '2',
+      dateCandidates: [
+        {
+          candidateId: 'date-weekend',
+          surfaceText: '주말쯤',
+          value: null,
+          precision: 'APPROXIMATE',
+          timeSpecified: false,
+          confidence: 0.5,
+          ambiguityReasons: ['IMPRECISE_DATE'],
+        },
+      ],
+      itemCandidates: [{ ...taskProposal.itemCandidates[0], dueDateCandidateId: null }],
+    });
+
+    expect(markup).toContain('어떤 부분이 다른가요?');
+    expect(markup).toContain('안전하게 연결하지 못해 자동 적용하지');
+    expect(markup).toContain('주말쯤');
+    expect(markup).not.toContain('예, 이대로 적용');
   });
 
   it('does not expose a retry while another proposal operation is in flight', () => {

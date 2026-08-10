@@ -28,6 +28,33 @@ class Draft202012AnalysisProposalSchemaValidatorTest {
                 Draft202012AnalysisProposalSchemaValidator.SCHEMA_RESOURCE))
         .isNotNull();
     assertThatCode(() -> validator.validate(validProposal())).doesNotThrowAnyException();
+    assertThatCode(() -> validator.validate(validVersionTwoProposal())).doesNotThrowAnyException();
+  }
+
+  @Test
+  void separatesLegacyAndBindingAwareFieldsBySchemaVersion() {
+    ObjectNode versionTwoMissingDateId = validVersionTwoProposal();
+    ((ObjectNode) versionTwoMissingDateId.at("/dateCandidates/0")).remove("candidateId");
+    ObjectNode versionTwoMissingBinding = validVersionTwoProposal();
+    ((ObjectNode) versionTwoMissingBinding.at("/itemCandidates/0")).remove("dueDateCandidateId");
+    ObjectNode versionOneWithBinding = validProposal();
+    versionOneWithBinding
+        .putArray("itemCandidates")
+        .add(
+            versionOneWithBinding
+                .objectNode()
+                .put("candidateId", "item-1")
+                .putNull("dueDateCandidateId")
+                .put("kind", "RECORD")
+                .put("title", "legacy")
+                .putNull("sourceSpan")
+                .putNull("action")
+                .putNull("object")
+                .put("confidence", 0.9));
+
+    assertInvalidWithoutDataLeak(versionTwoMissingDateId);
+    assertInvalidWithoutDataLeak(versionTwoMissingBinding);
+    assertInvalidWithoutDataLeak(versionOneWithBinding);
   }
 
   @ParameterizedTest
@@ -157,6 +184,28 @@ class Draft202012AnalysisProposalSchemaValidatorTest {
     return proposal;
   }
 
+  private ObjectNode validVersionTwoProposal() {
+    ObjectNode proposal = validProposal().put("schemaVersion", "2");
+    proposal
+        .putArray("dateCandidates")
+        .add(
+            dateCandidate(proposal, "2026-11-25", "DATE_ONLY", false).put("candidateId", "date-1"));
+    proposal
+        .putArray("itemCandidates")
+        .add(
+            proposal
+                .objectNode()
+                .put("candidateId", "item-1")
+                .put("dueDateCandidateId", "date-1")
+                .put("kind", "TASK")
+                .put("title", "Submit assignment")
+                .putNull("sourceSpan")
+                .put("action", "submit")
+                .put("object", "assignment")
+                .put("confidence", 0.9));
+    return proposal;
+  }
+
   private void assertInvalidWithoutDataLeak(ObjectNode proposal) {
     assertThatThrownBy(() -> validator.validate(proposal))
         .isInstanceOfSatisfying(
@@ -165,7 +214,7 @@ class Draft202012AnalysisProposalSchemaValidatorTest {
               assertThat(exception.code()).isEqualTo("INVALID_ANALYSIS_PROPOSAL");
               assertThat(exception.status().value()).isEqualTo(422);
               assertThat(exception.getMessage())
-                  .isEqualTo("The analysis proposal does not match schema version 1.")
+                  .isEqualTo("The analysis proposal does not match a supported schema version.")
                   .doesNotContain(PRIVATE_TEXT)
                   .doesNotContain(proposal.toString());
             });

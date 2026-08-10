@@ -16,6 +16,8 @@ import {
   ITEM_KINDS,
   preferredItemKind,
   removeReviewItem,
+  requiresExplicitDateMapping,
+  sameDateCandidate,
   usableDateCandidates,
   type ReviewDraft,
 } from './reviewModel';
@@ -54,32 +56,21 @@ const TYPE_DESCRIPTION: Record<ItemKind, string> = {
   RECORD: '경험하거나 확인한 사실의 기록',
 };
 
-function sameDate(left: DateCandidate, right: DateCandidate): boolean {
-  return (
-    left.surfaceText === right.surfaceText &&
-    left.value === right.value &&
-    left.precision === right.precision &&
-    left.timeSpecified === right.timeSpecified
-  );
-}
+const DATE_PRECISION_LABEL: Record<DateCandidate['precision'], string> = {
+  EXACT_TIME: '정확한 시각',
+  DATE_ONLY: '날짜만',
+  RELATIVE_EXACT: '계산된 시각',
+  APPROXIMATE: '대략적인 날짜',
+  UNKNOWN: '날짜 미확정',
+};
 
 function dateCandidateLabel(candidate: DateCandidate): string {
   const interpreted = candidate.value ?? '날짜 미확정';
-  return `${candidate.surfaceText} → ${interpreted} (${candidate.precision})`;
+  return `${candidate.surfaceText} → ${interpreted} (${DATE_PRECISION_LABEL[candidate.precision]})`;
 }
 
 function suggestedType(review: ReviewDraft): ItemKind | null {
   return preferredItemKind(review.proposal);
-}
-
-function requiresExplicitDateMapping(review: ReviewDraft): boolean {
-  const dates = usableDateCandidates(review.proposal);
-  if (review.proposal.dateCandidates.length === 0) return false;
-  if (dates.length !== review.proposal.dateCandidates.length) return true;
-  if (review.items.length !== 1 || review.items[0].kind !== 'TASK' || dates.length !== 1) {
-    return true;
-  }
-  return review.items[0].due === null || !sameDate(review.items[0].due, dates[0]);
 }
 
 function initialStep(review: ReviewDraft): MainReviewStep {
@@ -140,6 +131,17 @@ export function ProposalReview({
   const addItemButtonRef = useRef<HTMLButtonElement>(null);
   const pendingItemFocus = useRef<number | 'ADD_OR_TYPE' | null>(null);
   const dateCandidates = usableDateCandidates(review.proposal);
+  const datesNeedingReview = review.proposal.schemaVersion === '2'
+    ? review.proposal.dateCandidates.filter(
+        (date) =>
+          date.candidateId === null ||
+          !review.proposal.itemCandidates.some(
+            (item) => item.dueDateCandidateId === date.candidateId,
+          ),
+      )
+    : review.proposal.dateCandidates.filter(
+        (date) => !dateCandidates.some((candidate) => sameDateCandidate(candidate, date)),
+      );
   const primaryType = suggestedType(review);
   const isValid = isValidReviewDraft(review);
   const hasPendingTag = newTag.trim().length > 0;
@@ -261,6 +263,22 @@ export function ProposalReview({
     </div>
   );
 
+  const dateReviewNotice = datesNeedingReview.length > 0 && (
+    <div className="review-note" role="status">
+      <p>
+        AI가 다음 날짜를 특정 할 일의 마감으로 안전하게 연결하지 못해 자동 적용하지 않습니다.
+      </p>
+      <ul>
+        {datesNeedingReview.map((candidate, index) => (
+          <li key={candidate.candidateId ?? `unassigned-date-${index}`}>
+            {dateCandidateLabel(candidate)}
+          </li>
+        ))}
+      </ul>
+      <p>필요하면 각 할 일에서 정확한 날짜를 고르거나 마감 없음을 선택해 주세요.</p>
+    </div>
+  );
+
   return (
     <>
       {!open && (
@@ -313,6 +331,8 @@ export function ProposalReview({
             onDismiss={onDismissFeedback}
           />
 
+          {dateReviewNotice}
+
           {step === 'CONFIRM' && (
             <div className="review-confirmation">
               <div className="review-intro">
@@ -353,7 +373,7 @@ export function ProposalReview({
                       <li key={item.candidateId ?? `${item.kind}-${index}`}>
                         <span>{TYPE_LABEL[item.kind]}</span>
                         <strong>{item.title}</strong>
-                        {due && <small>날짜 {due}</small>}
+                        {item.kind === 'TASK' && <small>마감 {due ?? '없음'}</small>}
                       </li>
                     );
                   })}
@@ -413,7 +433,7 @@ export function ProposalReview({
                   )}
                 >
                   <span>유형은 맞아요</span>
-                  <strong>{TYPE_LABEL[review.selectedType]}로 두고 내용만 수정</strong>
+                  <strong>{TYPE_LABEL[review.selectedType]}로 두고 날짜·내용 확인</strong>
                 </button>
               )}
 
@@ -493,13 +513,6 @@ export function ProposalReview({
                 아래 내용은 아직 제안입니다. 승인 전에는 선택한 항목과 태그가 생성되지 않습니다.
               </p>
 
-              {review.proposal.dateCandidates.length > dateCandidates.length && (
-                <p className="review-note" role="status">
-                  정확하지 않은 날짜 표현은 기한으로 자동 저장하지 않습니다. 아래에서 정확한 날짜를
-                  직접 입력하거나 ‘날짜 포함 안 함’을 확인해 주세요.
-                </p>
-              )}
-
               <div className="review-fields">
                 <label>
                   대표 제목
@@ -554,7 +567,9 @@ export function ProposalReview({
                 )}
                 {review.items.map((item, index) => {
                   const matchedCandidate = item.due
-                    ? dateCandidates.findIndex((candidate) => sameDate(candidate, item.due!))
+                    ? dateCandidates.findIndex((candidate) =>
+                        sameDateCandidate(candidate, item.due!),
+                      )
                     : -1;
                   const dueChoice = item.due
                     ? matchedCandidate >= 0
@@ -623,6 +638,7 @@ export function ProposalReview({
                           <label>
                             마감 날짜
                             <select
+                              aria-label={`항목 ${index + 1} 마감 날짜`}
                               aria-describedby={dateHelpId}
                               value={dueChoice}
                               onChange={(event) => {

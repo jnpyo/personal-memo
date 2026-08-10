@@ -176,7 +176,21 @@ FK (memo_id, owner_id) -> memos(id, owner_id)
 FK (memo_id, memo_revision, owner_id) -> memo_revisions(memo_id, revision, owner_id)
 ```
 
-현재 결정론적 analyzer는 run이 참조하는 revision의 `client_recorded_at`과 `source_time_zone`을 입력으로 사용한다. 서버가 소유하는 `analyzer_version`, `prompt_version`, `local_model_version`, `embedding_model_version`, `routing_policy_version`은 각각 비어 있지 않은 1–64자 값으로 run마다 저장된다. 현재 Fake 경로는 `fake-v5`, `none`, `none`, `none`, `field-policy-v1`을 사용하고 proposal의 추가 metadata에 `korean-rules-v3`를 남긴다. analyzer/rules version은 날짜·유형·행동·참조·원문 item span 추출을, `routing_policy_version`은 이미 구조화된 proposal에서 점수 임계값과 routing signal을 재구성해 route로 매핑하는 gate를 식별한다. `ambiguity_reasons`는 cloud 처리 전 서버가 재구성한 최초 라우팅 원인을 보존한다. 모호성 gate가 local proposal로 충분하다고 판정하면 `LOCAL`, Fake cloud enrichment가 필요하면 `HYBRID`를 저장한다. `MOCK`·`CLOUD` 값은 후속 adapter와 이전 단계 호환을 위해 표현 가능하지만 현재 실행 경로에서는 사용하지 않는다. memo가 수정되면 현재 revision보다 오래된 미적용 run을 `STALE`로 표시하며 application 단계에서도 revision을 다시 검사한다.
+현재 결정론적 analyzer는 run이 참조하는 revision의 `client_recorded_at`과 `source_time_zone`을 입력으로 사용한다. 서버가 소유하는 `analyzer_version`, `prompt_version`, `local_model_version`, `embedding_model_version`, `routing_policy_version`은 각각 비어 있지 않은 1–64자 값으로 run마다 저장된다. 현재 Fake 경로는 `fake-v6`, `none`, `none`, `none`, `field-policy-v1`을 사용하고 proposal의 추가 metadata에 `korean-rules-v4`를 남긴다. analyzer/rules version은 날짜·유형·행동·참조·원문 item span 및 명시적인 TASK due binding 추출을, `routing_policy_version`은 이미 구조화된 proposal에서 점수 임계값과 routing signal을 재구성해 route로 매핑하는 gate를 식별한다. `ambiguity_reasons`는 cloud 처리 전 서버가 재구성한 최초 라우팅 원인을 보존한다. 모호성 gate가 local proposal로 충분하다고 판정하면 `LOCAL`, Fake cloud enrichment가 필요하면 `HYBRID`를 저장한다. `MOCK`·`CLOUD` 값은 후속 adapter와 이전 단계 호환을 위해 표현 가능하지만 현재 실행 경로에서는 사용하지 않는다. memo가 수정되면 현재 revision보다 오래된 미적용 run을 `STALE`로 표시하며 application 단계에서도 revision을 다시 검사한다.
+
+Proposal schema v2는 `dateCandidates[].candidateId`와 nullable
+`itemCandidates[].dueDateCandidateId`를 기존 `proposal_json` JSONB 안에 저장하고, run의 기존
+`schema_version`에 `2`를 기록한다. schema v1 JSON과 hash는 수정하지 않으며 recovery와
+`review-default-v3`의 v1 호환 projection에서 계속 읽는다. 관계형 table이나 canonical due
+표현이 바뀌지 않으므로 이 계약 변경만을 위한 Flyway migration 또는 JSON backfill은 없다.
+실제 due는 여전히 사용자가 승인한 `selection_json`과 그 application이 만든
+`task_details`에만 canonical하게 반영된다.
+
+GET/recovery의 schema negotiation은 저장 형식을 바꾸지 않는다. 헤더가 없거나 `1`이면
+서버는 v2 JSON의 응답 복사본에서 `dateCandidates[].candidateId`와
+`itemCandidates[].dueDateCandidateId`만 제거하고 `schemaVersion`을 `1`로 내려 strict v1을
+만든다. `2` 요청은 저장된 version을 유지하므로 과거 v1은 v1로 남는다. 어떤 경로도
+`proposal_json`, `proposal_hash`, `analysis_runs.schema_version`을 update하지 않는다.
 
 ### `analysis_proposals`
 
@@ -284,6 +298,12 @@ FK (memo_item_id, owner_id) -> memo_items(id, owner_id)
 | `DATE_ONLY` | 원래 달력 날짜를 `due_local_date`에 저장 | `TODO && due_local_date < today(source_time_zone)` |
 
 따라서 날짜만 있는 `2026-11-25`를 임의의 UTC 자정 instant로 바꾸지 않는다. `OVERDUE`는 query/DTO에서 계산하고 `status`에는 저장하지 않는다.
+
+Apply DTO의 due `timeZone`은 호환성을 위해 유효한 IANA zone인지 검증하지만 canonical
+`task_details.source_time_zone`을 선택하지는 못한다. application transaction은 잠근 immutable
+memo revision의 `source_time_zone`으로 그 값을 덮어쓴 뒤 저장한다. `DATE_ONLY` overdue의
+`today(source_time_zone)` 경계는 승인 기기의 현재 zone이 아니라 원문 capture context를
+따른다.
 
 ## Taxonomy and links
 

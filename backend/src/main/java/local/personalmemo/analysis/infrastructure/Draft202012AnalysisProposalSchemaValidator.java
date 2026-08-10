@@ -19,7 +19,7 @@ public final class Draft202012AnalysisProposalSchemaValidator
   static final int MAX_PROPOSAL_JSON_BYTES = 64 * 1024;
   static final int MAX_PROVIDER_METADATA_JSON_BYTES = 8 * 1024;
   private static final String INVALID_MESSAGE =
-      "The analysis proposal does not match schema version 1.";
+      "The analysis proposal does not match a supported schema version.";
 
   private final Schema schema;
 

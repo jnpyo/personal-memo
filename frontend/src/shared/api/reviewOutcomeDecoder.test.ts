@@ -28,7 +28,7 @@ function validSummary(): Record<string, unknown> {
   };
   return {
     schemaVersion: '1',
-    comparisonPolicyVersion: 'review-default-v2',
+    comparisonPolicyVersion: 'review-default-v3',
     cohort: {
       basis: 'PROPOSAL_CREATED_AT',
       days: 14,
@@ -60,11 +60,18 @@ describe('review outcome decoder', () => {
     const decoded = decodeReviewOutcomeSummary(validSummary());
 
     expect(decoded.schemaVersion).toBe('1');
+    expect(decoded.comparisonPolicyVersion).toBe('review-default-v3');
     expect(decoded.proposals.total).toBe(1);
     expect(decoded.byAnalysisVersion[0]?.route).toBe('LOCAL');
   });
 
   it('rejects unsupported versions and unexpected private fields', () => {
+    expect(() =>
+      decodeReviewOutcomeSummary({
+        ...validSummary(),
+        comparisonPolicyVersion: 'review-default-v2',
+      }),
+    ).toThrow(ReviewOutcomeContractError);
     expect(() =>
       decodeReviewOutcomeSummary({ ...validSummary(), comparisonPolicyVersion: 'future-v2' }),
     ).toThrow(ReviewOutcomeContractError);

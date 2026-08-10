@@ -32,11 +32,25 @@ public class AnalysisProposalValidator {
   private static final Set<String> TYPE_CANDIDATE_FIELDS = Set.of("value", "score");
   private static final Set<String> DATE_CANDIDATE_FIELDS =
       Set.of(
-          "surfaceText", "value", "precision", "timeSpecified", "confidence", "ambiguityReasons");
+          "candidateId",
+          "surfaceText",
+          "value",
+          "precision",
+          "timeSpecified",
+          "confidence",
+          "ambiguityReasons");
   private static final Set<String> TAG_CANDIDATE_FIELDS =
       Set.of("existingTagId", "canonicalName", "matchedAlias", "score", "isNewProposal");
   private static final Set<String> ITEM_CANDIDATE_FIELDS =
-      Set.of("candidateId", "kind", "title", "sourceSpan", "action", "object", "confidence");
+      Set.of(
+          "candidateId",
+          "dueDateCandidateId",
+          "kind",
+          "title",
+          "sourceSpan",
+          "action",
+          "object",
+          "confidence");
   private static final Set<String> SOURCE_SPAN_FIELDS = Set.of("start", "end");
   private static final Set<String> RELATION_CANDIDATE_FIELDS =
       Set.of("sourceCandidateId", "targetType", "targetId", "relationType", "score");
@@ -66,9 +80,9 @@ public class AnalysisProposalValidator {
   public void validate(JsonNode proposal, UUID memoId, int memoRevision, int contentLength) {
     requireObject(proposal, "proposal");
     rejectUnknownFields(proposal, "proposal", PROPOSAL_FIELDS);
-    requireText(proposal, "schemaVersion", 1, 16);
-    if (!"1".equals(proposal.path("schemaVersion").asText())) {
-      fail("schemaVersion must be 1.");
+    String schemaVersion = requireText(proposal, "schemaVersion", 1, 16);
+    if (!Set.of("1", "2").contains(schemaVersion)) {
+      fail("schemaVersion must be 1 or 2.");
     }
     if (!memoId.equals(parseUuid(requireText(proposal, "memoId", 1, 64), "memoId"))) {
       fail("memoId does not match the analyzed memo.");
@@ -83,10 +97,12 @@ public class AnalysisProposalValidator {
 
     validateSuggestedTitle(proposal.path("suggestedTitle"));
     validateTypeCandidates(proposal.path("typeCandidates"));
-    validateDateCandidates(proposal.path("dateCandidates"));
+    ValidatedDateCandidates dates =
+        validateDateCandidates(proposal.path("dateCandidates"), schemaVersion);
     validateTagCandidates(proposal.path("tagCandidates"));
     Set<String> itemCandidateIds =
-        validateItemCandidates(proposal.path("itemCandidates"), contentLength);
+        validateItemCandidates(
+            proposal.path("itemCandidates"), contentLength, schemaVersion, dates);
     validateRelationCandidates(proposal.path("relationCandidates"), itemCandidateIds);
     validateAmbiguityReasons(proposal.path("ambiguityReasons"), "ambiguityReasons");
     validateAmbiguityConsistency(proposal);
@@ -296,11 +312,23 @@ public class AnalysisProposalValidator {
     }
   }
 
-  private void validateDateCandidates(JsonNode candidates) {
+  private ValidatedDateCandidates validateDateCandidates(
+      JsonNode candidates, String schemaVersion) {
     requireArray(candidates, "dateCandidates", 0, 5);
+    Set<String> candidateIds = new HashSet<>();
+    Set<String> preciseCandidateIds = new HashSet<>();
     for (JsonNode candidate : candidates) {
       requireObject(candidate, "dateCandidates[]");
       rejectUnknownFields(candidate, "dateCandidates[]", DATE_CANDIDATE_FIELDS);
+      String candidateId = null;
+      if ("2".equals(schemaVersion)) {
+        candidateId = requireText(candidate, "candidateId", 1, 100);
+        if (!candidateIds.add(candidateId)) {
+          fail("dateCandidates[].candidateId must be unique.");
+        }
+      } else if (candidate.has("candidateId")) {
+        fail("dateCandidates[].candidateId is only supported by schema version 2.");
+      }
       requireText(candidate, "surfaceText", 1, 200);
       String precision = requireText(candidate, "precision", 1, 32);
       if (!DATE_PRECISIONS.contains(precision)) {
@@ -314,7 +342,12 @@ public class AnalysisProposalValidator {
           candidate.path("ambiguityReasons"), "dateCandidates[].ambiguityReasons");
       validateCandidateDateValue(
           candidate.path("value"), precision, candidate.path("timeSpecified").asBoolean());
+      if (candidateId != null
+          && Set.of("DATE_ONLY", "EXACT_TIME", "RELATIVE_EXACT").contains(precision)) {
+        preciseCandidateIds.add(candidateId);
+      }
     }
+    return new ValidatedDateCandidates(Set.copyOf(candidateIds), Set.copyOf(preciseCandidateIds));
   }
 
   private void validateCandidateDateValue(JsonNode value, String precision, boolean timeSpecified) {
@@ -380,7 +413,8 @@ public class AnalysisProposalValidator {
     }
   }
 
-  private Set<String> validateItemCandidates(JsonNode candidates, int contentLength) {
+  private Set<String> validateItemCandidates(
+      JsonNode candidates, int contentLength, String schemaVersion, ValidatedDateCandidates dates) {
     requireArray(candidates, "itemCandidates", 0, 3);
     Set<String> candidateIds = new HashSet<>();
     for (JsonNode candidate : candidates) {
@@ -395,12 +429,43 @@ public class AnalysisProposalValidator {
         fail("itemCandidates[] contains an unsupported kind.");
       }
       requireText(candidate, "title", 1, 200);
+      validateDueDateCandidateReference(candidate, kind, schemaVersion, dates);
       validateSourceSpan(candidate.path("sourceSpan"), contentLength);
       requireNullableText(candidate.path("action"), "itemCandidates[].action", 200);
       requireNullableText(candidate.path("object"), "itemCandidates[].object", 200);
       requireScore(candidate.path("confidence"), "itemCandidates[].confidence");
     }
     return candidateIds;
+  }
+
+  private void validateDueDateCandidateReference(
+      JsonNode candidate, String kind, String schemaVersion, ValidatedDateCandidates dates) {
+    if ("1".equals(schemaVersion)) {
+      if (candidate.has("dueDateCandidateId")) {
+        fail("itemCandidates[].dueDateCandidateId is only supported by schema version 2.");
+      }
+      return;
+    }
+
+    if (!candidate.has("dueDateCandidateId")) {
+      fail("itemCandidates[].dueDateCandidateId is required by schema version 2.");
+    }
+    JsonNode reference = candidate.path("dueDateCandidateId");
+    if (reference.isNull()) {
+      return;
+    }
+    if (!reference.isTextual() || reference.asText().isBlank()) {
+      fail("itemCandidates[].dueDateCandidateId must be text or null.");
+    }
+    if (!"TASK".equals(kind)) {
+      fail("Only a TASK item may reference a due date candidate.");
+    }
+    if (!dates.candidateIds().contains(reference.asText())) {
+      fail("itemCandidates[].dueDateCandidateId references an unknown date candidate.");
+    }
+    if (!dates.preciseCandidateIds().contains(reference.asText())) {
+      fail("An approximate or unknown date candidate cannot be proposed as a task due date.");
+    }
   }
 
   private void validateSourceSpan(JsonNode sourceSpan, int contentLength) {
@@ -529,4 +594,7 @@ public class AnalysisProposalValidator {
   private void fail(String reason) {
     throw DomainException.invalid("INVALID_ANALYSIS_PROPOSAL", reason);
   }
+
+  private record ValidatedDateCandidates(
+      Set<String> candidateIds, Set<String> preciseCandidateIds) {}
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://personal-memo.local/schemas/analysis-proposal-v1.json",
-  "title": "AnalysisProposalV1",
+  "$id": "https://personal-memo.local/schemas/analysis-proposal.json",
+  "title": "AnalysisProposal",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -17,9 +17,45 @@
     "ambiguityReasons",
     "providerMetadata"
   ],
+  "allOf": [
+    {
+      "if": {
+        "properties": { "schemaVersion": { "const": "1" } },
+        "required": ["schemaVersion"]
+      },
+      "then": {
+        "properties": {
+          "dateCandidates": {
+            "items": {
+              "not": { "required": ["candidateId"] }
+            }
+          },
+          "itemCandidates": {
+            "items": {
+              "not": { "required": ["dueDateCandidateId"] }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "dateCandidates": {
+            "items": {
+              "required": ["candidateId"]
+            }
+          },
+          "itemCandidates": {
+            "items": {
+              "required": ["dueDateCandidateId"]
+            }
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "schemaVersion": {
-      "const": "1"
+      "enum": ["1", "2"]
     },
     "memoId": {
       "type": "string",
@@ -199,6 +235,11 @@
         "ambiguityReasons"
       ],
       "properties": {
+        "candidateId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
         "surfaceText": {
           "type": "string",
           "minLength": 1,
@@ -307,6 +348,11 @@
       "properties": {
         "candidateId": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "dueDateCandidateId": {
+          "type": ["string", "null"],
           "minLength": 1,
           "maxLength": 100
         },

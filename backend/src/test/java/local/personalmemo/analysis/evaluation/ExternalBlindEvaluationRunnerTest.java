@@ -140,7 +140,7 @@ class ExternalBlindEvaluationRunnerTest {
     report
         .putObject("capabilities")
         .put("dateItemGold", "SCORED")
-        .put("dateItemDueBinding", "NOT_SUPPORTED_BY_PROPOSAL_V1");
+        .put("dateItemDueBinding", "SUPPORTED_NOT_SCORED_DATASET_V2");
     report
         .putObject("metricGate")
         .put("status", "NOT_CONFIGURED")

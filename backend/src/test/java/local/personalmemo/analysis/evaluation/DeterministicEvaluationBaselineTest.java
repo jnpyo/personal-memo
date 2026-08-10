@@ -100,7 +100,7 @@ class DeterministicEvaluationBaselineTest {
             analyzer.version(),
             analyzer.deterministicRulesVersion(),
             ambiguityGate.version(),
-            "NOT_SUPPORTED_BY_PROPOSAL_V1");
+            "SUPPORTED_NOT_SCORED_DATASET_V2");
     ObjectNode report = EvaluationV2Report.withPublicCases(json, metadata, splits, results);
     report.set("gates", EvaluationV2Report.gates(json, regression, challenge));
     String serialized = json.writerWithDefaultPrettyPrinter().writeValueAsString(report) + "\n";
@@ -118,7 +118,8 @@ class DeterministicEvaluationBaselineTest {
         .isFalse();
     assertThat(report.at("/gates/visibleChallenge/enforced").asBoolean()).isFalse();
     assertThat(report.at("/capabilities/dateItemDueBinding").asText())
-        .isEqualTo("NOT_SUPPORTED_BY_PROPOSAL_V1");
+        .isEqualTo("SUPPORTED_NOT_SCORED_DATASET_V2");
+    assertThat(report.path("gates").findValue("dateItemDueBinding")).isNull();
     assertThat(report.at("/splits/regression/type/actualCandidateCount").canConvertToInt())
         .isTrue();
     assertThat(report.at("/splits/regression/type/matchedCandidatePrecision").isNumber()).isTrue();

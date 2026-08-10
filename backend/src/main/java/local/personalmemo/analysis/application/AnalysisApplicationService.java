@@ -69,6 +69,7 @@ public class AnalysisApplicationService {
     MemoSnapshot memo = memos.getCurrentForUpdate(observedProposal.memoId());
     ProposalRun proposal = findProposalRun(proposalId, true);
     requireSameProposalIdentity(observedProposal, proposal);
+    selection = validator.canonicalizeDueTimeZone(selection, memo.sourceTimeZone());
     ensureApplicable(proposal, memo, selection.expectedMemoRevision());
     rejectUnsupportedRelationCandidates(proposal);
 

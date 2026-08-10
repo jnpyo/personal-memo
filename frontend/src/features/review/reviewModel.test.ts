@@ -16,6 +16,7 @@ import {
   isValidReviewDraft,
   preferredItemKind,
   removeReviewItem,
+  requiresExplicitDateMapping,
   usableDateCandidates,
 } from './reviewModel';
 
@@ -26,6 +27,7 @@ function proposalItem(
 ): Proposal['itemCandidates'][number] {
   return {
     candidateId,
+    dueDateCandidateId: null,
     kind,
     title,
     sourceSpan: null,
@@ -43,6 +45,7 @@ const proposal: Proposal = {
   typeCandidates: [{ value: 'TASK', score: 0.9 }],
   dateCandidates: [
     {
+      candidateId: null,
       surfaceText: '오늘 오후 6시',
       value: '2026-08-05T18:00:00+09:00',
       precision: 'EXACT_TIME',
@@ -51,6 +54,7 @@ const proposal: Proposal = {
       ambiguityReasons: [],
     },
     {
+      candidateId: null,
       surfaceText: '11.25',
       value: '2026-11-25',
       precision: 'DATE_ONLY',
@@ -76,6 +80,44 @@ const proposal: Proposal = {
   ambiguityReasons: [],
   providerMetadata: {},
 };
+
+function explicitBindingProposal(): Proposal {
+  return {
+    ...proposal,
+    schemaVersion: '2',
+    suggestedTitle: { value: '보고서 제출', confidence: 0.94, needsConfirmation: true },
+    dateCandidates: [
+      {
+        candidateId: 'date-report',
+        surfaceText: '11월 20일',
+        value: '2026-11-20',
+        precision: 'DATE_ONLY',
+        timeSpecified: false,
+        confidence: 0.93,
+        ambiguityReasons: [],
+      },
+      {
+        candidateId: 'date-presentation',
+        surfaceText: '11월 25일 오후 6시',
+        value: '2026-11-25T18:00:00+09:00',
+        precision: 'EXACT_TIME',
+        timeSpecified: true,
+        confidence: 0.92,
+        ambiguityReasons: [],
+      },
+    ],
+    itemCandidates: [
+      {
+        ...proposalItem('item-report', 'TASK', '보고서 제출'),
+        dueDateCandidateId: 'date-report',
+      },
+      {
+        ...proposalItem('item-presentation', 'TASK', '발표 준비'),
+        dueDateCandidateId: 'date-presentation',
+      },
+    ],
+  };
+}
 
 describe('review model', () => {
   it('clones editable data without guessing between multiple task and date candidates', () => {
@@ -103,6 +145,103 @@ describe('review model', () => {
       value: '2026-11-25',
       precision: 'DATE_ONLY',
     });
+  });
+
+  it('projects explicit v2 dates across multiple task candidates without guessing by order', () => {
+    const draft = createReviewDraft('proposal-explicit-dates', explicitBindingProposal());
+
+    expect(draft.items.map((item) => [item.candidateId, item.due?.candidateId])).toEqual([
+      ['item-report', 'date-report'],
+      ['item-presentation', 'date-presentation'],
+    ]);
+    expect(draft.items.map((item) => item.due?.value)).toEqual([
+      '2026-11-20',
+      '2026-11-25T18:00:00+09:00',
+    ]);
+    expect(requiresExplicitDateMapping(draft)).toBe(false);
+  });
+
+  it('allows an explicit v2 date to be shared by multiple tasks', () => {
+    const explicit = explicitBindingProposal();
+    const shared: Proposal = {
+      ...explicit,
+      dateCandidates: [explicit.dateCandidates[0]],
+      itemCandidates: explicit.itemCandidates.map((item) => ({
+        ...item,
+        dueDateCandidateId: 'date-report',
+      })),
+    };
+
+    const draft = createReviewDraft('proposal-shared-date', shared);
+
+    expect(draft.items.map((item) => item.due?.candidateId)).toEqual([
+      'date-report',
+      'date-report',
+    ]);
+    expect(requiresExplicitDateMapping(draft)).toBe(false);
+  });
+
+  it('forces detailed review for an unbound precise v2 date', () => {
+    const explicit = explicitBindingProposal();
+    const unbound: Proposal = {
+      ...explicit,
+      itemCandidates: explicit.itemCandidates.map((item) => ({
+        ...item,
+        dueDateCandidateId: null,
+      })),
+    };
+
+    const draft = createReviewDraft('proposal-unbound-date', unbound);
+
+    expect(draft.items.every((item) => item.due === null)).toBe(true);
+    expect(requiresExplicitDateMapping(draft)).toBe(true);
+  });
+
+  it('forces detailed review for approximate v2 dates and never turns them into a due', () => {
+    const approximate: Proposal = {
+      ...explicitBindingProposal(),
+      dateCandidates: [
+        {
+          candidateId: 'date-weekend',
+          surfaceText: '주말쯤',
+          value: null,
+          precision: 'APPROXIMATE',
+          timeSpecified: false,
+          confidence: 0.5,
+          ambiguityReasons: ['IMPRECISE_DATE'],
+        },
+      ],
+      itemCandidates: [
+        {
+          ...proposalItem('item-appointment', 'TASK', '병원 예약 잡기'),
+          dueDateCandidateId: null,
+        },
+      ],
+    };
+
+    const draft = createReviewDraft('proposal-approximate-v2', approximate);
+
+    expect(draft.items[0].due).toBeNull();
+    expect(usableDateCandidates(approximate)).toEqual([]);
+    expect(requiresExplicitDateMapping(draft)).toBe(true);
+  });
+
+  it('keeps an explicit v2 no-date proposal eligible for concise confirmation', () => {
+    const noDate: Proposal = {
+      ...explicitBindingProposal(),
+      dateCandidates: [],
+      itemCandidates: [
+        {
+          ...proposalItem('item-no-date', 'TASK', '자료 정리'),
+          dueDateCandidateId: null,
+        },
+      ],
+    };
+
+    const draft = createReviewDraft('proposal-no-date', noDate);
+
+    expect(draft.items[0].due).toBeNull();
+    expect(requiresExplicitDateMapping(draft)).toBe(false);
   });
 
   it('projects the preferred type before deciding whether the sole task gets a due', () => {
@@ -133,6 +272,7 @@ describe('review model', () => {
       ...proposal,
       dateCandidates: [
         {
+          candidateId: null,
           surfaceText: '주말쯤',
           value: null,
           precision: 'APPROXIMATE',
@@ -194,6 +334,41 @@ describe('review model', () => {
         },
       },
     ]);
+  });
+
+  it('strips v2 candidate identities from the canonical apply body', () => {
+    const draft = createReviewDraft('proposal-explicit-apply', explicitBindingProposal());
+
+    const request = buildApplyRequest(draft, 'Asia/Seoul');
+    const serialized = JSON.stringify(request);
+
+    expect(request.items).toEqual([
+      {
+        kind: 'TASK',
+        title: '보고서 제출',
+        due: {
+          surfaceText: '11월 20일',
+          value: '2026-11-20',
+          precision: 'DATE_ONLY',
+          timeZone: 'Asia/Seoul',
+          timeSpecified: false,
+        },
+      },
+      {
+        kind: 'TASK',
+        title: '발표 준비',
+        due: {
+          surfaceText: '11월 25일 오후 6시',
+          value: '2026-11-25T18:00:00+09:00',
+          precision: 'EXACT_TIME',
+          timeZone: 'Asia/Seoul',
+          timeSpecified: true,
+        },
+      },
+    ]);
+    expect(serialized).not.toContain('candidateId');
+    expect(serialized).not.toContain('date-report');
+    expect(serialized).not.toContain('date-presentation');
   });
 
   it('rejects impossible DATE_ONLY values and exact timestamps without an offset', () => {

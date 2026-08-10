@@ -40,9 +40,16 @@
 - Track `SAVED → ANALYZING → REVIEW_REQUIRED → APPLIED`.
 - Support `ANALYSIS_FAILED` and `STALE` terminal/intermediate outcomes.
 - Produce candidates for title, semantic type, tags, date/time, action, and relations.
+- Give every schema-v2 date candidate a proposal-local identifier and represent each TASK candidate's
+  suggested due date as an explicit nullable reference; never infer a v2 binding from array order or
+  candidate counts.
 - Record field-level ambiguity reason codes.
 - Preserve original date expression, interpreted value, base time, time zone, and precision.
 - Reject malformed JSON, unknown schema versions, impossible dates, and stale memo revisions.
+- Keep valid historical schema-v1 proposals recoverable without rewriting their stored JSON.
+- Negotiate proposal reads fail-closed: no schema header or value `1` returns strict v1, value `2`
+  preserves the stored v1/v2 version, and every representation is `no-store` with a schema-header
+  `Vary` response.
 
 ### Review and apply
 
@@ -70,6 +77,8 @@
 
 - Create zero to three task facets from one memo in MVP.
 - Store task title, optional due time, status, and source memo.
+- Treat apply DTO `due.timeZone` as a validated compatibility input only; persist the immutable memo
+  revision's source time zone so a review device cannot change date-only overdue semantics.
 - Support TODO, DONE, and CANCELLED source states.
 - Derive overdue state from current time instead of persisting it as canonical status.
 - Distinguish an event that has passed from an unfinished task whose due time has passed.
@@ -160,7 +169,7 @@ Given `11.25 OS과제 제출`:
 
 1. the raw text is saved before analysis;
 2. `11.25` and the interpreted date are both retained;
-3. TASK and existing `운영체제`/`과제` tags are proposed;
+3. TASK, its explicit due-date candidate reference, and existing `운영체제`/`과제` tags are proposed;
 4. if `OS` is an alias of `운영체제`, no new OS tag is proposed;
 5. confirmation creates one task and the selected graph relations;
 6. repeating the apply request with the same idempotency key creates no duplicates.

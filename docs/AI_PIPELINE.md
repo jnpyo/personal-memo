@@ -161,10 +161,10 @@ top-1/top-2 conflict merely because their scores are close.
 
 The current deterministic gate thresholds and structured-proposal reconstruction rules belong to
 routing policy `field-policy-v1`; changing a gate threshold, cloud-signal set, or reconstruction
-rule requires a new policy version. Lexical classification, reference extraction, and date parsing
-are separately identified by `fake-v5` and `korean-rules-v3`; changing those inputs does not rename
-an otherwise unchanged gate. Runtime configuration and user-specific thresholds remain a later
-milestone.
+rule requires a new policy version. Lexical classification, reference extraction, date parsing, and
+explicit TASK due binding are separately identified by `fake-v6` and `korean-rules-v4`; changing
+those inputs does not rename an otherwise unchanged gate. Runtime configuration and user-specific
+thresholds remain a later milestone.
 
 The server unions these derivable signals with the analyzer-declared `ambiguityReasons`. Nested
 date reasons must also appear in the proposal summary, and structural omissions such as a new tag,
@@ -208,7 +208,7 @@ Send only the context needed to resolve the flagged fields.
   ],
   "candidateTags": [],
   "candidateMemos": [],
-  "analysisSchemaVersion": "1"
+  "analysisSchemaVersion": "2"
 }
 ```
 
@@ -235,13 +235,20 @@ The orchestration layer enforces:
 
 Memo content must be delimited and explicitly described as untrusted source data. Text inside a memo never overrides system or tool policy.
 
+Proposal schema negotiation changes only the read representation. A client that omits
+`X-Analysis-Proposal-Schema-Version`, or sends `1`, receives strict v1 so an installed older PWA can
+continue reviewing proposals after a server upgrade. The current PWA sends `2`; new stored proposals
+then remain v2 while historical stored v1 remains v1. The downgrade removes only the two v2 binding
+fields from an in-memory copy, never rewrites the JSONB/hash, and responses use `no-store` plus
+`Vary: X-Analysis-Proposal-Schema-Version`.
+
 ## Structured proposal
 
-The version-1 result should contain fields conceptually equivalent to:
+The current version-2 result contains fields conceptually equivalent to:
 
 ```json
 {
-  "schemaVersion": "1",
+  "schemaVersion": "2",
   "memoId": "uuid",
   "memoRevision": 4,
   "suggestedTitle": {
@@ -254,6 +261,7 @@ The version-1 result should contain fields conceptually equivalent to:
   ],
   "dateCandidates": [
     {
+      "candidateId": "date-1",
       "surfaceText": "다음 주 화요일까지",
       "value": "2026-08-11",
       "precision": "DATE_ONLY",
@@ -274,6 +282,7 @@ The version-1 result should contain fields conceptually equivalent to:
   "itemCandidates": [
     {
       "candidateId": "item-1",
+      "dueDateCandidateId": "date-1",
       "kind": "TASK",
       "title": "xv6 과제 제출",
       "sourceSpan": { "start": 0, "end": 18 },
@@ -285,8 +294,8 @@ The version-1 result should contain fields conceptually equivalent to:
   "relationCandidates": [],
   "ambiguityReasons": [],
   "providerMetadata": {
-    "analyzerVersion": "fake-v5",
-    "deterministicRulesVersion": "korean-rules-v3",
+    "analyzerVersion": "fake-v6",
+    "deterministicRulesVersion": "korean-rules-v4",
     "promptVersion": "none",
     "localModelVersion": "none",
     "embeddingModelVersion": "none",
@@ -296,7 +305,20 @@ The version-1 result should contain fields conceptually equivalent to:
 }
 ```
 
-The server must validate this against both JSON Schema and domain rules. Unknown enum values and stale revisions are rejected. A non-null item `sourceSpan` is a non-empty UTF-16 code-unit half-open range `[start, end)` over the exact immutable raw memo revision; it must stay in bounds and must not split a surrogate pair. The five required version strings in `providerMetadata` contain 1–64 characters and must exactly match the server-owned analyzer and routing provenance; `toolCalls` is a required integer from 0 through 100. Provider-specific extra metadata is allowed only inside the metadata object. Before schema validation, the compact serialized proposal is capped at 65,536 UTF-8 bytes (64 KiB) and `providerMetadata` at 8,192 UTF-8 bytes (8 KiB).
+The server validates this against both JSON Schema and domain rules. In schema v2 every date
+candidate has a unique proposal-local `candidateId`, and every item has a nullable
+`dueDateCandidateId`. A non-null reference must resolve to a precise date candidate and may appear
+only on a `TASK`; approximate or unresolved dates remain unbound and force detailed user review.
+Historical schema-v1 proposals remain readable. Only that v1 compatibility path retains the former
+single-TASK/single-precise-date conservative default, while v2 never infers a due from array order or
+cardinality. Unknown enum values and stale revisions are rejected. A non-null item `sourceSpan` is a
+non-empty UTF-16 code-unit half-open range `[start, end)` over the exact immutable raw memo revision;
+it must stay in bounds and must not split a surrogate pair. The five required version strings in
+`providerMetadata` contain 1–64 characters and must exactly match the server-owned analyzer and
+routing provenance; `toolCalls` is a required integer from 0 through 100. Provider-specific extra
+metadata is allowed only inside the metadata object. Before schema validation, the compact
+serialized proposal is capped at 65,536 UTF-8 bytes (64 KiB) and `providerMetadata` at 8,192 UTF-8
+bytes (8 KiB).
 
 ## Application
 
@@ -306,14 +328,16 @@ The backend:
 
 1. re-checks owner and memo revision;
 2. validates selected tags and dates;
-3. fails closed with `PROPOSAL_RELATIONS_UNSUPPORTED` when `relationCandidates` is non-empty,
+3. replaces each validated due `timeZone` compatibility input with the locked immutable memo
+   revision's source time zone before canonical task persistence;
+4. fails closed with `PROPOSAL_RELATIONS_UNSUPPORTED` when `relationCandidates` is non-empty,
    because explicit relation selection, canonical relation persistence, and relation undo are not
    implemented yet;
-4. creates the application event only after that boundary passes;
-5. writes the currently supported derived items, task records, tags, and tag links in one
+5. creates the application event only after that boundary passes;
+6. writes the currently supported derived items, task records, tags, and tag links in one
    transaction;
-6. records provenance for each derived value;
-7. commits the transaction; after success, the client refetches the task and graph projections.
+7. records provenance for each derived value;
+8. commits the transaction; after success, the client refetches the task and graph projections.
 
 The fail-closed relation boundary prevents a future analyzer from making a run appear `APPLIED`
 while silently dropping proposed relationships. It creates no partial canonical records and does not
@@ -336,6 +360,10 @@ The endpoint keeps three independent dimensions:
 - semantic comparison of the latest validated selection with a versioned reconstruction of the
   default review draft (`EXACT`, `CORRECTED`, `USER_RESOLVED`, or `UNCLASSIFIABLE`).
 
+`review-default-v3` reconstructs v2 drafts from explicit due references and retains the former
+conservative projection only for recoverable v1 proposals. Missing, unused, imprecise, or
+type-incompatible v2 date mappings require user resolution rather than a guessed due.
+
 `EXACT` means only that the user applied the default selection without a semantic change. It is not
 an AI correctness label. `CORRECTED` records changed type/title/tag/item/due fields;
 `USER_RESOLVED` records a proposal that lacked a directly applicable default, such as a tied or
@@ -353,8 +381,9 @@ analyzer/prompt/local-model/embedding-model/routing-policy provenance and are se
 `Cache-Control: no-store`.
 
 This evidence makes personal review behavior observable, but it does not open the real-LLM gate.
-Independent adjudication of the version-2 date/item gold, a separately held blind release with a
-pre-registered gate, provider privacy/consent/cost/failure boundaries, and the remaining criteria in
+Independent adjudication of the version-2 date/item gold, a separately reviewed version-3 binding
+label policy and dataset, a separately held blind release with a pre-registered gate, provider
+privacy/consent/cost/failure boundaries, and the remaining criteria in
 [EVALUATION.md](EVALUATION.md) are still required.
 
 ## Personalization without fine-tuning
@@ -401,13 +430,18 @@ for:
 
 Track precision of high-confidence local routing separately from overall accuracy. The primary safety metric is the rate of wrong local decisions that were presented as unambiguous.
 
-`fake-v5` / `korean-rules-v3` keeps the generalized weekday/time, approximate-date, reference, event,
-and multi-intent rules while extracting sequential item facets and source-aligned UTF-16 spans from
-the immutable raw revision without copying a challenge sentence. The version-2 report now exposes date mention/item/item-source-span
-failures as well as route/type/signal metrics, including missing spans rather than silently treating
-them as success. The public visible challenge and the semantic quality rates remain report-only;
-they are not a blind or general Korean accuracy claim. The generated public report contains case
-identifiers and labels for transparent diagnostics, never fixture or personal memo text.
+`fake-v6` / `korean-rules-v4` keeps the generalized weekday/time, approximate-date, reference,
+event, and multi-intent rules while extracting sequential item facets and source-aligned UTF-16
+spans from the immutable raw revision without copying a challenge sentence. It also emits
+proposal-local date IDs and only structurally safe TASK due references. Evaluation dataset v2 and
+its report still have no binding gold, so the capability is
+`SUPPORTED_NOT_SCORED_DATASET_V2`; binding quality cannot be a hard metric until independently
+adjudicated version-3 labels are frozen. The version-2 report exposes date
+mention/item/item-source-span failures as well as route/type/signal metrics, including missing spans
+rather than silently treating them as success. The public visible challenge and the semantic quality
+rates remain report-only; they are not a blind or general Korean accuracy claim. The generated
+public report contains case identifiers and labels for transparent diagnostics, never fixture or
+personal memo text.
 
 The separately held blind boundary is documented in [EVALUATION.md](EVALUATION.md). It is local and
 explicit only, uses the deterministic `FakeAnalyzer` without network access, and writes a different

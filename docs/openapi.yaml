@@ -445,9 +445,26 @@ paths:
       tags: [Analysis]
       operationId: getAnalysisProposal
       summary: Read an untrusted, non-canonical analysis proposal
+      parameters:
+        - $ref: "#/components/parameters/AnalysisProposalSchemaVersion"
       responses:
         "200":
-          description: Version 1 structured proposal.
+          description: >-
+            Negotiated structured proposal. Omitting X-Analysis-Proposal-Schema-Version or
+            requesting 1 returns a strict version-1 projection. Requesting 2 returns the stored
+            version: new Fake analyses are version 2 with explicit TASK-to-due-date candidate
+            references, while historical version-1 proposals remain version 1.
+          headers:
+            Cache-Control:
+              description: Proposal responses are owner-scoped and are never stored by caches.
+              schema:
+                type: string
+                const: no-store
+            Vary:
+              description: Caches must keep proposal schema representations separate.
+              schema:
+                type: string
+                const: X-Analysis-Proposal-Schema-Version
           content:
             application/json:
               schema:
@@ -458,6 +475,8 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
 
   /analysis-proposals:
     parameters:
@@ -467,6 +486,7 @@ paths:
       operationId: listRecoverableAnalysisProposals
       summary: List recoverable proposals awaiting review
       parameters:
+        - $ref: "#/components/parameters/AnalysisProposalSchemaVersion"
         - name: status
           in: query
           required: true
@@ -483,7 +503,20 @@ paths:
         "200":
           description: >-
             Newest owner-scoped proposals in the requested review state whose memo is
-            ACTIVE and whose analyzed revision is still current.
+            ACTIVE and whose analyzed revision is still current. Omitting
+            X-Analysis-Proposal-Schema-Version or requesting 1 returns strict version-1
+            projections; requesting 2 preserves each stored version.
+          headers:
+            Cache-Control:
+              description: Proposal recovery responses are owner-scoped and are never cached.
+              schema:
+                type: string
+                const: no-store
+            Vary:
+              description: Caches must keep proposal schema representations separate.
+              schema:
+                type: string
+                const: X-Analysis-Proposal-Schema-Version
           content:
             application/json:
               schema:
@@ -509,6 +542,8 @@ paths:
       description: >-
         Validates owner, current memo revision, tags, items, and due values, then
         creates the application and all currently supported derived records in one transaction.
+        The due timeZone request field is compatibility input only; persisted task source time zones
+        are canonicalized from the locked immutable memo revision.
         A proposal with a non-empty relationCandidates array fails closed with
         PROPOSAL_RELATIONS_UNSUPPORTED until explicit relation selection, canonical relation
         persistence, and application-scoped undo are implemented. No partial application occurs.
@@ -712,7 +747,7 @@ paths:
                 recentReviewOutcomes:
                   value:
                     schemaVersion: "1"
-                    comparisonPolicyVersion: review-default-v2
+                    comparisonPolicyVersion: review-default-v3
                     cohort:
                       basis: PROPOSAL_CREATED_AT
                       days: 14
@@ -749,7 +784,7 @@ paths:
                         due: 0
                     byAnalysisVersion:
                       - route: LOCAL
-                        analyzerVersion: fake-v5
+                        analyzerVersion: fake-v6
                         promptVersion: none
                         localModelVersion: none
                         embeddingModelVersion: none
@@ -926,6 +961,19 @@ components:
       schema:
         type: string
         format: uuid
+    AnalysisProposalSchemaVersion:
+      name: X-Analysis-Proposal-Schema-Version
+      in: header
+      required: false
+      description: >-
+        Maximum proposal schema understood by the client. Omission and value 1 return a strict
+        version-1 representation for forward compatibility with an installed older PWA. Value 2
+        allows a stored version-2 proposal; a historical stored version-1 proposal remains version
+        1. Any other or combined value returns 422 UNSUPPORTED_PROPOSAL_SCHEMA_VERSION.
+      schema:
+        type: string
+        enum: ["1", "2"]
+        default: "1"
     CsrfHeader:
       name: X-XSRF-TOKEN
       in: header
@@ -1372,7 +1420,9 @@ components:
       description: >-
         DATE_ONLY uses an ISO date with timeSpecified=false. EXACT_TIME and
         RELATIVE_EXACT use an offset timestamp with timeSpecified=true.
-        APPROXIMATE and UNKNOWN require a null value and are never coerced to an instant.
+        APPROXIMATE and UNKNOWN require a null value and are never coerced to an instant. The
+        timeZone field remains a validated compatibility input, but the server replaces it with
+        the immutable memo revision's source time zone before persisting task_details.
       properties:
         surfaceText:
           type: string
@@ -1387,6 +1437,9 @@ components:
           type: string
           minLength: 1
           maxLength: 64
+          description: >-
+            Recognized IANA compatibility input. It cannot select the canonical persisted zone;
+            task_details.source_time_zone comes from the immutable analyzed memo revision.
         timeSpecified:
           type: boolean
     ApplyItem:
@@ -1644,7 +1697,11 @@ components:
         schemaVersion:
           const: "1"
         comparisonPolicyVersion:
-          const: review-default-v2
+          const: review-default-v3
+          description: >-
+            Reconstructs explicit version-2 TASK due references while retaining the former
+            conservative single-task/single-date projection only for historical version-1
+            proposals.
         cohort:
           $ref: "#/components/schemas/ReviewOutcomeCohort"
         proposals:

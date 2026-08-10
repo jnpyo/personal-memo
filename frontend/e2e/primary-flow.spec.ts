@@ -452,6 +452,41 @@ test('applies the complete AI recommendation only after an explicit yes', async 
   ).toHaveText('1');
 });
 
+test('applies two explicitly bound task dates and undoes both together', async ({
+  page,
+}, testInfo) => {
+  const marker = `date-binding-${Date.now()}-${testInfo.retry}`;
+  const rawMemo = `보고서 E2E ${marker} 초안은 11월 20일, 최종 제출은 11월 25일`;
+
+  await registerIsolatedUser(page, testInfo);
+  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(rawMemo);
+  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('마감 11월 20일 → 2026-11-20')).toBeVisible();
+  await expect(dialog.getByText('마감 11월 25일 → 2026-11-25')).toBeVisible();
+  await expect(page.getByRole('button', { name: '예, 이대로 적용' })).toBeEnabled();
+  await expect(page.locator('.task-row')).toHaveCount(0);
+
+  await page.getByRole('button', { name: '예, 이대로 적용' }).click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.task-row')).toHaveCount(2);
+  await expect(
+    page.locator('.task-row').filter({ hasText: '2026. 11. 20.' }),
+  ).toBeVisible();
+  await expect(
+    page.locator('.task-row').filter({ hasText: '2026. 11. 25.' }),
+  ).toBeVisible();
+  await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
+
+  await page.getByRole('button', { name: '마지막 적용 되돌리기' }).click();
+
+  await expect(page.locator('.task-row')).toHaveCount(0);
+  await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
+});
+
 test('keeps an apply failure and its retry action inside the proposal popup', async ({
   page,
 }, testInfo) => {
@@ -573,7 +608,7 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
   await expect(reviewHeading).toBeVisible();
   await expect(reviewHeading).toBeFocused();
   await expect(reviewHeading).toBeInViewport();
-  await expect(page.getByText('날짜 2026.11.25 → 2026-11-25')).toBeVisible();
+  await expect(page.getByText('마감 2026.11.25 → 2026-11-25')).toBeVisible();
   await page.reload();
   await expect(reviewHeading).toBeVisible();
   await expect(reviewHeading).toBeFocused();

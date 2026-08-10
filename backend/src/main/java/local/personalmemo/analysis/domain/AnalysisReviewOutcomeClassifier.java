@@ -4,8 +4,11 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -19,7 +22,7 @@ import tools.jackson.databind.JsonNode;
  */
 @Component
 public final class AnalysisReviewOutcomeClassifier {
-  public static final String POLICY_VERSION = "review-default-v2";
+  public static final String POLICY_VERSION = "review-default-v3";
 
   private static final Set<String> ITEM_KINDS =
       Set.of("TASK", "EVENT", "INFORMATION", "IDEA", "RECORD");
@@ -80,7 +83,7 @@ public final class AnalysisReviewOutcomeClassifier {
 
   private boolean contextMatches(JsonNode proposal, ReviewContext context) {
     if (context == null
-        || !"1".equals(context.runSchemaVersion())
+        || !Set.of("1", "2").contains(context.runSchemaVersion())
         || context.runMemoId() == null
         || context.runMemoRevision() < 1
         || context.applicationMemoId() == null
@@ -99,7 +102,8 @@ public final class AnalysisReviewOutcomeClassifier {
   }
 
   private Projection projection(JsonNode proposal) {
-    if (!"1".equals(text(proposal.path("schemaVersion")))) {
+    String schemaVersion = text(proposal.path("schemaVersion"));
+    if (!Set.of("1", "2").contains(schemaVersion)) {
       return Projection.invalid();
     }
     Integer memoRevision = positiveInteger(proposal.path("memoRevision"));
@@ -131,20 +135,36 @@ public final class AnalysisReviewOutcomeClassifier {
       projectedItems.set(0, new SemanticItem(preferred.kind(), first.title(), null));
     }
 
-    List<DueValue> usableDues = usableDues(proposal.path("dateCandidates"));
-    if (usableDues == null) {
-      return Projection.invalid();
+    List<DueValue> projectedDues;
+    if ("2".equals(schemaVersion)) {
+      ExplicitDueProjection explicitDues = explicitDues(proposal, projectedItems);
+      if (!explicitDues.valid()) {
+        return Projection.invalid();
+      }
+      if (explicitDues.userResolutionRequired()) {
+        return Projection.userResolutionRequired();
+      }
+      projectedDues = explicitDues.dues();
+    } else {
+      List<DueValue> usableDues = usableDues(proposal.path("dateCandidates"));
+      if (usableDues == null) {
+        return Projection.invalid();
+      }
+      DueValue unambiguousDue =
+          projectedItems.size() == 1
+                  && "TASK".equals(projectedItems.getFirst().kind())
+                  && usableDues.size() == 1
+              ? usableDues.getFirst()
+              : null;
+      projectedDues = new ArrayList<>();
+      for (SemanticItem item : projectedItems) {
+        projectedDues.add("TASK".equals(item.kind()) ? unambiguousDue : null);
+      }
     }
-    DueValue unambiguousDue =
-        projectedItems.size() == 1
-                && "TASK".equals(projectedItems.getFirst().kind())
-                && usableDues.size() == 1
-            ? usableDues.getFirst()
-            : null;
     List<SemanticItem> draftItems = new ArrayList<>();
-    for (SemanticItem item : projectedItems) {
-      DueValue due = "TASK".equals(item.kind()) ? unambiguousDue : null;
-      draftItems.add(new SemanticItem(item.kind(), item.title(), due));
+    for (int index = 0; index < projectedItems.size(); index++) {
+      SemanticItem item = projectedItems.get(index);
+      draftItems.add(new SemanticItem(item.kind(), item.title(), projectedDues.get(index)));
     }
 
     SemanticSelection selection =
@@ -313,6 +333,66 @@ public final class AnalysisReviewOutcomeClassifier {
       }
     }
     return List.copyOf(dues);
+  }
+
+  private ExplicitDueProjection explicitDues(JsonNode proposal, List<SemanticItem> projectedItems) {
+    JsonNode dateCandidates = proposal.path("dateCandidates");
+    JsonNode itemCandidates = proposal.path("itemCandidates");
+    if (!dateCandidates.isArray()
+        || !itemCandidates.isArray()
+        || itemCandidates.size() != projectedItems.size()) {
+      return ExplicitDueProjection.invalid();
+    }
+
+    Map<String, DueValue> preciseDates = new LinkedHashMap<>();
+    Set<String> allDateIds = new HashSet<>();
+    boolean userResolutionRequired = false;
+    for (JsonNode dateCandidate : dateCandidates) {
+      String candidateId = text(dateCandidate.path("candidateId"));
+      if (candidateId == null || !allDateIds.add(candidateId)) {
+        return ExplicitDueProjection.invalid();
+      }
+      DueValue due = proposalDue(dateCandidate);
+      if (due == null) {
+        userResolutionRequired = true;
+      } else {
+        preciseDates.put(candidateId, due);
+      }
+    }
+
+    Set<String> referencedDateIds = new HashSet<>();
+    List<DueValue> dues = new ArrayList<>();
+    for (int index = 0; index < itemCandidates.size(); index++) {
+      JsonNode itemCandidate = itemCandidates.get(index);
+      if (!itemCandidate.has("dueDateCandidateId")) {
+        return ExplicitDueProjection.invalid();
+      }
+      JsonNode reference = itemCandidate.path("dueDateCandidateId");
+      if (reference.isNull()) {
+        dues.add(null);
+        continue;
+      }
+      String dateCandidateId = text(reference);
+      DueValue due = preciseDates.get(dateCandidateId);
+      if (dateCandidateId == null
+          || !allDateIds.contains(dateCandidateId)
+          || due == null
+          || !"TASK".equals(text(itemCandidate.path("kind")))) {
+        return ExplicitDueProjection.invalid();
+      }
+      referencedDateIds.add(dateCandidateId);
+      if (!"TASK".equals(projectedItems.get(index).kind())) {
+        userResolutionRequired = true;
+        dues.add(null);
+      } else {
+        dues.add(due);
+      }
+    }
+
+    if (!referencedDateIds.containsAll(preciseDates.keySet())) {
+      userResolutionRequired = true;
+    }
+    return ExplicitDueProjection.valid(dues, userResolutionRequired);
   }
 
   private DueValue proposalDue(JsonNode due) {
@@ -579,6 +659,18 @@ public final class AnalysisReviewOutcomeClassifier {
 
     static NormalizedDue invalid() {
       return new NormalizedDue(false, null);
+    }
+  }
+
+  private record ExplicitDueProjection(
+      boolean valid, boolean userResolutionRequired, List<DueValue> dues) {
+    static ExplicitDueProjection valid(List<DueValue> dues, boolean userResolutionRequired) {
+      return new ExplicitDueProjection(
+          true, userResolutionRequired, Collections.unmodifiableList(new ArrayList<>(dues)));
+    }
+
+    static ExplicitDueProjection invalid() {
+      return new ExplicitDueProjection(false, false, List.of());
     }
   }
 

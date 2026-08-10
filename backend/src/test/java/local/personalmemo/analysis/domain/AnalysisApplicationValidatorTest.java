@@ -41,6 +41,19 @@ class AnalysisApplicationValidatorTest {
   }
 
   @Test
+  void canonicalizesDueTimeZoneFromTheImmutableMemoRevision() {
+    Due due = new Due("11.25", "2026-11-25", "DATE_ONLY", "Asia/Seoul", false);
+    var original = validator.validate(apply(due));
+
+    var canonical = validator.canonicalizeDueTimeZone(original, "America/New_York");
+
+    assertThat(original.items().getFirst().due().timeZone()).isEqualTo("Asia/Seoul");
+    assertThat(canonical.items().getFirst().due().timeZone()).isEqualTo("America/New_York");
+    assertThat(canonical.items().getFirst().due().dueLocalDate())
+        .isEqualTo(LocalDate.of(2026, 11, 25));
+  }
+
+  @Test
   void rejectsImpossibleDatesUnknownZonesAndInventedDateOnlyTimes() {
     assertInvalidDate(
         new Due("2월 30일", "2026-02-30", "DATE_ONLY", "Asia/Seoul", false), "INVALID_DATE_VALUE");

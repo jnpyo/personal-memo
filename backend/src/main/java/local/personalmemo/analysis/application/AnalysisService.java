@@ -41,6 +41,8 @@ public class AnalysisService {
   private static final String START_OPERATION = "ANALYSIS_START";
   private static final String REJECT_OPERATION = "ANALYSIS_REJECT";
   private static final String POSTPONE_OPERATION = "ANALYSIS_POSTPONE";
+  private static final String LEGACY_PROPOSAL_SCHEMA_VERSION = "1";
+  private static final String CURRENT_PROPOSAL_SCHEMA_VERSION = "2";
   private static final int MAX_RECOVERY_PROPOSALS = 100;
 
   private final JdbcClient db;
@@ -95,6 +97,7 @@ public class AnalysisService {
     UUID runId = UUID.randomUUID();
     UUID proposalId = UUID.randomUUID();
     Instant now = Instant.now();
+    String proposalSchemaVersion = requireProposalSchemaVersion();
     AnalysisProvenance provenance = requireAnalysisProvenance();
     String routingPolicyVersion = requireRoutingPolicyVersion();
     ObjectNode localProposal =
@@ -104,7 +107,7 @@ public class AnalysisService {
             memo.content(),
             memo.clientRecordedAt(),
             memo.sourceTimeZone());
-    validateProposal(localProposal, memo, provenance, routingPolicyVersion);
+    validateProposal(localProposal, memo, proposalSchemaVersion, provenance, routingPolicyVersion);
     List<AmbiguityReason> routingReasons = ambiguityGate.routingSignals(localProposal);
     AnalysisRoute route = ambiguityGate.route(routingReasons);
     ObjectNode proposal =
@@ -113,6 +116,7 @@ public class AnalysisService {
             : enrichWithCloud(
                 new CloudAnalysisRequest(localProposal, routingReasons, routingPolicyVersion),
                 memo,
+                proposalSchemaVersion,
                 provenance,
                 routingPolicyVersion);
     String persistedRoute = route == AnalysisRoute.LOCAL_REVIEW ? "LOCAL" : "HYBRID";
@@ -143,7 +147,7 @@ public class AnalysisService {
               :memoRevision,
               :route,
               'REVIEW_REQUIRED',
-              '1',
+              :schemaVersion,
               :analyzerVersion,
               :promptVersion,
               :localModelVersion,
@@ -159,6 +163,7 @@ public class AnalysisService {
         .param("memoId", memoId)
         .param("memoRevision", request.memoRevision())
         .param("route", persistedRoute)
+        .param("schemaVersion", proposalSchemaVersion)
         .param("analyzerVersion", provenance.analyzerVersion())
         .param("promptVersion", provenance.promptVersion())
         .param("localModelVersion", provenance.localModelVersion())
@@ -195,7 +200,8 @@ public class AnalysisService {
   }
 
   @Transactional(readOnly = true)
-  public JsonNode proposal(UUID proposalId) {
+  public JsonNode proposal(UUID proposalId, String requestedSchemaVersion) {
+    String responseSchemaVersion = responseSchemaVersion(requestedSchemaVersion);
     String proposalJson =
         db.sql(
                 """
@@ -212,11 +218,13 @@ public class AnalysisService {
             .query(String.class)
             .optional()
             .orElseThrow(() -> DomainException.notFound("Analysis proposal"));
-    return parse(proposalJson);
+    return projectProposal(parse(proposalJson), responseSchemaVersion);
   }
 
   @Transactional(readOnly = true)
-  public List<ProposalRecoveryView> recoveryProposals(String status, int requestedLimit) {
+  public List<ProposalRecoveryView> recoveryProposals(
+      String status, int requestedLimit, String requestedSchemaVersion) {
+    String responseSchemaVersion = responseSchemaVersion(requestedSchemaVersion);
     if (!SetLike.RECOVERABLE.contains(status)) {
       throw DomainException.invalid(
           "INVALID_PROPOSAL_STATUS",
@@ -252,8 +260,47 @@ public class AnalysisService {
                     resultSet.getObject("id", UUID.class),
                     resultSet.getString("status"),
                     resultSet.getTimestamp("created_at").toInstant(),
-                    parse(resultSet.getString("proposal_json"))))
+                    projectProposal(
+                        parse(resultSet.getString("proposal_json")), responseSchemaVersion)))
         .list();
+  }
+
+  private String responseSchemaVersion(String requestedSchemaVersion) {
+    String version =
+        requestedSchemaVersion == null ? LEGACY_PROPOSAL_SCHEMA_VERSION : requestedSchemaVersion;
+    if (!LEGACY_PROPOSAL_SCHEMA_VERSION.equals(version)
+        && !CURRENT_PROPOSAL_SCHEMA_VERSION.equals(version)) {
+      throw DomainException.invalid(
+          "UNSUPPORTED_PROPOSAL_SCHEMA_VERSION",
+          "X-Analysis-Proposal-Schema-Version must be 1 or 2.");
+    }
+    return version;
+  }
+
+  private JsonNode projectProposal(JsonNode proposal, String responseSchemaVersion) {
+    if (!(proposal instanceof ObjectNode storedProposal)) {
+      throw new IllegalStateException("Stored analysis proposal is not a JSON object.");
+    }
+    String storedSchemaVersion = storedProposal.path("schemaVersion").asText();
+    if (!SetLike.SUPPORTED_SCHEMA_VERSIONS.contains(storedSchemaVersion)) {
+      throw new IllegalStateException(
+          "Stored analysis proposal has an unsupported schema version.");
+    }
+    if (CURRENT_PROPOSAL_SCHEMA_VERSION.equals(responseSchemaVersion)
+        || LEGACY_PROPOSAL_SCHEMA_VERSION.equals(storedSchemaVersion)) {
+      return storedProposal;
+    }
+
+    ObjectNode legacyProposal = storedProposal.deepCopy();
+    legacyProposal.put("schemaVersion", LEGACY_PROPOSAL_SCHEMA_VERSION);
+    legacyProposal
+        .path("dateCandidates")
+        .forEach(candidate -> ((ObjectNode) candidate).remove("candidateId"));
+    legacyProposal
+        .path("itemCandidates")
+        .forEach(candidate -> ((ObjectNode) candidate).remove("dueDateCandidateId"));
+    proposalSchemaValidator.validate(legacyProposal);
+    return legacyProposal;
   }
 
   @Transactional
@@ -405,11 +452,17 @@ public class AnalysisService {
   private void validateProposal(
       ObjectNode proposal,
       MemoSnapshot memo,
+      String expectedSchemaVersion,
       AnalysisProvenance expectedProvenance,
       String expectedRoutingPolicyVersion) {
     if (proposal == null) {
       throw DomainException.invalid(
           "INVALID_ANALYSIS_PROPOSAL", "The analyzer returned no proposal.");
+    }
+    if (!expectedSchemaVersion.equals(proposal.path("schemaVersion").asText())) {
+      throw DomainException.invalid(
+          "INVALID_ANALYSIS_PROPOSAL",
+          "The proposal schema version does not match the server-owned analyzer contract.");
     }
     proposalSchemaValidator.validate(proposal);
     resolveOwnerScopedTagCandidates(proposal);
@@ -549,6 +602,15 @@ public class AnalysisService {
     return provenance;
   }
 
+  private String requireProposalSchemaVersion() {
+    String version = analyzer.proposalSchemaVersion();
+    if (!SetLike.SUPPORTED_SCHEMA_VERSIONS.contains(version)) {
+      throw new IllegalStateException(
+          "Local analyzer must expose a supported proposal schema version.");
+    }
+    return version;
+  }
+
   private String requireRoutingPolicyVersion() {
     String version = ambiguityGate.version();
     if (version == null
@@ -563,6 +625,7 @@ public class AnalysisService {
   private ObjectNode enrichWithCloud(
       CloudAnalysisRequest request,
       MemoSnapshot memo,
+      String expectedSchemaVersion,
       AnalysisProvenance expectedProvenance,
       String expectedRoutingPolicyVersion) {
     ObjectNode enriched;
@@ -573,7 +636,8 @@ public class AnalysisService {
           "CLOUD_ANALYSIS_FAILED",
           "Cloud analysis could not produce a review proposal; no analysis was stored.");
     }
-    validateProposal(enriched, memo, expectedProvenance, expectedRoutingPolicyVersion);
+    validateProposal(
+        enriched, memo, expectedSchemaVersion, expectedProvenance, expectedRoutingPolicyVersion);
     return enriched;
   }
 
@@ -638,6 +702,7 @@ public class AnalysisService {
   private record TagResolution(UUID id, String canonicalName, String matchedAlias) {}
 
   private static final class SetLike {
+    private static final List<String> SUPPORTED_SCHEMA_VERSIONS = List.of("1", "2");
     private static final java.util.Set<String> RECOVERABLE =
         java.util.Set.of("REVIEW_REQUIRED", "POSTPONED");
     private static final java.util.Set<String> REJECTABLE =

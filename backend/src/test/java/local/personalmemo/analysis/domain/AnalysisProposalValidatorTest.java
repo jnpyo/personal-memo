@@ -9,6 +9,7 @@ import java.util.UUID;
 import local.personalmemo.analysis.infrastructure.FakeAnalyzer;
 import local.personalmemo.common.error.DomainException;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -70,6 +71,48 @@ class AnalysisProposalValidatorTest {
         () ->
             validator.validate(
                 splitSurrogate, memoId, 1, content, analyzer.provenance(), "field-policy-v1"));
+  }
+
+  @Test
+  void keepsLegacyVersionOneProposalsReadableWithoutBindingFields() {
+    UUID memoId = UUID.randomUUID();
+    String content = "11.25 OS과제 제출";
+    ObjectNode proposal = proposal(memoId, 1, content).put("schemaVersion", "1");
+    for (JsonNode date : proposal.path("dateCandidates")) {
+      ((ObjectNode) date).remove("candidateId");
+    }
+    for (JsonNode item : proposal.path("itemCandidates")) {
+      ((ObjectNode) item).remove("dueDateCandidateId");
+    }
+
+    assertThatCode(() -> validator.validate(proposal, memoId, 1, content.length()))
+        .doesNotThrowAnyException();
+  }
+
+  @Test
+  void rejectsDuplicateDanglingNonTaskAndImpreciseVersionTwoBindings() {
+    UUID memoId = UUID.randomUUID();
+    String twoDateContent = "보고서 초안은 11월 20일, 최종 제출은 11월 25일";
+    ObjectNode duplicateDateIds = proposal(memoId, 1, twoDateContent);
+    ((ObjectNode) duplicateDateIds.at("/dateCandidates/1")).put("candidateId", "date-1");
+
+    String exactContent = "11.25 OS과제 제출";
+    ObjectNode dangling = proposal(memoId, 1, exactContent);
+    ((ObjectNode) dangling.at("/itemCandidates/0")).put("dueDateCandidateId", "date-missing");
+    ObjectNode nonTask = proposal(memoId, 1, exactContent);
+    ((ObjectNode) nonTask.at("/itemCandidates/0")).put("kind", "INFORMATION");
+    ((ObjectNode) nonTask.at("/typeCandidates/0")).put("value", "INFORMATION");
+
+    String approximateContent = "주말쯤 병원 예약 잡기";
+    ObjectNode imprecise = proposal(memoId, 1, approximateContent);
+    ((ObjectNode) imprecise.at("/itemCandidates/0")).put("dueDateCandidateId", "date-1");
+
+    assertInvalidProposal(
+        () -> validator.validate(duplicateDateIds, memoId, 1, twoDateContent.length()));
+    assertInvalidProposal(() -> validator.validate(dangling, memoId, 1, exactContent.length()));
+    assertInvalidProposal(() -> validator.validate(nonTask, memoId, 1, exactContent.length()));
+    assertInvalidProposal(
+        () -> validator.validate(imprecise, memoId, 1, approximateContent.length()));
   }
 
   private ObjectNode proposal(UUID memoId, int revision, String content) {

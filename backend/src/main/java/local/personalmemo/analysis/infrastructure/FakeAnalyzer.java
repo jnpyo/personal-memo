@@ -30,8 +30,8 @@ import tools.jackson.databind.node.ObjectNode;
 @Component
 public class FakeAnalyzer implements LocalAnalyzer {
   private static final AnalysisProvenance PROVENANCE =
-      new AnalysisProvenance("fake-v5", "none", "none", "none");
-  private static final String DETERMINISTIC_RULES_VERSION = "korean-rules-v3";
+      new AnalysisProvenance("fake-v6", "none", "none", "none");
+  private static final String DETERMINISTIC_RULES_VERSION = "korean-rules-v4";
   private static final int MAX_DATE_CANDIDATES = 5;
   private static final int MAX_ITEM_CANDIDATES = 3;
   private static final Pattern OPERATING_SYSTEMS_ALIAS =
@@ -44,6 +44,11 @@ public class FakeAnalyzer implements LocalAnalyzer {
 
   public FakeAnalyzer(ObjectMapper json) {
     this.json = json;
+  }
+
+  @Override
+  public String proposalSchemaVersion() {
+    return "2";
   }
 
   @Override
@@ -80,7 +85,7 @@ public class FakeAnalyzer implements LocalAnalyzer {
 
     ObjectNode proposal = json.createObjectNode();
     proposal
-        .put("schemaVersion", "1")
+        .put("schemaVersion", "2")
         .put("memoId", memoId.toString())
         .put("memoRevision", revision);
     proposal.set(
@@ -92,7 +97,7 @@ public class FakeAnalyzer implements LocalAnalyzer {
     proposal.set("typeCandidates", createTypeCandidates(shape.types()));
     proposal.set("dateCandidates", createDateCandidates(dates));
     proposal.set("tagCandidates", tagCandidates);
-    proposal.set("itemCandidates", createItemCandidates(shape.items(), title));
+    proposal.set("itemCandidates", createItemCandidates(shape.items(), dates, title));
     proposal.set("relationCandidates", json.createArrayNode());
     proposal.set("ambiguityReasons", createAmbiguityReasons(signals));
     AnalysisRoute route = ambiguityGate.route(ambiguityGate.routingSignals(proposal));
@@ -256,9 +261,11 @@ public class FakeAnalyzer implements LocalAnalyzer {
 
   private ArrayNode createDateCandidates(List<ParsedDate> dates) {
     ArrayNode candidates = json.createArrayNode();
-    for (ParsedDate date : dates) {
+    for (int index = 0; index < dates.size(); index++) {
+      ParsedDate date = dates.get(index);
       ObjectNode candidate =
           json.createObjectNode()
+              .put("candidateId", dateCandidateId(index))
               .put("surfaceText", date.surfaceText())
               .put("precision", date.precision().name())
               .put("timeSpecified", date.timeSpecified())
@@ -328,10 +335,12 @@ public class FakeAnalyzer implements LocalAnalyzer {
     return candidate;
   }
 
-  private ArrayNode createItemCandidates(List<ItemShape> itemShapes, String fallbackTitle) {
+  private ArrayNode createItemCandidates(
+      List<ItemShape> itemShapes, List<ParsedDate> dates, String fallbackTitle) {
     ArrayNode items = json.createArrayNode();
     List<ItemShape> boundedItems =
         new ArrayList<>(itemShapes.stream().limit(MAX_ITEM_CANDIDATES).toList());
+    List<String> dueDateCandidateIds = suggestedDueDateCandidateIds(boundedItems, dates);
     for (int index = 0; index < boundedItems.size(); index++) {
       ItemShape item = boundedItems.get(index);
       String itemTitle = item.title().isBlank() ? fallbackTitle : bounded(item.title(), 200);
@@ -340,6 +349,12 @@ public class FakeAnalyzer implements LocalAnalyzer {
               .put("candidateId", "item-" + (index + 1))
               .put("kind", item.kind())
               .put("title", itemTitle);
+      String dueDateCandidateId = dueDateCandidateIds.get(index);
+      if (dueDateCandidateId == null) {
+        candidate.putNull("dueDateCandidateId");
+      } else {
+        candidate.put("dueDateCandidateId", dueDateCandidateId);
+      }
       candidate.set(
           "sourceSpan",
           json.createObjectNode().put("start", item.startOffset()).put("end", item.endOffset()));
@@ -357,6 +372,49 @@ public class FakeAnalyzer implements LocalAnalyzer {
       items.add(candidate);
     }
     return items;
+  }
+
+  private List<String> suggestedDueDateCandidateIds(List<ItemShape> items, List<ParsedDate> dates) {
+    List<Integer> preciseDateIndexes = new ArrayList<>();
+    for (int index = 0; index < dates.size(); index++) {
+      if (isPreciseDueDate(dates.get(index))) {
+        preciseDateIndexes.add(index);
+      }
+    }
+
+    List<String> bindings = new ArrayList<>();
+    for (ItemShape item : items) {
+      String binding = null;
+      if ("TASK".equals(item.kind())) {
+        List<Integer> containedDates =
+            preciseDateIndexes.stream()
+                .filter(
+                    index -> {
+                      ParsedDate date = dates.get(index);
+                      return item.startOffset() <= date.startOffset()
+                          && date.endOffset() <= item.endOffset();
+                    })
+                .toList();
+        if (containedDates.size() == 1) {
+          binding = dateCandidateId(containedDates.getFirst());
+        } else if (items.size() == 1 && preciseDateIndexes.size() == 1) {
+          binding = dateCandidateId(preciseDateIndexes.getFirst());
+        }
+      }
+      bindings.add(binding);
+    }
+    return bindings;
+  }
+
+  private boolean isPreciseDueDate(ParsedDate date) {
+    return switch (date.precision()) {
+      case DATE_ONLY, EXACT_TIME, RELATIVE_EXACT -> true;
+      case APPROXIMATE, UNKNOWN -> false;
+    };
+  }
+
+  private String dateCandidateId(int index) {
+    return "date-" + (index + 1);
   }
 
   private String bounded(String value, int maximum) {

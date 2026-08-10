@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  ANALYSIS_PROPOSAL_SCHEMA_VERSION_HEADER,
   createApiClient,
   EXPECTED_OWNER_ID_HEADER,
   SESSION_OWNER_CHANGED_EVENT,
   SessionScopeChangedError,
 } from './client';
 import { ReviewOutcomeContractError } from './reviewOutcomeDecoder';
-import type { MemoView } from './types';
+import type { ApplyProposalRequest, MemoView } from './types';
 
 const memo: MemoView = {
   id: 'memo-1',
@@ -62,10 +63,40 @@ function validProposal() {
   };
 }
 
+function validProposalV2() {
+  return {
+    ...validProposal(),
+    schemaVersion: '2',
+    dateCandidates: [
+      {
+        candidateId: 'date-1',
+        surfaceText: '11월 25일',
+        value: '2026-11-25',
+        precision: 'DATE_ONLY',
+        timeSpecified: false,
+        confidence: 0.9,
+        ambiguityReasons: [],
+      },
+    ],
+    itemCandidates: [
+      {
+        candidateId: 'item-1',
+        dueDateCandidateId: 'date-1',
+        kind: 'TASK',
+        title: '운영체제 과제',
+        sourceSpan: null,
+        action: '제출',
+        object: '운영체제 과제',
+        confidence: 0.9,
+      },
+    ],
+  };
+}
+
 function validReviewOutcomeSummary() {
   return {
     schemaVersion: '1',
-    comparisonPolicyVersion: 'review-default-v2',
+    comparisonPolicyVersion: 'review-default-v3',
     cohort: {
       basis: 'PROPOSAL_CREATED_AT',
       days: 14,
@@ -161,6 +192,50 @@ describe('memo API client', () => {
     });
   });
 
+  it('sends the concrete reviewed apply body with the caller-owned idempotency key', async () => {
+    const { client, applicationFetch } = testClient({
+      applicationId: 'application-1',
+      status: 'APPLIED',
+    });
+    const body: ApplyProposalRequest = {
+      expectedMemoRevision: 1,
+      selectedType: 'TASK',
+      title: '운영체제 과제',
+      selectedTags: [],
+      items: [
+        {
+          kind: 'TASK',
+          title: '운영체제 과제',
+          due: {
+            surfaceText: '11월 25일',
+            value: '2026-11-25',
+            precision: 'DATE_ONLY',
+            timeZone: 'Asia/Seoul',
+            timeSpecified: false,
+          },
+        },
+      ],
+    };
+
+    await client.apply('proposal-1', body, 'stable-apply-key');
+
+    expect(applicationFetch).toHaveBeenCalledWith(
+      '/api/v1/analysis-proposals/proposal-1/apply',
+      {
+        method: 'POST',
+        credentials: 'same-origin',
+        signal: expect.any(AbortSignal),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-TOKEN': 'csrf-test-token',
+          'Idempotency-Key': 'stable-apply-key',
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    expect(applicationFetch.mock.calls[0]?.[1]?.body).not.toContain('candidateId');
+  });
+
   it('bounds the recent memo list to the server-supported maximum', async () => {
     const { client, applicationFetch } = testClient([]);
 
@@ -195,7 +270,11 @@ describe('memo API client', () => {
       {
         credentials: 'same-origin',
         signal: expect.any(AbortSignal),
-        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        headers: {
+          'Content-Type': 'application/json',
+          [ANALYSIS_PROPOSAL_SCHEMA_VERSION_HEADER]: '2',
+        },
       },
     );
     expect(applicationFetch).toHaveBeenNthCalledWith(
@@ -204,7 +283,11 @@ describe('memo API client', () => {
       {
         credentials: 'same-origin',
         signal: expect.any(AbortSignal),
-        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        headers: {
+          'Content-Type': 'application/json',
+          [ANALYSIS_PROPOSAL_SCHEMA_VERSION_HEADER]: '2',
+        },
       },
     );
   });
@@ -441,11 +524,30 @@ describe('memo API client', () => {
   });
 
   it('rejects unsupported proposal versions before they reach review state', async () => {
-    const { client } = testClient({ ...validProposal(), schemaVersion: '2' });
+    const { client } = testClient({ ...validProposal(), schemaVersion: '3' });
 
     await expect(client.proposal('proposal-1')).rejects.toMatchObject({
       name: 'ProposalContractError',
       field: 'schemaVersion',
+    });
+  });
+
+  it('decodes an explicit v2 binding before it reaches review state', async () => {
+    const { client, applicationFetch } = testClient(validProposalV2());
+
+    await expect(client.proposal('proposal-1')).resolves.toMatchObject({
+      schemaVersion: '2',
+      dateCandidates: [{ candidateId: 'date-1' }],
+      itemCandidates: [{ candidateId: 'item-1', dueDateCandidateId: 'date-1' }],
+    });
+    expect(applicationFetch).toHaveBeenCalledWith('/api/v1/analysis-proposals/proposal-1', {
+      credentials: 'same-origin',
+      signal: expect.any(AbortSignal),
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        [ANALYSIS_PROPOSAL_SCHEMA_VERSION_HEADER]: '2',
+      },
     });
   });
 

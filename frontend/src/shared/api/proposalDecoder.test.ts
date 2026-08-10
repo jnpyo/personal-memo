@@ -52,16 +52,46 @@ function proposalPayload(): Record<string, unknown> {
   };
 }
 
+function proposalV2Payload(): Record<string, unknown> {
+  const payload = structuredClone(proposalPayload());
+  payload.schemaVersion = '2';
+  const dates = payload.dateCandidates as Record<string, unknown>[];
+  dates[0]!.candidateId = 'date-1';
+  const items = payload.itemCandidates as Record<string, unknown>[];
+  items[0]!.dueDateCandidateId = 'date-1';
+  return payload;
+}
+
 describe('analysis proposal decoder', () => {
   it('accepts the supported schema and preserves the core review fields', () => {
     const decoded = decodeProposal(proposalPayload());
 
     expect(decoded.schemaVersion).toBe('1');
     expect(decoded.typeCandidates[0]?.value).toBe('TASK');
-    expect(decoded.itemCandidates[0]).toMatchObject({ kind: 'TASK', title: '운영체제 과제' });
+    expect(decoded.dateCandidates[0]?.candidateId).toBeNull();
+    expect(decoded.itemCandidates[0]).toMatchObject({
+      kind: 'TASK',
+      title: '운영체제 과제',
+      dueDateCandidateId: null,
+    });
   });
 
-  it.each([undefined, '2'])('rejects an unsupported schemaVersion %s', (schemaVersion) => {
+  it('accepts schema v2 with an explicit task-to-date binding', () => {
+    const decoded = decodeProposal(proposalV2Payload());
+
+    expect(decoded.schemaVersion).toBe('2');
+    expect(decoded.dateCandidates[0]?.candidateId).toBe('date-1');
+    expect(decoded.itemCandidates[0]?.dueDateCandidateId).toBe('date-1');
+  });
+
+  it('keeps schema v1 strict while preserving historical recovery', () => {
+    const payload = proposalPayload();
+    ((payload.dateCandidates as Record<string, unknown>[])[0]).candidateId = 'date-1';
+
+    expect(() => decodeProposal(payload)).toThrowError(ProposalContractError);
+  });
+
+  it.each([undefined, '3'])('rejects an unsupported schemaVersion %s', (schemaVersion) => {
     const payload = { ...proposalPayload(), schemaVersion };
 
     expect(() => decodeProposal(payload)).toThrowError(ProposalContractError);
@@ -71,6 +101,48 @@ describe('analysis proposal decoder', () => {
     } catch (error) {
       expect(error).toMatchObject({ field: 'schemaVersion' });
     }
+  });
+
+  it('requires both v2 binding fields instead of silently applying the v1 heuristic', () => {
+    const missingDateId = proposalV2Payload();
+    delete ((missingDateId.dateCandidates as Record<string, unknown>[])[0]).candidateId;
+    const missingDueReference = proposalV2Payload();
+    delete ((missingDueReference.itemCandidates as Record<string, unknown>[])[0])
+      .dueDateCandidateId;
+
+    expect(() => decodeProposal(missingDateId)).toThrowError(ProposalContractError);
+    expect(() => decodeProposal(missingDueReference)).toThrowError(ProposalContractError);
+  });
+
+  it('rejects duplicate or dangling v2 date candidate references', () => {
+    const duplicateDateIds = proposalV2Payload();
+    (duplicateDateIds.dateCandidates as Record<string, unknown>[]).push({
+      ...(duplicateDateIds.dateCandidates as Record<string, unknown>[])[0],
+      surfaceText: '11.26',
+      value: '2026-11-26',
+    });
+    const danglingReference = proposalV2Payload();
+    ((danglingReference.itemCandidates as Record<string, unknown>[])[0]).dueDateCandidateId =
+      'date-missing';
+
+    expect(() => decodeProposal(duplicateDateIds)).toThrowError(ProposalContractError);
+    expect(() => decodeProposal(danglingReference)).toThrowError(ProposalContractError);
+  });
+
+  it('rejects a v2 due binding for non-task or imprecise dates', () => {
+    const nonTask = proposalV2Payload();
+    ((nonTask.itemCandidates as Record<string, unknown>[])[0]).kind = 'EVENT';
+    const approximate = proposalV2Payload();
+    Object.assign((approximate.dateCandidates as Record<string, unknown>[])[0], {
+      surfaceText: '주말쯤',
+      value: null,
+      precision: 'APPROXIMATE',
+      timeSpecified: false,
+      ambiguityReasons: ['IMPRECISE_DATE'],
+    });
+
+    expect(() => decodeProposal(nonTask)).toThrowError(ProposalContractError);
+    expect(() => decodeProposal(approximate)).toThrowError(ProposalContractError);
   });
 
   it('rejects future semantic or item kinds and malformed collections at the API boundary', () => {

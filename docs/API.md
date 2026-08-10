@@ -307,7 +307,7 @@ Content-Type: application/json
 
 현재 구현은 동기 `FakeAnalyzer`로 한국어 날짜·유형·태그·항목 후보와 명시적인 ambiguity signal을 만든다. 분석 기준 시각과 시간대는 전역 설정이나 요청 시점이 아니라 지정한 immutable memo revision의 `client_recorded_at`과 `source_time_zone`을 사용한다. 따라서 수정 후 재분석과 네트워크 지연 뒤 재시도에서도 원문을 기록한 맥락이 유지된다.
 
-서버는 local proposal을 루트 `contracts/analysis-proposal.schema.json`의 Draft 2020-12 계약, domain 규칙, owner reference 순서로 검증한다. 직렬화된 proposal JSON은 최대 65,536 UTF-8 byte(64 KiB), 그 안의 `providerMetadata`는 최대 8,192 UTF-8 byte(8 KiB)다. `providerMetadata`에는 1–64자의 `analyzerVersion`, `promptVersion`, `localModelVersion`, `embeddingModelVersion`, `routingPolicyVersion`과 0–100 범위의 정수 `toolCalls`가 필수다. 다섯 version은 provider 주장이 아니라 서버가 소유하고 `analysis_runs`에 저장하는 provenance와 일치해야 한다. 그 뒤 최상위 요약만 신뢰하지 않고 날짜·유형·태그·항목 구조에서 field-level 신호를 재계산한다. gate 결과가 `LOCAL_REVIEW`이면 cloud gateway를 호출하지 않고 run route를 `LOCAL`로 저장한다. 중요한 모호성 신호가 있으면 외부 통신 없는 `FakeCloudAnalysisGateway`를 정확히 한 번 호출하고, 복사된 결과를 다시 검증한 뒤 route를 `HYBRID`로 저장한다. run의 `ambiguity_reasons`에는 cloud 처리 전 서버 라우팅 원인을 보존하고, 최종 proposal JSON에는 처리 후 제안 이유를 둔다. 어느 경로도 canonical tag·task·relation을 만들지 않으며 상태는 사용자 검토가 필요한 `REVIEW_REQUIRED`다. 잘못된 local/cloud 결과나 gateway 실패는 run과 proposal을 저장하지 않고 raw revision을 그대로 둔다. `200 OK`:
+서버는 local proposal을 루트 `contracts/analysis-proposal.schema.json`의 Draft 2020-12 계약, domain 규칙, owner reference 순서로 검증한다. 현재 analyzer가 서버에 선언한 proposal schema version은 `2`이며 이 값은 proposal JSON과 `analysis_runs.schema_version`에 동일하게 저장된다. 직렬화된 proposal JSON은 최대 65,536 UTF-8 byte(64 KiB), 그 안의 `providerMetadata`는 최대 8,192 UTF-8 byte(8 KiB)다. `providerMetadata`에는 1–64자의 `analyzerVersion`, `promptVersion`, `localModelVersion`, `embeddingModelVersion`, `routingPolicyVersion`과 0–100 범위의 정수 `toolCalls`가 필수다. 다섯 version은 provider 주장이 아니라 서버가 소유하고 `analysis_runs`에 저장하는 provenance와 일치해야 한다. 그 뒤 최상위 요약만 신뢰하지 않고 날짜·유형·태그·항목 구조에서 field-level 신호를 재계산한다. gate 결과가 `LOCAL_REVIEW`이면 cloud gateway를 호출하지 않고 run route를 `LOCAL`로 저장한다. 중요한 모호성 신호가 있으면 외부 통신 없는 `FakeCloudAnalysisGateway`를 정확히 한 번 호출하고, 복사된 결과를 다시 검증한 뒤 route를 `HYBRID`로 저장한다. run의 `ambiguity_reasons`에는 cloud 처리 전 서버 라우팅 원인을 보존하고, 최종 proposal JSON에는 처리 후 제안 이유를 둔다. 어느 경로도 canonical tag·task·relation을 만들지 않으며 상태는 사용자 검토가 필요한 `REVIEW_REQUIRED`다. 잘못된 local/cloud 결과나 gateway 실패는 run과 proposal을 저장하지 않고 raw revision을 그대로 둔다. `200 OK`:
 
 ```json
 {
@@ -325,18 +325,22 @@ Content-Type: application/json
 
 ```http
 GET /api/v1/analysis-proposals/{proposalId}
+X-Analysis-Proposal-Schema-Version: 2
 ```
 
-`schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`, `tagCandidates`, `itemCandidates`, `relationCandidates`, `ambiguityReasons`, `providerMetadata`를 포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag나 task를 생성하지 않는다. 현재 Fake analyzer의 필수 provenance 값은 `fake-v5`, `none`, `none`, `none`, `field-policy-v1`이며 `toolCalls`는 `0`이다. 추가 metadata의 `deterministicRulesVersion`은 `korean-rules-v3`다. non-null `itemCandidates[].sourceSpan`은 해당 immutable raw memo revision을 기준으로 하는 비어 있지 않은 UTF-16 code-unit half-open 범위 `[start, end)`다. 서버는 범위가 원문 안에 있고 surrogate pair를 쪼개지 않는지 검증한다.
+`X-Analysis-Proposal-Schema-Version`을 생략하거나 `1`로 보내면 서버는 저장된 v2를 수정하지 않고 응답 복사본에서 두 binding field만 제거한 strict v1 projection을 반환한다. `2`를 보내면 새 proposal은 저장된 v2로 반환되고, 과거에 저장된 v1 proposal은 합성 upgrade 없이 v1 그대로 반환된다. 현재 PWA는 `2`를 명시하고, 설치된 구형 PWA는 헤더를 보내지 않아 v1 응답을 받는다. 다른 값이나 결합된 다중 값은 `422 UNSUPPORTED_PROPOSAL_SCHEMA_VERSION`이다. 성공 응답에는 `Cache-Control: no-store`와 `Vary: X-Analysis-Proposal-Schema-Version`이 포함된다.
+
+`schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`, `tagCandidates`, `itemCandidates`, `relationCandidates`, `ambiguityReasons`, `providerMetadata`를 포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag나 task를 생성하지 않는다. 현재 Fake analyzer의 필수 provenance 값은 `fake-v6`, `none`, `none`, `none`, `field-policy-v1`이며 `toolCalls`는 `0`이다. 추가 metadata의 `deterministicRulesVersion`은 `korean-rules-v4`다. schema v2의 모든 `dateCandidates[]`에는 proposal-local `candidateId`, 모든 `itemCandidates[]`에는 nullable `dueDateCandidateId`가 필수다. non-null due reference는 같은 proposal의 정밀 date candidate를 가리키는 `TASK`에서만 유효하며, 사용자 승인 전에는 canonical due가 아니다. non-null `itemCandidates[].sourceSpan`은 해당 immutable raw memo revision을 기준으로 하는 비어 있지 않은 UTF-16 code-unit half-open 범위 `[start, end)`다. 서버는 범위가 원문 안에 있고 surrogate pair를 쪼개지 않는지 검증한다. 과거 schema v1 proposal은 recovery와 application 검토를 위해 계속 반환할 수 있다.
 
 ### Recover proposals awaiting review
 
 ```http
 GET /api/v1/analysis-proposals?status=REVIEW_REQUIRED&limit=1
 GET /api/v1/analysis-proposals?status=POSTPONED&limit=1
+X-Analysis-Proposal-Schema-Version: 2
 ```
 
-Recovery query는 `REVIEW_REQUIRED`와 `POSTPONED`를 지원한다. `limit` 기본값은 1이고 서버가 1–100으로 clamp한다. 현재 owner의 활성 memo이면서 run의 revision이 그 memo의 현재 revision과 같은 proposal만 최신순으로 반환한다. 다른 owner, 휴지통 memo, stale revision은 노출하지 않는다. 클라이언트는 두 상태의 최신 결과를 `createdAt`으로 비교해 하나의 검토 화면만 복원한다. 응답 원소는 다음 envelope다.
+Recovery query는 `REVIEW_REQUIRED`와 `POSTPONED`를 지원한다. `limit` 기본값은 1이고 서버가 1–100으로 clamp한다. 현재 owner의 활성 memo이면서 run의 revision이 그 memo의 현재 revision과 같은 proposal만 최신순으로 반환한다. 다른 owner, 휴지통 memo, stale revision은 노출하지 않는다. 클라이언트는 두 상태의 최신 결과를 `createdAt`으로 비교해 하나의 검토 화면만 복원한다. 단건 조회와 같은 schema header, strict v1 projection, `Cache-Control: no-store`, `Vary` 규칙을 목록 안의 모든 proposal에 적용한다. 아래 envelope는 기존 데이터 호환을 명확히 하기 위한 schema v1 예시다. 새 분석은 schema v2를 사용하지만 이 v1 shape도 계속 복구된다.
 
 ```json
 {
@@ -417,6 +421,8 @@ Content-Type: application/json
 ```
 
 한 요청에는 최대 10개 tag와 1–3개 item을 선택할 수 있다. `DATE_ONLY`는 `YYYY-MM-DD`, `EXACT_TIME`은 offset을 포함한 ISO 8601 timestamp여야 한다. 기존 tag도 현재 owner 소유인지 검증한다.
+
+apply body의 `items[].due.timeZone`은 기존 client 계약을 깨지 않기 위한 검증 대상 입력일 뿐 canonical zone 선택 권한이 아니다. 서버는 proposal이 참조하는 immutable memo revision을 잠근 뒤 모든 due의 persisted `source_time_zone`을 그 revision의 `source_time_zone`으로 교체한다. 따라서 다른 기기나 여행 중 복구·승인해도 date-only `OVERDUE` 경계는 원문을 기록한 시간대에서 계산된다.
 
 검증과 application, item, task, tag link 생성은 한 transaction이다. 한 항목이라도 유효하지 않으면 아무 canonical record도 적용하지 않는다. 현재 Apply DTO와 canonical schema는 relation 선택·저장·application 단위 undo를 아직 표현하지 않는다. 따라서 저장된 proposal의 `relationCandidates`가 비어 있지 않으면 관계를 조용히 누락하지 않고 transaction write 전에 `409 PROPOSAL_RELATIONS_UNSUPPORTED`로 fail-closed한다. 이때 application, item, task, tag link, relation은 하나도 생성하지 않으며 원본 memo revision은 그대로 보존한다. 성공 응답:
 
@@ -499,7 +505,7 @@ X-Expected-Owner-Id: 018f4fad-e9a9-7a01-a4d1-936938a8a1e8
 ```json
 {
   "schemaVersion": "1",
-  "comparisonPolicyVersion": "review-default-v2",
+  "comparisonPolicyVersion": "review-default-v3",
   "cohort": {
     "basis": "PROPOSAL_CREATED_AT",
     "days": 14,
@@ -543,7 +549,7 @@ X-Expected-Owner-Id: 018f4fad-e9a9-7a01-a4d1-936938a8a1e8
   "byAnalysisVersion": [
     {
       "route": "LOCAL",
-      "analyzerVersion": "fake-v5",
+      "analyzerVersion": "fake-v6",
       "promptVersion": "none",
       "localModelVersion": "none",
       "embeddingModelVersion": "none",
@@ -562,7 +568,7 @@ X-Expected-Owner-Id: 018f4fad-e9a9-7a01-a4d1-936938a8a1e8
 - `latestApplications`는 proposal마다 `(applied_at DESC, id DESC)`로 고른 최신 application 상태다. `none + applied + undone = proposals.total`이다. undo 뒤 새 idempotency key로 재적용하면 새 application이 최신이 되며, 이 값은 모든 apply/undo event 횟수가 아니다.
 - `outcomes`는 application이 있는 proposal의 최신 `selection_json`을 versioned default-review projection과 의미상 비교한다. `exact + corrected + userResolved + unclassifiable = proposals.withApplication`이다. `correctedFields`는 한 `CORRECTED` selection에서 여러 field가 동시에 증가할 수 있는 비배타적 세부 집계다.
 
-`review-default-v2`는 날짜와 항목 사이의 명시적 binding이 없는 proposal schema v1에서 기한을 추측하지 않는다. 제안 항목이 정확히 하나이고 그 항목이 TASK이며 정밀한 usable date도 정확히 하나일 때만 그 기한을 기본 선택에 배정한다. 다른 항목이 함께 있거나 날짜·항목이 여러 개이거나 날짜가 `APPROXIMATE`/`UNKNOWN`이면 모든 기한을 미배정으로 두고 클라이언트도 상세 검토를 강제한다. 사용자가 정확한 날짜를 직접 입력하거나 각 TASK의 날짜를 직접 선택한 결과는 그대로 비교·적용된다.
+`review-default-v3`는 proposal schema version에 따라 due 기본값을 재구성한다. v2에서는 `TASK`의 non-null `dueDateCandidateId`가 가리키는 정밀 date candidate만 해당 item의 기본 due가 된다. 배열 순서나 날짜·항목 개수로 연결을 추측하지 않으며, 근사/미확정 날짜, 사용되지 않은 날짜, 연결되지 않은 정밀 날짜 또는 type 변경으로 맞지 않게 된 연결은 상세 검토와 `USER_RESOLVED` 경계를 요구한다. 과거 schema v1에는 호환성을 위해 기존 보수적 규칙을 그대로 적용한다. 즉 제안 항목이 정확히 하나이고 그 항목이 TASK이며 usable date도 정확히 하나일 때만 그 due를 기본 선택에 배정한다. 사용자가 정확한 날짜를 직접 입력하거나 각 TASK의 날짜를 직접 선택한 결과는 그대로 비교·적용된다.
 
 `exact`는 “제안 그대로 적용”을 뜻할 뿐 AI의 정답·정확도를 뜻하지 않는다. `corrected`는 바로 적용 가능한 기본 선택을 수정한 경우, `userResolved`는 동점/`UNKNOWN` 유형 또는 item 부재처럼 기본 선택만으로 적용할 수 없어 사용자가 보완한 경우다. relation 후보, 지원하지 않는/손상된 과거 JSON, revision 불일치처럼 현재 비교 정책이 안전하게 재구성할 수 없는 application은 `unclassifiable`이다. 거절에는 교정 target이 저장되지 않으므로 거절 건수도 정답 label이 아니다.
 

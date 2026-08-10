@@ -5,6 +5,8 @@ import java.util.UUID;
 import tools.jackson.databind.node.ObjectNode;
 
 public interface LocalAnalyzer {
+  String proposalSchemaVersion();
+
   AnalysisProvenance provenance();
 
   default String version() {

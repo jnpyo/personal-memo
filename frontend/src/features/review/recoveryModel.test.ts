@@ -13,6 +13,7 @@ const proposal: Proposal = {
   itemCandidates: [
     {
       candidateId: 'item-1',
+      dueDateCandidateId: null,
       kind: 'RECORD',
       title: '보류한 메모',
       sourceSpan: null,
@@ -68,6 +69,48 @@ describe('recovery model', () => {
 
     expect(recovered.review?.proposalId).toBe('proposal-2');
     expect(recovered.postponedReview).toBeNull();
+  });
+
+  it('restores an explicit v2 due binding without falling back to array order', () => {
+    const explicit: Proposal = {
+      ...proposal,
+      schemaVersion: '2',
+      suggestedTitle: { value: '발표 준비', confidence: 0.9, needsConfirmation: true },
+      typeCandidates: [{ value: 'TASK', score: 0.9 }],
+      dateCandidates: [
+        {
+          candidateId: 'date-1',
+          surfaceText: '11월 25일',
+          value: '2026-11-25',
+          precision: 'DATE_ONLY',
+          timeSpecified: false,
+          confidence: 0.9,
+          ambiguityReasons: [],
+        },
+      ],
+      itemCandidates: [
+        {
+          candidateId: 'item-task',
+          dueDateCandidateId: 'date-1',
+          kind: 'TASK',
+          title: '발표 준비',
+          sourceSpan: null,
+          action: '준비',
+          object: '발표',
+          confidence: 0.9,
+        },
+      ],
+    };
+
+    const recovered = deriveRecoveryState(
+      { applicationId: null, status: 'NONE' },
+      [{ ...postponed, proposalId: 'proposal-v2', status: 'REVIEW_REQUIRED', proposal: explicit }],
+    );
+
+    expect(recovered.review?.items[0].due).toMatchObject({
+      candidateId: 'date-1',
+      value: '2026-11-25',
+    });
   });
 
   it.each(['NONE', 'UNDONE'] as const)('does not expose undo for %s server state', (status) => {

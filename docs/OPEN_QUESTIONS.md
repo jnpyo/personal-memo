@@ -63,11 +63,20 @@ operational approval. Resolved decisions are not implementation prompts.
 
 - The current checkpoint uses deterministic/Fake implementations behind stable local and cloud
   interfaces.
+- Proposal schema version 2 identifies date candidates and lets TASK item candidates reference one
+  precise due-date candidate explicitly. Historical version-1 proposals remain recoverable, and no
+  binding becomes canonical before the ordinary approval API succeeds.
+- Proposal response compatibility is resolved by explicit negotiation: no header/`1` gives strict
+  v1, the current PWA requests `2`, stored proposals are never rewritten, and due persistence always
+  uses the immutable memo revision's source time zone rather than the approval device's zone.
 - No real local model or cloud provider is selected or connected without a separate product,
   privacy, evaluation, and cost decision.
 - Public regression and `VISIBLE_CHALLENGE` fixtures are diagnostic synthetic data, never blind
   evidence. An external blind harness may consume only an independently human-curated version-2
   release outside Git and emits aggregate-only output from a clean, pinned commit.
+- Evaluation dataset version 2 has no date-to-item binding labels. Binding support is therefore
+  reported as `SUPPORTED_NOT_SCORED_DATASET_V2`; a separately reviewed, independently adjudicated
+  version-3 label policy is required before binding quality can become a gate.
 - The external harness currently has no metric `PASS` state. A curator/reviewer must approve the
   release, adjudication policy, sample size, and thresholds before the first candidate run.
 

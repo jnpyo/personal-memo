@@ -27,6 +27,7 @@ class FakeAnalyzerTest {
             "Asia/Seoul");
 
     assertThat(result.at("/dateCandidates/0/surfaceText").asText()).isEqualTo("11.25");
+    assertThat(result.at("/dateCandidates/0/candidateId").asText()).isEqualTo("date-1");
     assertThat(result.at("/dateCandidates/0/value").asText()).isEqualTo("2026-11-25");
     assertThat(result.at("/dateCandidates/0/precision").asText()).isEqualTo("DATE_ONLY");
     assertThat(result.at("/dateCandidates/0/timeSpecified").asBoolean()).isFalse();
@@ -36,6 +37,7 @@ class FakeAnalyzerTest {
     assertThat(result.at("/itemCandidates/0/object").asText()).isEqualTo("OS과제");
     assertThat(result.at("/itemCandidates/0/sourceSpan/start").asInt()).isEqualTo(6);
     assertThat(result.at("/itemCandidates/0/sourceSpan/end").asInt()).isEqualTo(13);
+    assertThat(result.at("/itemCandidates/0/dueDateCandidateId").asText()).isEqualTo("date-1");
     assertThat(result.at("/tagCandidates/0/canonicalName").asText()).isEqualTo("운영체제");
     assertThat(result.at("/tagCandidates/0/matchedAlias").asText()).isEqualTo("OS");
     assertThat(result.at("/tagCandidates/0/existingTagId").isNull()).isTrue();
@@ -59,15 +61,16 @@ class FakeAnalyzerTest {
     var result =
         analyzer.analyze(memoId, 2, "아이디어 기록", Instant.parse("2026-08-05T02:00:00Z"), "Asia/Seoul");
 
-    assertThat(result.path("schemaVersion").asText()).isEqualTo("1");
+    assertThat(result.path("schemaVersion").asText()).isEqualTo("2");
     assertThat(result.path("memoId").asText()).isEqualTo(memoId.toString());
-    assertThat(analyzer.version()).isEqualTo("fake-v5");
+    assertThat(analyzer.proposalSchemaVersion()).isEqualTo("2");
+    assertThat(analyzer.version()).isEqualTo("fake-v6");
     assertThat(analyzer.provenance().promptVersion()).isEqualTo("none");
     assertThat(analyzer.provenance().localModelVersion()).isEqualTo("none");
     assertThat(analyzer.provenance().embeddingModelVersion()).isEqualTo("none");
-    assertThat(result.at("/providerMetadata/analyzerVersion").asText()).isEqualTo("fake-v5");
+    assertThat(result.at("/providerMetadata/analyzerVersion").asText()).isEqualTo("fake-v6");
     assertThat(result.at("/providerMetadata/deterministicRulesVersion").asText())
-        .isEqualTo("korean-rules-v3");
+        .isEqualTo("korean-rules-v4");
     assertThat(result.at("/providerMetadata/promptVersion").asText()).isEqualTo("none");
     assertThat(result.at("/providerMetadata/localModelVersion").asText()).isEqualTo("none");
     assertThat(result.at("/providerMetadata/embeddingModelVersion").asText()).isEqualTo("none");
@@ -140,6 +143,9 @@ class FakeAnalyzerTest {
     assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("CLOUD_ENRICH");
     assertThat(result.at("/providerMetadata/detectedDateCandidateCount").asInt()).isEqualTo(6);
     assertThat(result.at("/providerMetadata/emittedDateCandidateCount").asInt()).isEqualTo(5);
+    assertThat(result.at("/dateCandidates/0/candidateId").asText()).isEqualTo("date-1");
+    assertThat(result.at("/dateCandidates/4/candidateId").asText()).isEqualTo("date-5");
+    assertThat(result.at("/itemCandidates/0/dueDateCandidateId").isNull()).isTrue();
   }
 
   @Test
@@ -152,6 +158,9 @@ class FakeAnalyzerTest {
     assertThat(result.path("dateCandidates")).hasSize(5);
     assertThat(result.path("ambiguityReasons").toString())
         .doesNotContain("CANDIDATE_LIMIT_EXCEEDED");
+    assertThat(result.at("/dateCandidates/0/candidateId").asText()).isEqualTo("date-1");
+    assertThat(result.at("/dateCandidates/4/candidateId").asText()).isEqualTo("date-5");
+    assertThat(result.at("/itemCandidates/0/dueDateCandidateId").isNull()).isTrue();
   }
 
   @Test
@@ -302,7 +311,28 @@ class FakeAnalyzerTest {
     assertThat(result.at("/itemCandidates/0/object").asText()).isEqualTo("보고서 초안");
     assertThat(result.at("/itemCandidates/1/title").asText()).isEqualTo("보고서 최종 제출");
     assertThat(result.at("/itemCandidates/1/object").asText()).isEqualTo("보고서");
+    assertThat(result.at("/itemCandidates/0/dueDateCandidateId").asText()).isEqualTo("date-1");
+    assertThat(result.at("/itemCandidates/1/dueDateCandidateId").asText()).isEqualTo("date-2");
     assertThat(result.toString()).doesNotContain("과제");
+  }
+
+  @Test
+  void bindsAContainedDateOnlyToItsTaskInAMixedMemo() {
+    var result = analyze("캐시 정책은 중요하고 보고서는 9월 18일까지 제출");
+
+    assertThat(result.path("itemCandidates")).hasSize(2);
+    assertThat(result.at("/itemCandidates/0/kind").asText()).isEqualTo("INFORMATION");
+    assertThat(result.at("/itemCandidates/0/dueDateCandidateId").isNull()).isTrue();
+    assertThat(result.at("/itemCandidates/1/kind").asText()).isEqualTo("TASK");
+    assertThat(result.at("/itemCandidates/1/dueDateCandidateId").asText()).isEqualTo("date-1");
+  }
+
+  @Test
+  void neverBindsAnImpreciseDateAsACanonicalTaskDue() {
+    var result = analyze("주말쯤 병원 예약 잡기");
+
+    assertThat(result.at("/dateCandidates/0/precision").asText()).isEqualTo("APPROXIMATE");
+    assertThat(result.at("/itemCandidates/0/dueDateCandidateId").isNull()).isTrue();
   }
 
   @ParameterizedTest
