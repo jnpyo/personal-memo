@@ -131,6 +131,29 @@ hard-fail malformed v2 candidate IDs, dangling references, non-TASK bindings, an
 approximate or unknown dates. Whether a structurally valid binding is semantically correct remains
 unscored under dataset v2 and must not be inferred from a green build.
 
+## Human-review and version-3 preparation status
+
+The repository now contains preparation code, not completed human evidence:
+
+- `contracts/korean-memo-evaluation-review.schema.json` defines one strict, raw-content-free
+  per-reviewer manifest; the verifier consumes two independently attested manifests for the public
+  version-2 date, item, and item-source-span gold.
+- `PublicGoldAdjudicationVerifier` pins both complete manifests to one canonical public-release
+  digest, requires distinct opaque reviewer tokens and matching protocol/policy identifiers, and
+  emits aggregate agreement only. It never chooses a correction or treats matching
+  `CHANGE_REQUIRED` verdicts as resolved.
+- `contracts/korean-memo-binding-overlay.schema.json` and `EvaluationV3BindingGoldIntegrity` can
+  validate an ID-only TASK-due overlay against one exact immutable public version-2 release digest,
+  including complete item-set alternatives and precise emitted-date references. This integrity
+  check does not prove that the base labels received human review.
+
+No real reviewer manifest, completed two-person adjudication, approved version-3 overlay/dataset,
+binding metric, threshold, or `PASS` result is checked in. Test-only in-memory manifests and overlays
+prove validator behavior only. [EVALUATION_LABEL_POLICY.md](EVALUATION_LABEL_POLICY.md) is marked
+`DRAFT_REQUIRES_INDEPENDENT_HUMAN_APPROVAL`; an Agent must not fill or approve human review inputs.
+Until people complete and freeze both review stages, `dateItemDueBinding` remains
+`SUPPORTED_NOT_SCORED_DATASET_V2`.
+
 ## Separately held blind evaluation
 
 The external blind dataset is a separately controlled release, not a third public fixture split.
@@ -206,10 +229,15 @@ not contain raw text, a case ID, a content or ID hash, a source span, a per-case
 owner/user/memo identifier, or a filesystem path. The runner checks the serialized report against
 the input values and deletes the report on every validation, privacy, execution, or write failure.
 
-Public CI must not receive the blind dataset as a secret, invoke the external runner, or upload its
-report or test diagnostics as an artifact. Public CI may only run a leakage guard that fails if a
-tracked JSON file contains a blind case marker. A green public build therefore never means that a
-blind release passed; an authorized curator/operator must retain the aggregate result separately.
+Public CI must not receive the blind dataset or reviewer/adjudication inputs as secrets, invoke the
+external runner, or upload those inputs, its report, or diagnostics as an artifact. The tracked-file
+leakage guard enumerates only `git ls-files`, scans JSON/JSONL/YAML/YML/CSV/TSV and chained
+backup/temporary variants for blind and filled-review markers, and rejects sensitive
+blind/annotation/adjudication/reviewer/freeze filenames regardless of extension. Missing Git
+metadata in public CI, unreadable/non-text/oversized relevant files, or Git enumeration failure is a
+generic fail-closed error; the known local Compose test layout without `.git` may skip this one
+checkout-specific assertion. A green public build therefore never means that a blind release or
+human review passed; an authorized curator/operator must retain evidence separately.
 
 ## Privacy and real-use evidence
 
@@ -247,9 +275,12 @@ A real provider remains blocked until all of the following are true:
    independently adjudicated before binding quality is gated, tag gold is complete for the provider
    task, and the wrong-local safety threshold is approved from measured results rather than chosen
    after seeing provider output.
-3. Memo-text transfer consent, allowed provider/region, retention/deletion policy, provider and model
-   provenance, per-request context/tool/token/time limits, monthly budget, and outage behavior are
-   explicitly decided and enforced fail-closed.
+3. The implemented owner/policy/timestamp consent pin and server-owned
+   transfer/gateway/provider/model/policy/outcome evidence are retained, and an approved provider,
+   region, retention/deletion policy, consent grant UX/API, per-request context/tool/token/time
+   limits, monthly budget, and outage behavior are explicitly decided and enforced fail-closed. The
+   accepted grant timestamp and authorization instant must be snapshotted on the run and bound to
+   its descriptor before any external call.
 4. A Shadow mode can persist validated proposals and metrics without applying them; only explicit
    user approval may continue to create tags, tasks, or relations.
 5. Fake failure tests cover timeout, retry exhaustion, invalid structured output, stale revision,
@@ -262,14 +293,23 @@ These are documented blockers, not features implemented by this baseline:
 - Runtime `AnalysisRoute` currently implements only `LOCAL_REVIEW` and `CLOUD_ENRICH`.
   `USER_INPUT_NEEDED` and `PENDING_OFFLINE` in the pipeline document are conceptual states, not
   executable routes yet.
-- Analysis starts synchronously. Successful runs are inserted directly as `REVIEW_REQUIRED`, while
-  a gateway failure rolls back the run. Therefore queued/running/failed lifecycle duration, timeout,
-  retry, and failure metrics are not yet persisted.
-- `user_settings.cloud_analysis_consent` exists, but the current analysis service does not enforce it
-  because the Fake cloud gateway performs no network transfer. A real gateway must be impossible to
-  call without explicit consent.
-- The cloud gateway interface does not yet expose server-owned provider/model provenance, token or
-  cost usage, or bounded timeout/retry results.
+- Analysis starts synchronously. Clear and cloud-success runs are inserted directly as
+  `REVIEW_REQUIRED`; typed cloud failure, gateway exception, and invalid enriched output now persist
+  the revalidated local proposal as `HYBRID` / `REVIEW_REQUIRED` with a bounded outcome. Raw and
+  canonical data remain unchanged, and provider error text is not stored or returned. Queued/running
+  execution, bounded out-of-transaction timeout, automatic retry, a server-issued idempotent
+  provider-request token, duration, token, and cost metrics are not yet implemented.
+- V13 enforces an owner-scoped exact consent pin: boolean true, the descriptor's exact policy
+  version, and a non-null grant timestamp no later than the authorization-check instant. It revokes
+  legacy boolean-only grants and rejects future-dated grants. `NO_NETWORK` Fake needs no consent;
+  `EXTERNAL_MEMO_CONTENT` gets zero gateway calls without a valid pin. The authorization/grant pair
+  is not yet snapshotted on the run or bound to the descriptor, and there is no grant/revoke API or
+  configured external provider.
+- The gateway descriptor and every new run now carry server-owned transfer mode,
+  gateway/provider/model/consent-policy versions, and outcome. Token/cost usage and bounded
+  timeout/retry execution are not implemented.
+- Every new LOCAL, cloud-success, and fallback proposal canonicalizes `providerMetadata` through one
+  bounded server allow-list; this is metadata hygiene, not provider authorization.
 - Top-k owner-scoped retrieval context is not implemented.
 
 Do not connect a real LLM merely to make these roadmap bullets appear complete.

@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.List;
 import local.personalmemo.analysis.domain.AmbiguityReason;
 import local.personalmemo.analysis.domain.CloudAnalysisRequest;
+import local.personalmemo.analysis.domain.CloudAnalysisResult;
+import local.personalmemo.analysis.domain.CloudTransferMode;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -20,22 +22,28 @@ class FakeCloudAnalysisGatewayTest {
             .put("memoId", "f3341ab7-ace5-433f-9c1f-26ed115fe4ba")
             .set("providerMetadata", json.createObjectNode().put("route", "CLOUD_ENRICH"));
 
-    ObjectNode enriched =
+    CloudAnalysisResult result =
         gateway.enrich(
             new CloudAnalysisRequest(
                 local, List.of(AmbiguityReason.LOW_TYPE_MARGIN), "field-policy-v1"));
+    ObjectNode enriched = ((CloudAnalysisResult.Success) result).proposal();
 
     assertThat(enriched).isNotSameAs(local);
     assertThat(enriched.path("memoId").asText()).isEqualTo(local.path("memoId").asText());
-    assertThat(enriched.at("/providerMetadata/cloudGatewayVersion").asText())
-        .isEqualTo("fake-cloud-v1");
-    assertThat(enriched.at("/providerMetadata/cloudToolCalls").asInt()).isZero();
-    assertThat(enriched.at("/providerMetadata/cloudMutationCalls").asInt()).isZero();
-    assertThat(enriched.at("/providerMetadata/cloudResolvedFields").isArray()).isTrue();
-    assertThat(enriched.at("/providerMetadata/receivedRoutingPolicyVersion").asText())
-        .isEqualTo("field-policy-v1");
-    assertThat(enriched.at("/providerMetadata/receivedRoutingReasons/0").asText())
-        .isEqualTo("LOW_TYPE_MARGIN");
     assertThat(local.at("/providerMetadata/cloudGatewayVersion").isMissingNode()).isTrue();
+    enriched.put("memoId", "changed");
+    assertThat(((CloudAnalysisResult.Success) result).proposal().path("memoId").asText())
+        .isEqualTo("f3341ab7-ace5-433f-9c1f-26ed115fe4ba");
+  }
+
+  @Test
+  void declaresAStableNoNetworkDescriptor() {
+    var descriptor = gateway.descriptor();
+
+    assertThat(descriptor.gatewayVersion()).isEqualTo("fake-cloud-v2");
+    assertThat(descriptor.providerId()).isEqualTo("fake");
+    assertThat(descriptor.modelVersion()).isEqualTo("none");
+    assertThat(descriptor.consentPolicyVersion()).isEqualTo("no-network-v1");
+    assertThat(descriptor.transferMode()).isEqualTo(CloudTransferMode.NO_NETWORK);
   }
 }

@@ -27,6 +27,8 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 class DeterministicEvaluationBaselineTest {
+  private static final String EVALUATION_MEMO_ID_PREFIX =
+      "personal-memo:deterministic-evaluation-v2:";
   private static final String REGRESSION_RESOURCE = "/fixtures/korean-memo-cases.json";
   private static final String CHALLENGE_RESOURCE = "/fixtures/korean-memo-challenge-cases.json";
   private static final String CASE_SCHEMA_RESOURCE =
@@ -75,35 +77,27 @@ class DeterministicEvaluationBaselineTest {
   @Test
   void writesContentFreeV2BaselineAndEnforcesOnlyReviewedSafetyGates() throws Exception {
     Files.deleteIfExists(REPORT_PATH);
+    JsonNode regressionFixtures = fixtures(REGRESSION_RESOURCE);
+    JsonNode challengeFixtures = fixtures(CHALLENGE_RESOURCE);
     List<JsonNode> fixtures = new ArrayList<>();
-    fixtures(REGRESSION_RESOURCE).forEach(fixtures::add);
-    fixtures(CHALLENGE_RESOURCE).forEach(fixtures::add);
+    regressionFixtures.forEach(fixtures::add);
+    challengeFixtures.forEach(fixtures::add);
 
-    List<CaseEvaluation> results = fixtures.stream().map(this::evaluate).toList();
-    AggregateEvaluation regression =
-        EvaluationV2Metrics.aggregate(
-            results.stream().filter(result -> result.isSplit("REGRESSION")).toList());
-    AggregateEvaluation challenge =
-        EvaluationV2Metrics.aggregate(
-            results.stream().filter(result -> result.isSplit("VISIBLE_CHALLENGE")).toList());
-    AggregateEvaluation all = EvaluationV2Metrics.aggregate(results);
+    BaselineEvaluation baseline = evaluateBaseline(regressionFixtures, challengeFixtures);
+    AggregateEvaluation regression = baseline.regression();
+    AggregateEvaluation challenge = baseline.challenge();
+    AggregateEvaluation all = baseline.all();
     assertAggregateArithmetic(regression, challenge, all);
-
-    Map<String, AggregateEvaluation> splits = new LinkedHashMap<>();
-    splits.put("regression", regression);
-    splits.put("visibleChallenge", challenge);
-    splits.put("all", all);
-    EvaluationReportMetadata metadata =
-        new EvaluationReportMetadata(
-            "2",
-            "2",
-            analyzer.version(),
-            analyzer.deterministicRulesVersion(),
-            ambiguityGate.version(),
-            "SUPPORTED_NOT_SCORED_DATASET_V2");
-    ObjectNode report = EvaluationV2Report.withPublicCases(json, metadata, splits, results);
-    report.set("gates", EvaluationV2Report.gates(json, regression, challenge));
+    ObjectNode report = baseline.report();
     String serialized = json.writerWithDefaultPrettyPrinter().writeValueAsString(report) + "\n";
+    String repeatedSerialized =
+        json.writerWithDefaultPrettyPrinter()
+                .writeValueAsString(
+                    evaluateBaseline(regressionFixtures, challengeFixtures).report())
+            + "\n";
+
+    assertThat(repeatedSerialized.getBytes(StandardCharsets.UTF_8))
+        .containsExactly(serialized.getBytes(StandardCharsets.UTF_8));
 
     assertThat(regression.schemaValidCount()).isEqualTo(regression.caseCount());
     assertThat(regression.domainValidCount()).isEqualTo(regression.caseCount());
@@ -130,8 +124,50 @@ class DeterministicEvaluationBaselineTest {
     Files.writeString(REPORT_PATH, serialized, StandardCharsets.UTF_8);
   }
 
-  private CaseEvaluation evaluate(JsonNode fixture) {
-    UUID memoId = UUID.randomUUID();
+  private BaselineEvaluation evaluateBaseline(
+      JsonNode regressionFixtures, JsonNode challengeFixtures) {
+    List<CaseEvaluation> results = new ArrayList<>();
+    results.addAll(evaluateSplit(regressionFixtures, "REGRESSION"));
+    results.addAll(evaluateSplit(challengeFixtures, "VISIBLE_CHALLENGE"));
+    AggregateEvaluation regression =
+        EvaluationV2Metrics.aggregate(
+            results.stream().filter(result -> result.isSplit("REGRESSION")).toList());
+    AggregateEvaluation challenge =
+        EvaluationV2Metrics.aggregate(
+            results.stream().filter(result -> result.isSplit("VISIBLE_CHALLENGE")).toList());
+    AggregateEvaluation all = EvaluationV2Metrics.aggregate(results);
+
+    Map<String, AggregateEvaluation> splits = new LinkedHashMap<>();
+    splits.put("regression", regression);
+    splits.put("visibleChallenge", challenge);
+    splits.put("all", all);
+    EvaluationReportMetadata metadata =
+        new EvaluationReportMetadata(
+            "2",
+            "2",
+            analyzer.version(),
+            analyzer.deterministicRulesVersion(),
+            ambiguityGate.version(),
+            "SUPPORTED_NOT_SCORED_DATASET_V2");
+    ObjectNode report = EvaluationV2Report.withPublicCases(json, metadata, splits, results);
+    report.set("gates", EvaluationV2Report.gates(json, regression, challenge));
+    return new BaselineEvaluation(report, regression, challenge, all);
+  }
+
+  private List<CaseEvaluation> evaluateSplit(JsonNode fixtures, String split) {
+    List<CaseEvaluation> results = new ArrayList<>(fixtures.size());
+    for (int ordinal = 0; ordinal < fixtures.size(); ordinal++) {
+      JsonNode fixture = fixtures.get(ordinal);
+      if (!split.equals(fixture.path("split").asText())) {
+        throw new IllegalArgumentException("Evaluation fixture split is invalid.");
+      }
+      results.add(evaluate(fixture, split, ordinal));
+    }
+    return List.copyOf(results);
+  }
+
+  private CaseEvaluation evaluate(JsonNode fixture, String split, int ordinal) {
+    UUID memoId = deterministicMemoId(split, ordinal);
     int revision = 1;
     String content = fixture.path("content").asText();
     ObjectNode proposal =
@@ -142,6 +178,14 @@ class DeterministicEvaluationBaselineTest {
             Instant.parse(fixture.path("baseInstant").asText()),
             fixture.path("timeZone").asText());
     return evaluator.evaluate(fixture, proposal, memoId, revision, content);
+  }
+
+  private UUID deterministicMemoId(String split, int ordinal) {
+    if (ordinal < 0) {
+      throw new IllegalArgumentException("Evaluation fixture ordinal is invalid.");
+    }
+    return UUID.nameUUIDFromBytes(
+        (EVALUATION_MEMO_ID_PREFIX + split + ":" + ordinal).getBytes(StandardCharsets.UTF_8));
   }
 
   private void assertContentFreeReport(
@@ -344,4 +388,10 @@ class DeterministicEvaluationBaselineTest {
       throw new IllegalStateException("Evaluation case schema could not be loaded.", exception);
     }
   }
+
+  private record BaselineEvaluation(
+      ObjectNode report,
+      AggregateEvaluation regression,
+      AggregateEvaluation challenge,
+      AggregateEvaluation all) {}
 }

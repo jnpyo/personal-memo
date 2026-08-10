@@ -29,6 +29,8 @@
 - **소유권 경계는 서버와 데이터베이스에 있습니다.** 각 로그인 수단은 internal user UUID에 매핑되고, 명시적으로 연결한 local·Google 수단은 같은 UUID를 사용합니다. 서버가 Spring Security principal에서 `owner_id`를 결정하며, V5의 owner-aware composite foreign key는 서로 다른 사용자의 하위 record를 데이터베이스 수준에서도 연결할 수 없게 합니다.
 - **브라우저에 인증 token을 보관하지 않습니다.** opaque session은 PostgreSQL에 저장하고 항상 HttpOnly인 cookie(운영에서는 Secure)와 CSRF 검증을 사용합니다. Google email 일치만으로 계정을 합치지 않으며, 기존 로그인 뒤 명시적으로 연결해야 합니다.
 - **라우팅은 신호 기반으로 결정합니다.** 모델의 confidence 하나에 의존하지 않고 날짜·참조·행동·복합 의도 신호를 enum으로 검증합니다. 명확한 메모는 cloud를 호출하지 않으며, 모호한 메모도 현재는 외부 통신 없는 Fake adapter만 거칩니다.
+- **외부 전송 경계는 서버가 소유합니다.** 모호한 경로의 gateway descriptor가 transfer mode·gateway·provider·model·consent-policy version을 선언하고 서버가 run evidence와 proposal metadata를 덮어씁니다. `NO_NETWORK` Fake에는 동의가 필요 없지만, `EXTERNAL_MEMO_CONTENT`는 현재 owner가 정확히 같은 policy version을 승인했고 `granted_at`이 권한 확인 시각보다 늦지 않을 때만 호출됩니다. 미동의·policy mismatch·미래 시각 grant는 gateway 0-call입니다.
+- **보완 분석 실패도 원문을 잃게 하지 않습니다.** LOCAL, cloud SUCCESS, fallback의 모든 새 proposal은 `providerMetadata`를 공통 허용 목록으로 다시 만듭니다. typed failure, gateway 예외, invalid cloud proposal은 provider 오류 문구를 노출하지 않고 이미 검증된 local proposal로 되돌아가며, run은 `HYBRID`/`REVIEW_REQUIRED`와 제한된 outcome만 저장하고 UI는 상세 검토를 엽니다. canonical 데이터는 명시적 승인 전까지 바뀌지 않습니다.
 
 ## 구현 범위
 
@@ -58,8 +60,10 @@
 - revision의 기록 시각·IANA 시간대를 사용하는 한국어 날짜 파서와 versioned 결정론적 ambiguity gate
 - Draft 2020-12 runtime contract, domain 규칙, 날짜 의미, owner reference로 local/cloud proposal 재검증
 - run마다 analyzer·prompt·local model·embedding model·routing policy version을 저장하고, 동일한 필수 provenance와 `toolCalls`를 담은 `providerMetadata`를 서버 값과 대조(각 version 1–64자, `toolCalls` 0–100)
+- V13의 owner·policy-version·granted-at 동의 pin과 legacy boolean grant 폐기, server-owned cloud transfer/gateway/provider/model/policy/outcome evidence
+- LOCAL·cloud SUCCESS·fallback 모두에 같은 `providerMetadata` allowlist canonicalizer를 적용해 임의 provider detail 제거
 - 직렬화된 proposal 64 KiB, `providerMetadata` 8 KiB 상한으로 분석 결과 저장 크기 제한
-- authoritative routing reason을 전달하는 provider-independent cloud request와 no-tool Fake adapter
+- authoritative routing reason을 전달하는 provider-independent cloud request, typed success/failure 결과와 no-tool `NO_NETWORK` Fake adapter
 - owner-scoped memo/analysis/task/graph API와 승인 transaction 안의 tag application
 - 메모 lifecycle API와 owner-scoped 보류 제안/마지막 application 복구 API
 - revision 경쟁 검증, transactional apply/undo, tag 정규화와 provenance
@@ -75,6 +79,7 @@
   평가 report와 prompt-injection/no-tool 경계 테스트
 - Testcontainers PostgreSQL + MockMvc 통합 테스트
 - primary flow, 중복 요청, owner 격리, stale revision, apply rollback, memo lifecycle/recovery, task 상태/overdue, undo 원문 보존 검증
+- exact consent pin, 미동의 external gateway 0-call, typed/exception/invalid cloud fallback, server-owned evidence와 provider 오류 문구 비노출 통합 검증
 - Playwright의 모바일 viewport에서 보류·새로고침·승인·그래프·되돌리기와 설치 가능한 오프라인 app shell 검증
 - 로컬 초안 owner 격리·저장 실패, 교차 탭 인증 전이, 미저장 편집 guard와 prompt형 service-worker 업데이트 단위 테스트
 - GitHub Actions에서 OpenAPI/JSON Schema, backend, frontend, 브라우저 E2E 검사를 실행
@@ -284,13 +289,17 @@ docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.p
 이 저장소는 포트폴리오용 MVP 체크포인트이며 다음 기능은 아직 연결하지 않았습니다.
 
 - 실제 로컬 AI 모델 또는 클라우드 LLM
+- 실제 external provider 설정과 사용자 consent grant/revoke API, grant 시각의 run snapshot·descriptor binding, top-k retrieval context
+- DB transaction 밖 bounded async/timeout provider 호출, 서버 발급 idempotent provider-request token, queued/running·재시도·duration·token·cost 계측
 - local email 검증·비밀번호 재설정 delivery, IP·edge rate limit/abuse protection, MFA/passkey, 완전한 계정 삭제 자동화
 - 완전한 오프라인 동기화와 IndexedDB outbox
 - Web Push 및 reminder dispatcher
 - 자동 태그 병합·분리, 의미 검색, 노드 압축
 - Neo4j, Kafka, Redis, 별도 AI 마이크로서비스
 
-local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 적용되며 잠금 중 추가 시도로 만료가 연장되지 않습니다. 만료 뒤 정상 로그인하면 실패 기록을 초기화합니다. 결정론적 평가 v2는 regression의 proposal schema/domain 유효성, wrong-local 0, 정밀 날짜 발명 0, local overflow 0, 누락된 overflow 신호 0, 미해결 action/object 환각 0을 hard gate로 검사합니다. `fake-v6` / `korean-rules-v4`는 순차 item과 immutable 원문의 UTF-16 source span을 보존하면서 proposal schema v2의 날짜 candidate ID와 TASK별 정밀 due candidate 참조를 제안합니다. 과거 schema v1 proposal은 복구할 수 있고 기존의 단일 TASK·단일 정밀 날짜 보수적 기본값만 유지합니다. 현재 공개 합성 자료에서 item 수는 regression/challenge 각각 12/12 case, source span은 15/15·14/14개가 일치하지만, dataset v2에는 date-to-item binding gold가 없으므로 report capability는 `SUPPORTED_NOT_SCORED_DATASET_V2`이며 binding 품질을 hard gate로 사용하지 않습니다. 독립적으로 adjudicate한 binding label은 후속 evaluation dataset v3에서 도입해야 합니다. 외부 blind runner는 원문을 저장소나 CI에 넣지 않는 aggregate-only 경계까지만 준비됐고 metric gate는 `NOT_CONFIGURED`입니다. 실제 AI provider와 로컬 모델 연결은 독립적인 gold 검토, 사전 승인된 threshold, 개인정보·비용·실패 수명주기 경계가 준비되기 전까지 보류합니다.
+local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 적용되며 잠금 중 추가 시도로 만료가 연장되지 않습니다. 만료 뒤 정상 로그인하면 실패 기록을 초기화합니다. V13은 과거 boolean-only cloud consent를 모두 폐기하고, true consent가 owner row의 정확한 policy version과 승인 시각을 함께 갖도록 강제합니다. 현재 Fake descriptor는 `NO_NETWORK`라 이 동의 없이 동작하며, 실제 external provider도 consent grant/revoke HTTP API도 구성되어 있지 않습니다.
+
+결정론적 평가 v2는 regression의 proposal schema/domain 유효성, wrong-local 0, 정밀 날짜 발명 0, local overflow 0, 누락된 overflow 신호 0, 미해결 action/object 환각 0을 hard gate로 검사합니다. `fake-v6` / `korean-rules-v4`는 순차 item과 immutable 원문의 UTF-16 source span을 보존하면서 proposal schema v2의 날짜 candidate ID와 TASK별 정밀 due candidate 참조를 제안합니다. 과거 schema v1 proposal은 복구할 수 있고 기존의 단일 TASK·단일 정밀 날짜 보수적 기본값만 유지합니다. 현재 공개 합성 자료에서 item 수는 regression/challenge 각각 12/12 case, source span은 15/15·14/14개가 일치하지만, dataset v2에는 date-to-item binding gold가 없으므로 report capability는 `SUPPORTED_NOT_SCORED_DATASET_V2`이며 binding 품질을 hard gate로 사용하지 않습니다. 엄격한 v2 2인 review manifest schema/verifier와 immutable v2 release를 참조하는 ID-only v3 binding overlay integrity validator는 준비됐지만, 실제 human manifest·adjudication·v3 dataset·binding score·`PASS`는 없습니다. [평가 label 정책](docs/EVALUATION_LABEL_POLICY.md)도 아직 human approval이 필요한 draft입니다. 외부 blind runner는 원문을 저장소나 CI에 넣지 않는 aggregate-only 경계까지만 준비됐고 metric gate는 `NOT_CONFIGURED`입니다. 실제 AI provider와 로컬 모델 연결은 독립적인 gold 검토, 사전 승인된 threshold, provider/region·보존·비용·실패 수명주기 경계가 준비되기 전까지 보류합니다.
 
 설치된 구형 PWA와의 단계적 호환을 위해 proposal GET/recovery는 헤더가 없거나 `X-Analysis-Proposal-Schema-Version: 1`이면 strict v1을 반환하고, 현재 PWA는 `2`를 명시해 저장된 v2 binding을 받습니다. 이 응답 projection은 JSONB와 hash를 바꾸지 않으며 `no-store`와 `Vary`로 캐시를 분리합니다. 승인 요청의 due `timeZone`도 canonical 선택값이 아니며, 서버는 immutable memo revision의 capture time zone을 `task_details.source_time_zone`에 저장합니다.
 
@@ -303,6 +312,7 @@ local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 �
 - [현재 데이터 모델](docs/DATA_MODEL.md)
 - [AI 안전 경계](docs/AI_PIPELINE.md)
 - [분석 평가 기준선과 실제 LLM 진입 조건](docs/EVALUATION.md)
+- [평가 label 검토와 v3 binding 준비 정책 초안](docs/EVALUATION_LABEL_POLICY.md)
 - [배포 및 운영 가이드](docs/DEPLOYMENT.md)
 - [마일스톤](docs/ROADMAP.md)
 - [ADR](docs/adr)

@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://personal-memo.local/schemas/korean-memo-evaluation-review-v1.json",
+  "title": "KoreanMemoEvaluationReviewV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "reviewSchemaVersion",
+    "reviewKind",
+    "datasetVersion",
+    "releaseId",
+    "releaseDigestSha256",
+    "labelPolicyVersion",
+    "protocolVersion",
+    "reviewerToken",
+    "reviewScope",
+    "attestations",
+    "caseReviews"
+  ],
+  "properties": {
+    "reviewSchemaVersion": {
+      "const": "1"
+    },
+    "reviewKind": {
+      "const": "PUBLIC_V2_DATE_ITEM_GOLD"
+    },
+    "datasetVersion": {
+      "const": "2"
+    },
+    "releaseId": {
+      "$ref": "#/$defs/opaqueId"
+    },
+    "releaseDigestSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "labelPolicyVersion": {
+      "$ref": "#/$defs/opaqueId"
+    },
+    "protocolVersion": {
+      "const": "public-v2-gold-review-v1"
+    },
+    "reviewerToken": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "reviewScope": {
+      "const": [
+        "DATE_MENTION_GOLD",
+        "ITEM_GOLD",
+        "ITEM_SOURCE_SPAN_GOLD"
+      ]
+    },
+    "attestations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "humanReviewer",
+        "independentReview",
+        "analyzerOutputHidden",
+        "otherReviewHidden",
+        "publicSyntheticDataOnly"
+      ],
+      "properties": {
+        "humanReviewer": {
+          "const": true
+        },
+        "independentReview": {
+          "const": true
+        },
+        "analyzerOutputHidden": {
+          "const": true
+        },
+        "otherReviewHidden": {
+          "const": true
+        },
+        "publicSyntheticDataOnly": {
+          "const": true
+        }
+      }
+    },
+    "caseReviews": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/caseReview"
+      }
+    }
+  },
+  "$defs": {
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "goldId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "verdict": {
+      "enum": [
+        "ACCEPT",
+        "CHANGE_REQUIRED"
+      ]
+    },
+    "caseReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "dateMentionGold",
+        "itemGold",
+        "itemSourceSpanGold"
+      ],
+      "properties": {
+        "caseId": {
+          "$ref": "#/$defs/goldId"
+        },
+        "dateMentionGold": {
+          "$ref": "#/$defs/verdict"
+        },
+        "itemGold": {
+          "$ref": "#/$defs/verdict"
+        },
+        "itemSourceSpanGold": {
+          "$ref": "#/$defs/verdict"
+        }
+      }
+    }
+  }
+}

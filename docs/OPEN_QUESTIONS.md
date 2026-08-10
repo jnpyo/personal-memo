@@ -42,9 +42,11 @@ operational approval. Resolved decisions are not implementation prompts.
 
 ### Confirmation and Agent authority
 
-- Every analysis result is an untrusted proposal and receives a compact user review.
+- Every analysis result is an untrusted proposal and receives user review. A non-success cloud
+  outcome bypasses concise approval and opens detailed review.
 - No task, tag, relation, reminder, or graph artifact becomes canonical before explicit approval.
-- Agent/model tools remain read-only before confirmation.
+- The current Fake gateway has no tools. Any future Agent/model tools remain read-only before
+  confirmation.
 
 ### Graph and taxonomy
 
@@ -69,6 +71,22 @@ operational approval. Resolved decisions are not implementation prompts.
 - Proposal response compatibility is resolved by explicit negotiation: no header/`1` gives strict
   v1, the current PWA requests `2`, stored proposals are never rewritten, and due persistence always
   uses the immutable memo revision's source time zone rather than the approval device's zone.
+- V13 resolves the storage/enforcement shape for external memo-content consent: the authenticated
+  owner must have boolean true, the exact descriptor policy version, and a non-null grant timestamp.
+  Legacy boolean-only grants are revoked. `NO_NETWORK` needs no consent; an unconsented,
+  mismatched, other-owner, revoked, or future-dated `EXTERNAL_MEMO_CONTENT` grant makes zero gateway
+  calls because `granted_at` must not be later than the authorization-check instant.
+- Gateway transfer mode and gateway/provider/model/consent-policy versions are server-owned. Every
+  new run records those values and a bounded outcome. Typed failure, exception, or invalid cloud
+  output stores only a revalidated local proposal as `HYBRID`/`REVIEW_REQUIRED`, exposes no provider
+  error text, changes no canonical data, and opens detailed review.
+- Every new LOCAL, cloud-success, and fallback proposal rebuilds `providerMetadata` from one bounded
+  server allow-list, so a provider cannot retain arbitrary metadata fields.
+- No consent grant/revoke HTTP API or actual external provider is configured. Top-k context,
+  asynchronous queued/running execution, retry, duration, token, and cost tracking remain open work.
+- The authorization instant/accepted grant are not snapshotted on the run or bound to the descriptor.
+  Bounded out-of-transaction timeout execution and a server-issued idempotent provider-request token
+  are also absent and remain hard gates before any real provider.
 - No real local model or cloud provider is selected or connected without a separate product,
   privacy, evaluation, and cost decision.
 - Public regression and `VISIBLE_CHALLENGE` fixtures are diagnostic synthetic data, never blind
@@ -77,6 +95,10 @@ operational approval. Resolved decisions are not implementation prompts.
 - Evaluation dataset version 2 has no date-to-item binding labels. Binding support is therefore
   reported as `SUPPORTED_NOT_SCORED_DATASET_V2`; a separately reviewed, independently adjudicated
   version-3 label policy is required before binding quality can become a gate.
+- A strict two-reviewer version-2 manifest schema/verifier and an ID-only version-3 binding overlay
+  integrity validator are preparation only. There are no real human manifests, completed
+  adjudication, version-3 dataset, binding score, or `PASS`, and `EVALUATION_LABEL_POLICY.md` remains
+  a human-unapproved draft.
 - The external harness currently has no metric `PASS` state. A curator/reviewer must approve the
   release, adjudication policy, sample size, and thresholds before the first candidate run.
 
@@ -95,7 +117,8 @@ operational approval. Resolved decisions are not implementation prompts.
 ### Cloud provider and budget
 
 - allowed provider and regions;
-- whether memo text may leave the service and how consent is recorded;
+- which approved provider/region and transfer/retention/deletion policy may use the existing exact
+  consent pin, and what audited user-facing grant/revoke API and wording will manage it;
 - monthly budget and per-request context/token limits;
 - maximum accepted latency, retry behavior, and outage policy.
 - who independently curates and adjudicates the blind release, and which metric thresholds are

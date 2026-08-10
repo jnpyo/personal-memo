@@ -44,6 +44,34 @@ const taskProposal: Proposal = {
   providerMetadata: {},
 };
 
+const noNetworkCloudEvidence = {
+  routingPolicyVersion: 'field-policy-v1',
+  cloudTransferMode: 'NO_NETWORK',
+  cloudGatewayVersion: 'fake-cloud-v2',
+  cloudProviderId: 'fake',
+  cloudModelVersion: 'none',
+  cloudConsentPolicyVersion: 'no-network-v1',
+  cloudToolCalls: 0,
+  cloudMutationCalls: 0,
+  cloudResolvedFields: [],
+  receivedRoutingPolicyVersion: 'field-policy-v1',
+  receivedRoutingReasons: ['IMPRECISE_DATE'],
+};
+
+const externalCloudEvidence = {
+  routingPolicyVersion: 'field-policy-v1',
+  cloudTransferMode: 'EXTERNAL_MEMO_CONTENT',
+  cloudGatewayVersion: 'external-test-v1',
+  cloudProviderId: 'external-test',
+  cloudModelVersion: 'external-model-v1',
+  cloudConsentPolicyVersion: 'external-policy-v1',
+  cloudToolCalls: 0,
+  cloudMutationCalls: 0,
+  cloudResolvedFields: [],
+  receivedRoutingPolicyVersion: 'field-policy-v1',
+  receivedRoutingReasons: ['IMPRECISE_DATE'],
+};
+
 function explicitDateProposal(shared = false): Proposal {
   const dates: Proposal['dateCandidates'] = [
     {
@@ -112,7 +140,7 @@ function renderProposal(
 }
 
 describe('proposal review dialog', () => {
-  it('starts with a concise yes-or-no summary without exposing the full editor', () => {
+  it('keeps a legacy or local proposal with no cloud metadata concise', () => {
     const markup = renderProposal(taskProposal);
 
     expect(markup).toContain('<dialog');
@@ -287,6 +315,148 @@ describe('proposal review dialog', () => {
     expect(markup).toContain('어떤 부분이 다른가요?');
     expect(markup).toContain('안전하게 연결하지 못해 자동 적용하지');
     expect(markup).toContain('주말쯤');
+    expect(markup).not.toContain('예, 이대로 적용');
+  });
+
+  it('forces detailed review when external enrichment was skipped for missing consent', () => {
+    const markup = renderProposal({
+      ...taskProposal,
+      providerMetadata: {
+        ...externalCloudEvidence,
+        cloudOutcome: 'CONSENT_REQUIRED',
+      },
+    });
+
+    expect(markup).toContain('외부 보완 분석은 동의가 없어 실행하지 않았습니다.');
+    expect(markup).toContain('검증된 로컬 제안만 표시됩니다.');
+    expect(markup).toContain('어떤 부분이 다른가요?');
+    expect(markup).not.toContain('예, 이대로 적용');
+    expect(markup).not.toContain('AI 추천으로 돌아가기');
+  });
+
+  it('shows one generic fallback notice without exposing a provider failure category', () => {
+    const markup = renderProposal({
+      ...taskProposal,
+      providerMetadata: {
+        ...noNetworkCloudEvidence,
+        cloudOutcome: 'TIMEOUT',
+        cloudFailureCategory: 'provider-secret-timeout-detail',
+      },
+    });
+
+    expect(markup).toContain('보완 분석을 완료하지 못했습니다.');
+    expect(markup).toContain('원본 메모는 그대로 보존');
+    expect(markup).not.toContain('provider-secret-timeout-detail');
+    expect(markup).not.toContain('예, 이대로 적용');
+  });
+
+  it('keeps the concise confirmation for a successful no-network enrichment', () => {
+    const markup = renderProposal({
+      ...taskProposal,
+      providerMetadata: {
+        ...noNetworkCloudEvidence,
+        cloudOutcome: 'SUCCESS',
+      },
+    });
+
+    expect(markup).toContain('예, 이대로 적용');
+    expect(markup).not.toContain('보완 분석을 완료하지 못했습니다.');
+    expect(markup).not.toContain('검증된 로컬 제안만 표시됩니다.');
+  });
+
+  it('fails closed for partial external cloud evidence', () => {
+    const markup = renderProposal({
+      ...taskProposal,
+      providerMetadata: {
+        cloudTransferMode: 'EXTERNAL_MEMO_CONTENT',
+      },
+    });
+
+    expect(markup).toContain('보완 분석을 완료하지 못했습니다.');
+    expect(markup).toContain('어떤 부분이 다른가요?');
+    expect(markup).not.toContain('외부 보완 분석은 동의가 없어 실행하지 않았습니다.');
+    expect(markup).not.toContain('예, 이대로 적용');
+  });
+
+  it('fails closed when a successful outcome is missing descriptor evidence', () => {
+    const markup = renderProposal({
+      ...taskProposal,
+      providerMetadata: {
+        cloudTransferMode: 'NO_NETWORK',
+        cloudGatewayVersion: 'fake-cloud-v2',
+        cloudOutcome: 'SUCCESS',
+      },
+    });
+
+    expect(markup).toContain('보완 분석을 완료하지 못했습니다.');
+    expect(markup).toContain('어떤 부분이 다른가요?');
+    expect(markup).not.toContain('예, 이대로 적용');
+  });
+
+  it('fails closed when a successful outcome is missing server safety evidence', () => {
+    const incompleteEvidence: Record<string, unknown> = {
+      ...noNetworkCloudEvidence,
+      cloudOutcome: 'SUCCESS',
+    };
+    delete incompleteEvidence.receivedRoutingReasons;
+    const markup = renderProposal({
+      ...taskProposal,
+      providerMetadata: incompleteEvidence,
+    });
+
+    expect(markup).toContain('보완 분석을 완료하지 못했습니다.');
+    expect(markup).toContain('어떤 부분이 다른가요?');
+    expect(markup).not.toContain('예, 이대로 적용');
+  });
+
+  it('keeps a complete coherent not-required evidence tuple concise', () => {
+    const markup = renderProposal({
+      ...taskProposal,
+      providerMetadata: {
+        routingPolicyVersion: 'field-policy-v1',
+        cloudTransferMode: 'NOT_REQUIRED',
+        cloudGatewayVersion: 'none',
+        cloudProviderId: 'none',
+        cloudModelVersion: 'none',
+        cloudConsentPolicyVersion: 'none',
+        cloudOutcome: 'NOT_REQUIRED',
+        cloudToolCalls: 0,
+        cloudMutationCalls: 0,
+        cloudResolvedFields: [],
+        receivedRoutingPolicyVersion: 'field-policy-v1',
+        receivedRoutingReasons: [],
+      },
+    });
+
+    expect(markup).toContain('예, 이대로 적용');
+    expect(markup).not.toContain('보완 분석을 완료하지 못했습니다.');
+  });
+
+  it('fails closed for an unknown cloud outcome', () => {
+    const markup = renderProposal({
+      ...taskProposal,
+      providerMetadata: {
+        ...noNetworkCloudEvidence,
+        cloudOutcome: 'FUTURE_SUCCESS',
+      },
+    });
+
+    expect(markup).toContain('보완 분석을 완료하지 못했습니다.');
+    expect(markup).not.toContain('예, 이대로 적용');
+  });
+
+  it('fails closed for an unknown cloud evidence field even with a successful outcome', () => {
+    const markup = renderProposal({
+      ...taskProposal,
+      providerMetadata: {
+        ...noNetworkCloudEvidence,
+        cloudOutcome: 'SUCCESS',
+        cloudProviderDetail: 'must-not-be-trusted',
+      },
+    });
+
+    expect(markup).toContain('보완 분석을 완료하지 못했습니다.');
+    expect(markup).not.toContain('must-not-be-trusted');
     expect(markup).not.toContain('예, 이대로 적용');
   });
 

@@ -1,6 +1,6 @@
 # Data model — authenticated deterministic-analysis MVP
 
-이 문서는 현재 Flyway `V1`–`V12`가 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다. `V11`은 owner별 proposal의 최신 application을 bounded read로 찾는 review-outcome 조회 인덱스를 추가한다. `V12`는 최신 `APPLIED` selection과 활성 memo item을 사용하는 graph projection에 맞춘 partial lookup index만 추가한다. 두 migration 모두 새 analytics/event table이나 raw-content 복제본을 만들지 않는다.
+이 문서는 현재 Flyway `V1`–`V13`이 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다. `V11`은 owner별 proposal의 최신 application을 bounded read로 찾는 review-outcome 조회 인덱스를 추가하고, `V12`는 최신 `APPLIED` selection과 활성 memo item을 사용하는 graph projection에 맞춘 partial lookup index만 추가한다. `V13`은 cloud consent를 정확한 policy와 승인 시각에 고정하고 run에 server-owned cloud evidence를 추가한다. 이 migration들은 새 raw-content 복제본이나 일반 clickstream table을 만들지 않는다.
 
 ## Invariants
 
@@ -16,6 +16,12 @@
 - server session은 PostgreSQL에 저장하고 browser에는 opaque session id만 전달한다.
 - graph는 canonical table의 projection이며 rendered node 위치를 원본으로 저장하지 않는다.
 - `OVERDUE`는 column이나 task source status가 아니다.
+- external memo-content gateway consent는 owner의 boolean·정확한 policy version·grant timestamp가
+  모두 일치하고 grant timestamp가 권한 확인 instant보다 늦지 않을 때만 유효하며,
+  `NO_NETWORK` gateway에는 적용하지 않는다.
+- request·browser·provider result·proposal metadata는 run의
+  transfer/gateway/provider/model/policy/outcome evidence를 선택하지 못한다. 서버가
+  구성한 descriptor와 application service가 그 값을 소유하고 V13 constraint가 조합을 제한한다.
 
 ## Identity and raw memo
 
@@ -92,8 +98,17 @@ Spring Session JDBC의 opaque browser session을 저장한다. table과 index는
 user_id UUID PK/FK -> users
 time_zone VARCHAR(64)
 cloud_analysis_consent BOOLEAN
+cloud_analysis_consent_policy_version VARCHAR(64) NULL
+cloud_analysis_consent_granted_at TIMESTAMPTZ NULL
 settings_version BIGINT
 ```
+
+V13은 과거 boolean-only `TRUE` 값을 모두 `FALSE`로 폐기한다. false consent는 policy와
+timestamp가 모두 null이어야 하며, true consent는 비어 있지 않은 1–64자 policy version과
+non-null grant timestamp를 함께 가져야 한다. 분석 서비스는 authenticated owner의 row에서
+descriptor policy와 정확히 일치하는지를 읽는다. 다른 owner의 grant, policy mismatch, revoke는
+권한이 아니며, 권한 확인 instant보다 미래인 `granted_at`도 호출을 허가하지 않는다.
+현재 이 값을 부여·철회하는 HTTP API와 실제 external provider 설정은 없다.
 
 ### `memos`
 
@@ -169,6 +184,12 @@ prompt_version VARCHAR(64)
 local_model_version VARCHAR(64)
 embedding_model_version VARCHAR(64)
 routing_policy_version VARCHAR(64)
+cloud_transfer_mode NOT_REQUIRED | LEGACY_UNKNOWN | DESCRIPTOR_UNAVAILABLE | NO_NETWORK | EXTERNAL_MEMO_CONTENT
+cloud_gateway_version VARCHAR(64)
+cloud_provider_id VARCHAR(64)
+cloud_model_version VARCHAR(64)
+cloud_consent_policy_version VARCHAR(64)
+cloud_outcome NOT_REQUIRED | LEGACY_UNKNOWN | SUCCESS | CONSENT_REQUIRED | UNAVAILABLE | TIMEOUT | RETRY_EXHAUSTED | PROVIDER_ERROR | INVALID_RESPONSE | UNEXPECTED_FAILURE
 ambiguity_reasons JSONB
 created_at TIMESTAMPTZ
 completed_at TIMESTAMPTZ NULL
@@ -177,6 +198,22 @@ FK (memo_id, memo_revision, owner_id) -> memo_revisions(memo_id, revision, owner
 ```
 
 현재 결정론적 analyzer는 run이 참조하는 revision의 `client_recorded_at`과 `source_time_zone`을 입력으로 사용한다. 서버가 소유하는 `analyzer_version`, `prompt_version`, `local_model_version`, `embedding_model_version`, `routing_policy_version`은 각각 비어 있지 않은 1–64자 값으로 run마다 저장된다. 현재 Fake 경로는 `fake-v6`, `none`, `none`, `none`, `field-policy-v1`을 사용하고 proposal의 추가 metadata에 `korean-rules-v4`를 남긴다. analyzer/rules version은 날짜·유형·행동·참조·원문 item span 및 명시적인 TASK due binding 추출을, `routing_policy_version`은 이미 구조화된 proposal에서 점수 임계값과 routing signal을 재구성해 route로 매핑하는 gate를 식별한다. `ambiguity_reasons`는 cloud 처리 전 서버가 재구성한 최초 라우팅 원인을 보존한다. 모호성 gate가 local proposal로 충분하다고 판정하면 `LOCAL`, Fake cloud enrichment가 필요하면 `HYBRID`를 저장한다. `MOCK`·`CLOUD` 값은 후속 adapter와 이전 단계 호환을 위해 표현 가능하지만 현재 실행 경로에서는 사용하지 않는다. memo가 수정되면 현재 revision보다 오래된 미적용 run을 `STALE`로 표시하며 application 단계에서도 revision을 다시 검사한다.
+
+V13 cloud evidence는 route와 일관된 조합만 허용한다. clear `LOCAL`/`MOCK`에는
+`NOT_REQUIRED`와 `none` 값이, 현재 Fake `HYBRID`에는 `NO_NETWORK`와 descriptor version 및
+outcome이 저장된다. descriptor를 읽지 못한 새 `HYBRID` run은 `DESCRIPTOR_UNAVAILABLE` /
+`UNEXPECTED_FAILURE`와 `unavailable` evidence를 사용한다. V13 이전 `CLOUD`/`HYBRID` row는
+실제 전송 여부나 성공을 추측하지 않고 `LEGACY_UNKNOWN`으로 backfill한다. external mode의
+`CONSENT_REQUIRED`는 gateway method를 호출하지 않았음을 나타낸다. typed failure, gateway 예외,
+invalid enriched result도 validated local proposal과 함께 `HYBRID`/`REVIEW_REQUIRED`로 남고
+canonical record를 만들지 않는다. provider error text는 저장하지 않는다.
+현재 run은 호출 권한을 판정한 instant와 사용한 grant timestamp를 snapshot하거나
+descriptor에 bind하지 않는다. 이 evidence와 provider-request token/attempt state는 실제 provider
+전 새 Flyway migration으로 추가해야 한다.
+
+`QUEUED`, `RUNNING`, `FAILED`는 문서상 lifecycle 어휘에 남아 있지만 현재 분석 시작은
+동기이고 새 정상/fallback run을 곧바로 `REVIEW_REQUIRED`로 저장한다. queue worker, retry attempt,
+duration, token, cost column과 top-k context table은 없다.
 
 Proposal schema v2는 `dateCandidates[].candidateId`와 nullable
 `itemCandidates[].dueDateCandidateId`를 기존 `proposal_json` JSONB 안에 저장하고, run의 기존
@@ -204,7 +241,7 @@ created_at TIMESTAMPTZ
 FK (analysis_run_id, owner_id) -> analysis_runs(id, owner_id)
 ```
 
-proposal은 review input일 뿐 canonical domain data가 아니다. 직렬화한 proposal JSON은 최대 65,536 UTF-8 byte(64 KiB), 그 안의 `providerMetadata`는 최대 8,192 UTF-8 byte(8 KiB)다. `providerMetadata`에는 위 다섯 version과 0–100 범위의 정수 `toolCalls`가 필수이며, proposal이 주장하는 version은 서버가 해당 run에 저장하는 provenance와 정확히 일치해야 한다.
+proposal은 review input일 뿐 canonical domain data가 아니다. 직렬화한 proposal JSON은 최대 65,536 UTF-8 byte(64 KiB), 그 안의 `providerMetadata`는 최대 8,192 UTF-8 byte(8 KiB)다. `providerMetadata`에는 위 다섯 version과 0–100 범위의 정수 `toolCalls`가 필수이며, proposal이 주장하는 version은 서버가 해당 run에 저장하는 provenance와 정확히 일치해야 한다. 모든 새 LOCAL·cloud SUCCESS·fallback proposal은 공통 allow-list canonicalizer가 required provenance/tool count와 bounded local field만 복사해 metadata를 다시 만든다. cloud success도 provider가 보낸 임의 field를 유지하지 못한다. `HYBRID` 결과에는 server가 cloud transfer/gateway/provider/model/policy/outcome, received routing policy/reasons, zero tool/mutation calls, resolved-field 목록을 덮어쓴다.
 
 ### `analysis_applications`
 
@@ -440,5 +477,7 @@ memos + analysis_applications + memo_items + task_details
 - local email verification and password-reset token/delivery state
 - login abuse/rate-limit audit state if the selected policy requires additional persistence
 - MFA/passkey authenticators and account recovery codes
+- asynchronous analysis queue/retry/attempt/duration/token/cost state and top-k retrieval context
+- descriptor-bound consent authorization/grant snapshot and idempotent provider-request token state
 
 필요한 vertical slice가 시작될 때 파괴적 변경 없이 새 Flyway migration으로 추가한다.

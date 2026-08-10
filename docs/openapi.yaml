@@ -401,15 +401,30 @@ paths:
         interpretation uses client_recorded_at and source_time_zone from the referenced
         immutable memo revision, rather than request time or mutable user settings. A
         Draft 2020-12 and domain-validated local proposal is assessed by a versioned,
-        field-level server policy. A clear proposal is persisted with route LOCAL;
-        critical ambiguity signals and their policy version are passed to the no-network
-        Fake cloud adapter once, then the enriched proposal is validated again and persisted
-        with route HYBRID. The run keeps the original routing reasons for auditability. Every
-        accepted proposal carries server-matching analyzer, prompt, local-model,
-        embedding-model, and routing-policy versions (1–64 characters each) plus a required
-        tool-call count from 0 through 100. Compact
-        proposal JSON is limited to 65,536 UTF-8 bytes and providerMetadata to 8,192 UTF-8
-        bytes.
+        field-level server policy. A clear proposal is persisted with route LOCAL and
+        NOT_REQUIRED cloud evidence. For critical ambiguity, the configured gateway first
+        supplies a server-owned descriptor containing transfer mode and gateway, provider,
+        model, and consent-policy versions. The current NO_NETWORK Fake adapter needs no
+        consent. An EXTERNAL_MEMO_CONTENT adapter is not called unless the authenticated
+        owner's consent pins the exact policy version and a grant timestamp no later than the
+        authorization-check instant; future-dated consent also makes zero gateway calls.
+        Otherwise the validated local proposal is persisted with route HYBRID, status
+        REVIEW_REQUIRED, and outcome CONSENT_REQUIRED. Typed gateway failures, exceptions,
+        and invalid enriched proposals also persist a revalidated local fallback with a
+        bounded server-owned outcome and never expose provider error text. HYBRID proposal
+        metadata is overwritten with the same transfer/gateway/provider/model/policy/outcome
+        evidence, zero tool and mutation calls, and the received routing policy/reasons. No
+        path creates canonical data before approval. Every new LOCAL, cloud-success, and
+        fallback proposal rebuilds
+        providerMetadata from the same bounded server allow-list, including server-matching
+        analyzer, prompt, local-model, embedding-model, and routing-policy versions (1–64
+        characters each) plus a required tool-call count from 0 through 100. Compact proposal
+        JSON is limited to 65,536 UTF-8 bytes and providerMetadata to 8,192 UTF-8 bytes. This
+        endpoint remains synchronous and invokes the gateway inside its database transaction.
+        It does not snapshot the authorization/grant pair on the run, bind that pair to the
+        descriptor, or issue a provider-call idempotency token. Bounded out-of-transaction
+        async/timeout execution, queued/running state, retry, duration, token/cost metrics,
+        and top-k context are not implemented.
       parameters:
         - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"

@@ -4,7 +4,9 @@
 
 Use a modular monolith for the backend and a mobile-first PWA for the client.
 
-Do not introduce Neo4j, Kafka, Redis, a separate AI microservice, or a second search service in the MVP. PostgreSQL, a bounded background worker, and clear module boundaries are sufficient.
+Do not introduce Neo4j, Kafka, Redis, a separate AI microservice, or a second search service in the
+MVP. PostgreSQL and clear module boundaries are sufficient now; if asynchronous work is approved
+later, add a bounded worker rather than a new infrastructure service.
 
 ```mermaid
 flowchart TD
@@ -84,9 +86,9 @@ frontend/src/
 - analysis review and selection
 - graph visualization and bounded expansion
 - task/search views
-- on-device deterministic/model analysis in a worker
-- optimistic UI with idempotent server synchronization
-- Web Push subscription management
+- future on-device deterministic/model analysis in a worker (not implemented)
+- current online mutation UX with idempotent server requests; a full synchronization outbox is P1
+- future Web Push subscription management (not implemented)
 
 ### Client non-responsibilities
 
@@ -97,7 +99,8 @@ frontend/src/
 - reminder scheduling authority
 - applying raw model output directly to domain state
 
-The local model must be lazily downloaded and excluded from the initial JavaScript bundle. Runtime fallback order is:
+No local model is currently downloaded or executed. A future approved local-model slice must keep it
+out of the initial JavaScript bundle and may use this fallback order:
 
 ```text
 WebGPU-capable local analyzer
@@ -161,7 +164,30 @@ zone.
 
 ## Cloud Agent orchestration
 
-The default cloud path should be one prepared request rather than an unconstrained autonomous loop.
+The current cloud boundary is one synchronous prepared request rather than an autonomous loop.
+
+For `CLOUD_ENRICH`, a server-configured adapter first provides a validated
+`CloudGatewayDescriptor` containing transfer mode and gateway/provider/model/consent-policy
+versions. A `NO_NETWORK` adapter needs no user consent. An `EXTERNAL_MEMO_CONTENT` adapter is not
+called unless the authenticated owner's setting pins `true`, the exact descriptor policy version,
+and a non-null grant time no later than the authorization-check instant. V13 revokes legacy
+boolean-only grants; a future-dated grant is also rejected. There is no consent grant/revoke API and
+no external provider configured in this checkpoint.
+
+The gateway returns a defensive success proposal or a typed failure enum without provider error
+text. Missing consent, typed failure, descriptor/enrichment exception, or invalid enriched output
+uses the revalidated local proposal, persists a `HYBRID` / `REVIEW_REQUIRED` run with server-owned
+transfer/gateway/provider/model/policy/outcome evidence, and forces detailed UI review. It does not
+modify raw or canonical data.
+
+Every new LOCAL, cloud-success, and fallback proposal rebuilds `providerMetadata` from the same
+bounded server allow-list; success output cannot preserve arbitrary provider fields. The current
+authorization instant and accepted grant are not snapshotted on the run or bound to the descriptor,
+and the synchronous gateway call still occurs inside the analysis database transaction. Before a
+real provider, persist that binding and move provider work to a bounded out-of-transaction async
+step with timeout and a server-issued idempotent provider-request token.
+
+The following retrieval/tool flow is a future design and is not implemented:
 
 ```text
 backend keyword/tag retrieval
@@ -173,11 +199,16 @@ backend keyword/tag retrieval
 → review proposal
 ```
 
-Hide the provider SDK behind an interface such as `CloudAnalysisGateway`. Spring AI may be used inside an adapter, but domain and application code must not depend on a specific provider.
+Provider SDKs remain behind `CloudAnalysisGateway`. No SDK or credential is configured today; a
+future adapter may use Spring AI internally, but domain and application code must not depend on a
+specific provider.
 
 ## Background jobs
 
-Use a PostgreSQL-backed job/outbox table and bounded Spring workers. For concurrent consumers, claim work with a safe locking pattern such as `FOR UPDATE SKIP LOCKED`.
+This is a future design. No analysis job/outbox table, queued/running worker, retry scheduler, or
+duration/token/cost lifecycle exists in the current checkpoint. If implemented, use a
+PostgreSQL-backed job/outbox table and bounded Spring workers. For concurrent consumers, claim work
+with a safe locking pattern such as `FOR UPDATE SKIP LOCKED`.
 
 Initial/P1 jobs:
 
@@ -239,16 +270,22 @@ The home query is bounded and ranks nodes using recency, pin, unfinished status,
 - Auth and API responses are not cached by the service worker, and no authentication material is persisted in browser storage.
 - Cloud secrets remain server-side.
 - Memo content is untrusted input.
-- Agent tools are allow-listed and read-only before confirmation.
+- The current Fake gateway has no Agent tools. Any future Agent tools must be allow-listed and
+  read-only before confirmation.
 - Model output undergoes JSON Schema and domain validation.
 - Logs omit raw memo bodies by default.
-- Cloud context is top-k and purpose-limited.
+- Future cloud context must be top-k and purpose-limited; top-k retrieval is not implemented.
 
 The current authentication slice is not yet a public-account hardening release. Same-account failures receive a bounded lock, but local email verification, password-reset delivery, IP/edge rate limiting and abuse protection, MFA/passkeys, and complete account deletion remain follow-up work.
 
 ## Observability
 
-Record metrics without recording sensitive text:
+The current database records route/proposal status, analyzer provenance, and V13 cloud
+transfer/gateway/provider/model/policy/outcome evidence. The owner-scoped review summary exposes only
+bounded aggregate selection evidence. It does not record analysis duration, retry attempts, token
+usage, cost, or provider error text.
+
+Future observability may record the following without recording sensitive text:
 
 - capture latency and error rate
 - analysis duration and route
@@ -260,7 +297,9 @@ Record metrics without recording sensitive text:
 - graph query size and latency
 - push delivery/retry/duplicate prevention
 
-Each analysis trace includes memo id, revision, schema version, analyzer/provider version, and correlation id, but not the memo body in ordinary logs.
+Current analysis rows include memo id/revision, schema and analyzer provenance, and cloud evidence,
+but there is no separate tracing/correlation subsystem. Ordinary logs must not include the memo body,
+provider errors, credentials, or tokens.
 
 ## Deployment topology
 
@@ -273,4 +312,7 @@ PostgreSQL
 Google OpenID Connect (optional external identity provider)
 ```
 
-One backend process may host the API, authentication endpoints, and bounded workers initially. Separate them only when measured load or failure isolation requires it. Redis is not needed: session state remains in PostgreSQL for this stage.
+One backend process hosts the API and authentication endpoints. Once asynchronous work is approved,
+the same process may also host bounded workers initially; separate them only when measured load or
+failure isolation requires it. Redis is not needed: session state remains in PostgreSQL for this
+stage.

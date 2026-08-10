@@ -73,8 +73,119 @@ function suggestedType(review: ReviewDraft): ItemKind | null {
   return preferredItemKind(review.proposal);
 }
 
+const CLOUD_EVIDENCE_FIELDS = [
+  'cloudTransferMode',
+  'cloudGatewayVersion',
+  'cloudProviderId',
+  'cloudModelVersion',
+  'cloudConsentPolicyVersion',
+  'cloudOutcome',
+  'cloudToolCalls',
+  'cloudMutationCalls',
+  'cloudResolvedFields',
+  'receivedRoutingPolicyVersion',
+  'receivedRoutingReasons',
+] as const;
+const CLOUD_EVIDENCE_FIELD_SET = new Set<string>(CLOUD_EVIDENCE_FIELDS);
+
+type CloudReviewDisposition = 'CONCISE' | 'CONSENT_REQUIRED' | 'DETAILED';
+
+const RESERVED_CLOUD_DESCRIPTOR_VALUES = new Set(['none', 'legacy-unknown', 'unavailable']);
+
+function hasOwn(metadata: Record<string, unknown>, field: string): boolean {
+  return Object.prototype.hasOwnProperty.call(metadata, field);
+}
+
+function boundedCloudText(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim().length === 0 || [...value].length > 64) return null;
+  return value;
+}
+
+function usableDescriptorValue(value: string, allowNone = false): boolean {
+  return !RESERVED_CLOUD_DESCRIPTOR_VALUES.has(value) || (allowNone && value === 'none');
+}
+
+function boundedCloudTextList(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const entries = value.map(boundedCloudText);
+  return entries.every((entry): entry is string => entry !== null) ? entries : null;
+}
+
+function cloudReviewDisposition(review: ReviewDraft): CloudReviewDisposition {
+  const metadata = review.proposal.providerMetadata;
+  const evidenceFields = Object.keys(metadata).filter(
+    (field) => field.startsWith('cloud') || field.startsWith('receivedRouting'),
+  );
+  if (evidenceFields.length === 0) return 'CONCISE';
+  if (evidenceFields.some((field) => !CLOUD_EVIDENCE_FIELD_SET.has(field))) return 'DETAILED';
+
+  if (!CLOUD_EVIDENCE_FIELDS.every((field) => hasOwn(metadata, field))) return 'DETAILED';
+
+  const transferMode = boundedCloudText(metadata.cloudTransferMode);
+  const gatewayVersion = boundedCloudText(metadata.cloudGatewayVersion);
+  const providerId = boundedCloudText(metadata.cloudProviderId);
+  const modelVersion = boundedCloudText(metadata.cloudModelVersion);
+  const consentPolicyVersion = boundedCloudText(metadata.cloudConsentPolicyVersion);
+  const outcome = boundedCloudText(metadata.cloudOutcome);
+  const receivedRoutingPolicyVersion = boundedCloudText(metadata.receivedRoutingPolicyVersion);
+  const receivedRoutingReasons = boundedCloudTextList(metadata.receivedRoutingReasons);
+  const cloudResolvedFields = boundedCloudTextList(metadata.cloudResolvedFields);
+  if (
+    !transferMode ||
+    !gatewayVersion ||
+    !providerId ||
+    !modelVersion ||
+    !consentPolicyVersion ||
+    !outcome ||
+    metadata.cloudToolCalls !== 0 ||
+    metadata.cloudMutationCalls !== 0 ||
+    !receivedRoutingPolicyVersion ||
+    receivedRoutingPolicyVersion !== metadata.routingPolicyVersion ||
+    receivedRoutingReasons === null ||
+    cloudResolvedFields === null ||
+    cloudResolvedFields.length !== 0
+  ) {
+    return 'DETAILED';
+  }
+
+  if (transferMode === 'NOT_REQUIRED') {
+    return outcome === 'NOT_REQUIRED' &&
+      gatewayVersion === 'none' &&
+      providerId === 'none' &&
+      modelVersion === 'none' &&
+      consentPolicyVersion === 'none'
+      ? 'CONCISE'
+      : 'DETAILED';
+  }
+
+  if (transferMode !== 'NO_NETWORK' && transferMode !== 'EXTERNAL_MEMO_CONTENT') {
+    return 'DETAILED';
+  }
+  if (
+    !usableDescriptorValue(gatewayVersion) ||
+    !usableDescriptorValue(providerId) ||
+    !usableDescriptorValue(modelVersion, true) ||
+    !usableDescriptorValue(consentPolicyVersion)
+  ) {
+    return 'DETAILED';
+  }
+
+  if (outcome === 'SUCCESS') return 'CONCISE';
+  if (outcome === 'CONSENT_REQUIRED' && transferMode === 'EXTERNAL_MEMO_CONTENT') {
+    return 'CONSENT_REQUIRED';
+  }
+  return 'DETAILED';
+}
+
+function requiresDetailedCloudReview(review: ReviewDraft): boolean {
+  return cloudReviewDisposition(review) !== 'CONCISE';
+}
+
 function initialStep(review: ReviewDraft): MainReviewStep {
-  return suggestedType(review) && isValidReviewDraft(review) && !requiresExplicitDateMapping(review)
+  return suggestedType(review) &&
+    isValidReviewDraft(review) &&
+    !requiresExplicitDateMapping(review) &&
+    !requiresDetailedCloudReview(review)
     ? 'CONFIRM'
     : 'ALTERNATIVES';
 }
@@ -263,6 +374,18 @@ export function ProposalReview({
     </div>
   );
 
+  const currentCloudDisposition = cloudReviewDisposition(review);
+  const cloudReviewNotice = currentCloudDisposition !== 'CONCISE' && (
+    <div className="review-note" role="status">
+      <p>
+        {currentCloudDisposition === 'CONSENT_REQUIRED'
+          ? '외부 보완 분석은 동의가 없어 실행하지 않았습니다.'
+          : '보완 분석을 완료하지 못했습니다.'}
+      </p>
+      <p>원본 메모는 그대로 보존되며, 아래에는 검증된 로컬 제안만 표시됩니다.</p>
+    </div>
+  );
+
   const dateReviewNotice = datesNeedingReview.length > 0 && (
     <div className="review-note" role="status">
       <p>
@@ -330,6 +453,8 @@ export function ProposalReview({
             onRetry={canShowRetry ? onRetry : undefined}
             onDismiss={onDismissFeedback}
           />
+
+          {cloudReviewNotice}
 
           {dateReviewNotice}
 
@@ -475,7 +600,8 @@ export function ProposalReview({
                 {primaryType &&
                   !draftChanged &&
                   isValidReviewDraft(review) &&
-                  !requiresExplicitDateMapping(review) && (
+                  !requiresExplicitDateMapping(review) &&
+                  !requiresDetailedCloudReview(review) && (
                   <button
                     type="button"
                     className="secondary-button"

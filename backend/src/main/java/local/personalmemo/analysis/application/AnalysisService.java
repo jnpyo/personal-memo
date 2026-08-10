@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import local.personalmemo.analysis.api.AnalysisDtos.ProposalRecoveryView;
 import local.personalmemo.analysis.api.AnalysisDtos.ReviewDispositionView;
@@ -17,8 +18,13 @@ import local.personalmemo.analysis.domain.AnalysisProposalSchemaValidator;
 import local.personalmemo.analysis.domain.AnalysisProposalValidator;
 import local.personalmemo.analysis.domain.AnalysisProvenance;
 import local.personalmemo.analysis.domain.AnalysisRoute;
+import local.personalmemo.analysis.domain.CloudAnalysisFailureReason;
 import local.personalmemo.analysis.domain.CloudAnalysisGateway;
+import local.personalmemo.analysis.domain.CloudAnalysisOutcome;
 import local.personalmemo.analysis.domain.CloudAnalysisRequest;
+import local.personalmemo.analysis.domain.CloudAnalysisResult;
+import local.personalmemo.analysis.domain.CloudGatewayDescriptor;
+import local.personalmemo.analysis.domain.CloudTransferMode;
 import local.personalmemo.analysis.domain.DeterministicAmbiguityGate;
 import local.personalmemo.analysis.domain.LocalAnalyzer;
 import local.personalmemo.common.auth.CurrentIdentity;
@@ -44,6 +50,36 @@ public class AnalysisService {
   private static final String LEGACY_PROPOSAL_SCHEMA_VERSION = "1";
   private static final String CURRENT_PROPOSAL_SCHEMA_VERSION = "2";
   private static final int MAX_RECOVERY_PROPOSALS = 100;
+  private static final Set<String> RESERVED_CLOUD_METADATA =
+      Set.of(
+          "toolCalls",
+          "cloudTransferMode",
+          "cloudGatewayVersion",
+          "cloudProviderId",
+          "cloudModelVersion",
+          "cloudConsentPolicyVersion",
+          "cloudOutcome",
+          "cloudToolCalls",
+          "cloudMutationCalls",
+          "cloudResolvedFields",
+          "receivedRoutingPolicyVersion",
+          "receivedRoutingReasons");
+  private static final List<String> REQUIRED_PROVIDER_METADATA =
+      List.of(
+          "analyzerVersion",
+          "promptVersion",
+          "localModelVersion",
+          "embeddingModelVersion",
+          "routingPolicyVersion",
+          "toolCalls");
+  private static final List<String> BOUNDED_LOCAL_PROVIDER_METADATA =
+      List.of(
+          "deterministicRulesVersion",
+          "route",
+          "detectedDateCandidateCount",
+          "emittedDateCandidateCount",
+          "detectedItemCandidateCount",
+          "emittedItemCandidateCount");
 
   private final JdbcClient db;
   private final CurrentIdentity identity;
@@ -107,18 +143,21 @@ public class AnalysisService {
             memo.content(),
             memo.clientRecordedAt(),
             memo.sourceTimeZone());
+    canonicalizeProviderMetadata(localProposal, localProposal);
     validateProposal(localProposal, memo, proposalSchemaVersion, provenance, routingPolicyVersion);
     List<AmbiguityReason> routingReasons = ambiguityGate.routingSignals(localProposal);
     AnalysisRoute route = ambiguityGate.route(routingReasons);
-    ObjectNode proposal =
+    CloudEnrichment enrichment =
         route == AnalysisRoute.LOCAL_REVIEW
-            ? localProposal
+            ? new CloudEnrichment(localProposal, CloudRunEvidence.notRequired())
             : enrichWithCloud(
                 new CloudAnalysisRequest(localProposal, routingReasons, routingPolicyVersion),
                 memo,
                 proposalSchemaVersion,
                 provenance,
                 routingPolicyVersion);
+    ObjectNode proposal = enrichment.proposal();
+    CloudRunEvidence cloud = enrichment.evidence();
     String persistedRoute = route == AnalysisRoute.LOCAL_REVIEW ? "LOCAL" : "HYBRID";
 
     Timestamp timestamp = Timestamp.from(now);
@@ -137,6 +176,12 @@ public class AnalysisService {
               local_model_version,
               embedding_model_version,
               routing_policy_version,
+              cloud_transfer_mode,
+              cloud_gateway_version,
+              cloud_provider_id,
+              cloud_model_version,
+              cloud_consent_policy_version,
+              cloud_outcome,
               ambiguity_reasons,
               created_at,
               completed_at
@@ -153,6 +198,12 @@ public class AnalysisService {
               :localModelVersion,
               :embeddingModelVersion,
               :routingPolicyVersion,
+              :cloudTransferMode,
+              :cloudGatewayVersion,
+              :cloudProviderId,
+              :cloudModelVersion,
+              :cloudConsentPolicyVersion,
+              :cloudOutcome,
               cast(:ambiguityReasons as jsonb),
               :now,
               :now
@@ -169,6 +220,12 @@ public class AnalysisService {
         .param("localModelVersion", provenance.localModelVersion())
         .param("embeddingModelVersion", provenance.embeddingModelVersion())
         .param("routingPolicyVersion", routingPolicyVersion)
+        .param("cloudTransferMode", cloud.transferMode())
+        .param("cloudGatewayVersion", cloud.gatewayVersion())
+        .param("cloudProviderId", cloud.providerId())
+        .param("cloudModelVersion", cloud.modelVersion())
+        .param("cloudConsentPolicyVersion", cloud.consentPolicyVersion())
+        .param("cloudOutcome", cloud.outcome().name())
         .param("ambiguityReasons", serializeAmbiguityReasons(routingReasons))
         .param("now", timestamp)
         .update();
@@ -622,23 +679,199 @@ public class AnalysisService {
     return version;
   }
 
-  private ObjectNode enrichWithCloud(
+  private CloudEnrichment enrichWithCloud(
       CloudAnalysisRequest request,
       MemoSnapshot memo,
       String expectedSchemaVersion,
       AnalysisProvenance expectedProvenance,
       String expectedRoutingPolicyVersion) {
-    ObjectNode enriched;
+    CloudGatewayDescriptor descriptor;
     try {
-      enriched = cloudGateway.enrich(request);
+      descriptor = cloudGateway.descriptor();
+      if (descriptor == null) {
+        return validatedFallback(
+            request,
+            memo,
+            expectedSchemaVersion,
+            expectedProvenance,
+            expectedRoutingPolicyVersion,
+            CloudRunEvidence.descriptorUnavailable(CloudAnalysisOutcome.UNEXPECTED_FAILURE));
+      }
     } catch (RuntimeException exception) {
-      throw DomainException.invalid(
-          "CLOUD_ANALYSIS_FAILED",
-          "Cloud analysis could not produce a review proposal; no analysis was stored.");
+      return validatedFallback(
+          request,
+          memo,
+          expectedSchemaVersion,
+          expectedProvenance,
+          expectedRoutingPolicyVersion,
+          CloudRunEvidence.descriptorUnavailable(CloudAnalysisOutcome.UNEXPECTED_FAILURE));
     }
+
+    if (descriptor.transferMode() == CloudTransferMode.EXTERNAL_MEMO_CONTENT
+        && !hasPinnedCloudConsent(descriptor.consentPolicyVersion(), Instant.now())) {
+      return validatedFallback(
+          request,
+          memo,
+          expectedSchemaVersion,
+          expectedProvenance,
+          expectedRoutingPolicyVersion,
+          CloudRunEvidence.from(descriptor, CloudAnalysisOutcome.CONSENT_REQUIRED));
+    }
+
+    CloudAnalysisResult result;
+    try {
+      result = cloudGateway.enrich(request);
+    } catch (RuntimeException exception) {
+      return validatedFallback(
+          request,
+          memo,
+          expectedSchemaVersion,
+          expectedProvenance,
+          expectedRoutingPolicyVersion,
+          CloudRunEvidence.from(descriptor, CloudAnalysisOutcome.UNEXPECTED_FAILURE));
+    }
+
+    if (result instanceof CloudAnalysisResult.Failure failure) {
+      return validatedFallback(
+          request,
+          memo,
+          expectedSchemaVersion,
+          expectedProvenance,
+          expectedRoutingPolicyVersion,
+          CloudRunEvidence.from(descriptor, outcomeFor(failure.reason())));
+    }
+    if (!(result instanceof CloudAnalysisResult.Success success)) {
+      return validatedFallback(
+          request,
+          memo,
+          expectedSchemaVersion,
+          expectedProvenance,
+          expectedRoutingPolicyVersion,
+          CloudRunEvidence.from(descriptor, CloudAnalysisOutcome.INVALID_RESPONSE));
+    }
+
+    ObjectNode enriched = success.proposal();
+    CloudRunEvidence successEvidence =
+        CloudRunEvidence.from(descriptor, CloudAnalysisOutcome.SUCCESS);
+    try {
+      validateProposal(
+          enriched, memo, expectedSchemaVersion, expectedProvenance, expectedRoutingPolicyVersion);
+      canonicalizeProviderMetadata(enriched, request.validatedLocalProposal());
+      stampCloudMetadata(enriched, request, successEvidence);
+      validateProposal(
+          enriched, memo, expectedSchemaVersion, expectedProvenance, expectedRoutingPolicyVersion);
+      return new CloudEnrichment(enriched, successEvidence);
+    } catch (RuntimeException exception) {
+      return validatedFallback(
+          request,
+          memo,
+          expectedSchemaVersion,
+          expectedProvenance,
+          expectedRoutingPolicyVersion,
+          CloudRunEvidence.from(descriptor, CloudAnalysisOutcome.INVALID_RESPONSE));
+    }
+  }
+
+  private CloudEnrichment validatedFallback(
+      CloudAnalysisRequest request,
+      MemoSnapshot memo,
+      String expectedSchemaVersion,
+      AnalysisProvenance expectedProvenance,
+      String expectedRoutingPolicyVersion,
+      CloudRunEvidence evidence) {
+    ObjectNode fallback = request.validatedLocalProposal();
+    canonicalizeProviderMetadata(fallback, fallback);
+    stampCloudMetadata(fallback, request, evidence);
     validateProposal(
-        enriched, memo, expectedSchemaVersion, expectedProvenance, expectedRoutingPolicyVersion);
-    return enriched;
+        fallback, memo, expectedSchemaVersion, expectedProvenance, expectedRoutingPolicyVersion);
+    return new CloudEnrichment(fallback, evidence);
+  }
+
+  private CloudAnalysisOutcome outcomeFor(CloudAnalysisFailureReason reason) {
+    return switch (reason) {
+      case UNAVAILABLE -> CloudAnalysisOutcome.UNAVAILABLE;
+      case TIMEOUT -> CloudAnalysisOutcome.TIMEOUT;
+      case RETRY_EXHAUSTED -> CloudAnalysisOutcome.RETRY_EXHAUSTED;
+      case PROVIDER_ERROR -> CloudAnalysisOutcome.PROVIDER_ERROR;
+    };
+  }
+
+  private void canonicalizeProviderMetadata(ObjectNode proposal, ObjectNode trustedSource) {
+    JsonNode source = trustedSource.path("providerMetadata");
+    if (!(source instanceof ObjectNode)) {
+      return;
+    }
+    ObjectNode bounded = json.createObjectNode();
+    for (String field : REQUIRED_PROVIDER_METADATA) {
+      bounded.set(field, source.path(field).deepCopy());
+    }
+    for (String field : BOUNDED_LOCAL_PROVIDER_METADATA) {
+      JsonNode value = source.path(field);
+      if (isBoundedMetadataValue(value)) {
+        bounded.set(field, value.deepCopy());
+      }
+    }
+    proposal.set("providerMetadata", bounded);
+  }
+
+  private boolean isBoundedMetadataValue(JsonNode value) {
+    if (value.isIntegralNumber()) {
+      return value.canConvertToInt();
+    }
+    return value.isTextual()
+        && !value.asText().isBlank()
+        && value.asText().codePointCount(0, value.asText().length())
+            <= AnalysisProvenance.MAX_VERSION_LENGTH;
+  }
+
+  private boolean hasPinnedCloudConsent(String consentPolicyVersion, Instant authorizationInstant) {
+    return db.sql(
+            """
+            select cloud_analysis_consent,
+                   cloud_analysis_consent_policy_version,
+                   cloud_analysis_consent_granted_at
+              from user_settings
+             where user_id = :ownerId
+             for share
+            """)
+        .param("ownerId", identity.ownerId())
+        .query(
+            (resultSet, rowNumber) ->
+                resultSet.getBoolean("cloud_analysis_consent")
+                    && consentPolicyVersion.equals(
+                        resultSet.getString("cloud_analysis_consent_policy_version"))
+                    && wasGrantedBy(
+                        resultSet.getTimestamp("cloud_analysis_consent_granted_at"),
+                        authorizationInstant))
+        .optional()
+        .orElse(false);
+  }
+
+  private boolean wasGrantedBy(Timestamp grantedAt, Instant authorizationInstant) {
+    return grantedAt != null && !grantedAt.toInstant().isAfter(authorizationInstant);
+  }
+
+  private void stampCloudMetadata(
+      ObjectNode proposal, CloudAnalysisRequest request, CloudRunEvidence evidence) {
+    JsonNode metadataNode = proposal.path("providerMetadata");
+    if (!(metadataNode instanceof ObjectNode metadata)) {
+      return;
+    }
+    RESERVED_CLOUD_METADATA.forEach(metadata::remove);
+    metadata
+        .put("toolCalls", 0)
+        .put("cloudTransferMode", evidence.transferMode())
+        .put("cloudGatewayVersion", evidence.gatewayVersion())
+        .put("cloudProviderId", evidence.providerId())
+        .put("cloudModelVersion", evidence.modelVersion())
+        .put("cloudConsentPolicyVersion", evidence.consentPolicyVersion())
+        .put("cloudOutcome", evidence.outcome().name())
+        .put("cloudToolCalls", 0)
+        .put("cloudMutationCalls", 0)
+        .putArray("cloudResolvedFields");
+    metadata.put("receivedRoutingPolicyVersion", request.routingPolicyVersion());
+    var receivedReasons = metadata.putArray("receivedRoutingReasons");
+    request.routingReasons().forEach(reason -> receivedReasons.add(reason.name()));
   }
 
   private String serializeAmbiguityReasons(List<AmbiguityReason> reasons) {
@@ -700,6 +933,43 @@ public class AnalysisService {
   private record ProposalRun(UUID runId, UUID memoId, int memoRevision, String status) {}
 
   private record TagResolution(UUID id, String canonicalName, String matchedAlias) {}
+
+  private record CloudEnrichment(ObjectNode proposal, CloudRunEvidence evidence) {}
+
+  private record CloudRunEvidence(
+      String transferMode,
+      String gatewayVersion,
+      String providerId,
+      String modelVersion,
+      String consentPolicyVersion,
+      CloudAnalysisOutcome outcome) {
+
+    private static CloudRunEvidence notRequired() {
+      return new CloudRunEvidence(
+          "NOT_REQUIRED", "none", "none", "none", "none", CloudAnalysisOutcome.NOT_REQUIRED);
+    }
+
+    private static CloudRunEvidence descriptorUnavailable(CloudAnalysisOutcome outcome) {
+      return new CloudRunEvidence(
+          "DESCRIPTOR_UNAVAILABLE",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          "unavailable",
+          outcome);
+    }
+
+    private static CloudRunEvidence from(
+        CloudGatewayDescriptor descriptor, CloudAnalysisOutcome outcome) {
+      return new CloudRunEvidence(
+          descriptor.transferMode().name(),
+          descriptor.gatewayVersion(),
+          descriptor.providerId(),
+          descriptor.modelVersion(),
+          descriptor.consentPolicyVersion(),
+          outcome);
+    }
+  }
 
   private static final class SetLike {
     private static final List<String> SUPPORTED_SCHEMA_VERSIONS = List.of("1", "2");

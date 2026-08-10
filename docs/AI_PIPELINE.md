@@ -16,32 +16,46 @@ The repository now implements the model-free portion of Milestone 2:
   deterministic baseline report;
 - an enum-based ambiguity gate that routes to `LOCAL_REVIEW` or `CLOUD_ENRICH`;
 - `FakeAnalyzer` and a no-network, no-tool, mutation-free `FakeCloudAnalysisGateway`;
+- a server-owned `CloudGatewayDescriptor` and typed `CloudAnalysisResult` boundary, exact
+  owner/policy/timestamp consent enforcement for `EXTERNAL_MEMO_CONTENT`, and persisted transfer,
+  gateway, provider, model, consent-policy, and outcome evidence;
+- validated-local fallback for missing consent, typed failures, gateway exceptions, and invalid
+  cloud proposals, with no provider error text and detailed UI review instead of a concise approval;
 - Draft 2020-12 contract, domain, and owner-reference validation before routing and again after enrichment;
 - server-side reconstruction of field-level routing signals instead of trusting only an analyzer summary;
 - general Korean action/reference/event rules plus all-weekday relative date/time parsing, while
   approximate weekends and event-relative deadlines remain null-valued review candidates;
 - server-owned analyzer, prompt, local-model, embedding-model, and routing-policy provenance for both `LOCAL` and `HYBRID` runs while every result remains `REVIEW_REQUIRED`;
-- required, bounded proposal metadata and UTF-8 payload limits before anything is persisted;
+- one common allow-list canonicalizer for every new LOCAL, cloud-success, and fallback
+  `providerMetadata` object, plus UTF-8 payload limits before anything is persisted;
 - explicit user resolution of `UNKNOWN` types and partial item application;
 - a raw-content-free, owner-scoped review outcome summary derived read-only from stored proposals
   and latest validated selections.
 - an explicitly invoked external blind harness that accepts only an outside-repository,
   independently human-curated version-2 release and emits aggregate-only Fake-analyzer metrics from
   a clean, pinned commit. No blind dataset or passing metric threshold is included in this repository.
+- strict preparation contracts for two independent version-2 review manifests and an ID-only
+  version-3 TASK-due binding overlay. No real manifests, human adjudication, version-3 dataset,
+  binding score, or passing result exists; `EVALUATION_LABEL_POLICY.md` remains a draft.
 
-No real local model or cloud provider is connected. The roadmap's real-provider adapter remains deferred by the project decision until explicitly authorized.
+No real local model or cloud provider is connected. There is no consent grant/revoke HTTP API and no
+external provider configuration. Top-k context, asynchronous queued/running execution, retry,
+duration, token, and cost tracking are also not implemented. The roadmap's real-provider adapter
+remains deferred by the project decision until explicitly authorized.
 
 ## Pipeline boundaries
 
 ```text
 Raw memo
   → deterministic extraction
-  → local classification and embedding
+  → deterministic local classification
   → schema, domain, and owner-reference validation
   → deterministic field-level ambiguity assessment
       → local proposal, or
-      → cloud Agent enrichment
-  → enriched proposal validation
+      → server-owned gateway descriptor and consent gate
+          → typed enrichment result, or
+          → validated local fallback
+  → final proposal validation and cloud-run evidence
   → user review
   → transactional application
 ```
@@ -50,7 +64,8 @@ Analysis and application are separate operations. No model is allowed to write c
 
 ## Local analyzer contract
 
-The frontend exposes a provider-independent interface conceptually equivalent to:
+The current backend exposes a provider-independent `LocalAnalyzer` interface. A future on-device
+implementation may expose a frontend interface conceptually equivalent to:
 
 ```ts
 interface LocalAnalyzer {
@@ -58,7 +73,9 @@ interface LocalAnalyzer {
 }
 ```
 
-Inputs include:
+Current deterministic inputs include memo id/revision, raw content, the immutable revision's base
+time, and IANA time zone. User defaults, top-k tag/memo context, embeddings, and a browser worker are
+future inputs, not current behavior. The broader target contract may include:
 
 - memo id and revision
 - raw content
@@ -68,7 +85,9 @@ Inputs include:
 - canonical tag candidates and aliases
 - tag centroid/version metadata
 
-Outputs include:
+Current Fake output includes the structured proposal candidates and bounded provenance described
+below. Embedding similarities, related-memo top-k, elapsed time, token use, and cost are not produced
+or persisted. The broader target output may include:
 
 - type score distribution
 - detected date expressions and parse candidates
@@ -104,9 +123,11 @@ ambiguityReason[]
 
 Do not silently convert `다음 주쯤` into a precise due time.
 
-## Embedding use
+## Future embedding use — not implemented
 
-Embedding is used to retrieve candidates, not to fully understand or generate the final domain record.
+When implemented, embedding is used to retrieve candidates, not to fully understand or generate the
+final domain record. The current checkpoint has no embedding storage, top-k retrieval, or centroid
+update job.
 
 - Embed the new memo once.
 - Compare first against canonical tag centroids and aliases.
@@ -183,36 +204,58 @@ provider a canonical write tool or includes hidden raw memo text.
 
 ```text
 LOCAL_REVIEW      local proposal is sufficient
-CLOUD_ENRICH      cloud Agent should resolve specific fields
+CLOUD_ENRICH      server gateway enrichment path for specific fields
 USER_INPUT_NEEDED cloud result still cannot safely resolve critical fields
 PENDING_OFFLINE   cloud is needed but unavailable
 ```
 
+Only `LOCAL_REVIEW` and `CLOUD_ENRICH` are executable routing results today. `USER_INPUT_NEEDED` and
+`PENDING_OFFLINE` remain conceptual; failures on the cloud-enrichment branch persist a validated
+local proposal for detailed review rather than creating either route.
+
 Thresholds are configuration, not hard-coded business truth. Calibrate them using a Korean rough-note evaluation set and real confirmation data.
 
-## Cloud Agent input
+## Current cloud gateway, consent, and fallback boundary
 
-Send only the context needed to resolve the flagged fields.
+`CloudAnalysisRequest` carries a defensive copy of the already validated local proposal, the
+server-reconstructed routing reasons, and the routing-policy version. The request DTO, provider
+result, browser, and memo text cannot choose owner identity or canonical write authority.
 
-```json
-{
-  "memoId": "61c6c3e8-846a-4472-a58a-321920001868",
-  "memoRevision": 4,
-  "content": "전에 교수님이 말한 거 다음 주쯤 올리기",
-  "baseInstant": "2026-08-05T02:00:00Z",
-  "timeZone": "Asia/Seoul",
-  "localResult": {},
-  "ambiguityReasons": [
-    "UNRESOLVED_REFERENCE",
-    "IMPRECISE_DATE"
-  ],
-  "candidateTags": [],
-  "candidateMemos": [],
-  "analysisSchemaVersion": "2"
-}
-```
+Before a `CLOUD_ENRICH` call, the configured server adapter supplies a bounded
+`CloudGatewayDescriptor`: `transferMode`, `gatewayVersion`, `providerId`, `modelVersion`, and
+`consentPolicyVersion`. These values and the final `cloudOutcome` are stamped by the application
+service into `analysis_runs`; a gateway response cannot spoof them through proposal metadata.
 
-## Allowed Agent tools before confirmation
+- `NO_NETWORK` needs no user consent. The current `FakeCloudAnalysisGateway` uses this mode,
+  performs no external transfer, has no tools, and returns a defensive copy.
+- `EXTERNAL_MEMO_CONTENT` requires the authenticated owner's `cloud_analysis_consent=true`, an exact
+  descriptor-policy match, and a non-null grant timestamp no later than the authorization-check
+  instant (`granted_at <= authorizationInstant`). Missing, mismatched, another-owner, revoked, or
+  future-dated consent produces `CONSENT_REQUIRED` and the gateway method is never called.
+- V13 revokes every legacy boolean-only grant because it did not pin an accepted policy. It also
+  requires policy and timestamp to be both present for a true grant and both null for a false grant.
+- The repository has no public grant/revoke API and no actual external provider configuration, so
+  this is a fail-closed integration boundary rather than provider authorization.
+
+`CloudAnalysisResult` is either a defensive success proposal or a typed failure reason
+(`UNAVAILABLE`, `TIMEOUT`, `RETRY_EXHAUSTED`, or `PROVIDER_ERROR`). Descriptor/enrichment exceptions
+become `UNEXPECTED_FAILURE`, and a success proposal that fails schema/domain/owner validation becomes
+`INVALID_RESPONSE`. No exception or provider error text is copied into an API response, proposal,
+run, or UI notice.
+
+Every non-success branch minimizes untrusted provider metadata, stamps bounded server evidence,
+validates the original local proposal again, and stores it as `HYBRID` / `REVIEW_REQUIRED`. Raw memo
+and canonical tag/task/relation data remain unchanged. The PWA opens the detailed alternatives editor
+for every cloud outcome other than `SUCCESS` or `NOT_REQUIRED`; `CONSENT_REQUIRED` has a specific
+safe notice and all other failures share one generic notice.
+
+This authorization-check instant and the accepted grant timestamp are not yet snapshotted on the
+run or cryptographically/relationally bound to its descriptor. The synchronous gateway call also
+still occurs inside `AnalysisService.start`'s database transaction. A real provider remains blocked
+until a run-bound consent snapshot, bounded out-of-transaction async/timeout execution, and a
+server-issued idempotent provider-request token prevent ambiguous authorization and duplicate calls.
+
+## Future Agent tools before confirmation — not implemented
 
 - `searchCanonicalTags(query, limit)`
 - `searchRelatedMemoItems(query, limit, filters)`
@@ -220,9 +263,11 @@ Send only the context needed to resolve the flagged fields.
 - `getUserDateDefaults()`
 - `resolveRelativeDate(expression, baseInstant, timeZone)`
 
-Do not expose create, update, merge, delete, notify, or bulk-rewrite tools before user confirmation.
+These are design allow-list candidates only. The current Fake gateway has zero tool calls, and no
+search/context tool endpoint is wired to it. Do not expose create, update, merge, delete, notify, or
+bulk-rewrite tools before user confirmation.
 
-The orchestration layer enforces:
+Any future real-provider orchestration layer must enforce:
 
 - allow-listed tools
 - owner scope
@@ -233,7 +278,8 @@ The orchestration layer enforces:
 - cancellation
 - structured final-output validation
 
-Memo content must be delimited and explicitly described as untrusted source data. Text inside a memo never overrides system or tool policy.
+The current Fake path makes no network call. If a future approved adapter transfers memo content, it
+must delimit it as untrusted source data; text inside a memo never overrides system or tool policy.
 
 Proposal schema negotiation changes only the read representation. A client that omits
 `X-Analysis-Proposal-Schema-Version`, or sends `1`, receives strict v1 so an installed older PWA can
@@ -315,10 +361,18 @@ cardinality. Unknown enum values and stale revisions are rejected. A non-null it
 non-empty UTF-16 code-unit half-open range `[start, end)` over the exact immutable raw memo revision;
 it must stay in bounds and must not split a surrogate pair. The five required version strings in
 `providerMetadata` contain 1–64 characters and must exactly match the server-owned analyzer and
-routing provenance; `toolCalls` is a required integer from 0 through 100. Provider-specific extra
-metadata is allowed only inside the metadata object. Before schema validation, the compact
-serialized proposal is capped at 65,536 UTF-8 bytes (64 KiB) and `providerMetadata` at 8,192 UTF-8
-bytes (8 KiB).
+routing provenance; `toolCalls` is a required integer from 0 through 100. Although the JSON contract
+keeps the metadata object structurally extensible for compatibility, the analysis-start path rebuilds
+every new LOCAL, cloud-success, and fallback object from one bounded server allow-list. Cloud success
+therefore inherits trusted local provenance rather than arbitrary provider fields. Before schema
+validation, the compact serialized proposal is capped at 65,536 UTF-8 bytes (64 KiB) and
+`providerMetadata` at 8,192 UTF-8 bytes (8 KiB).
+
+On a `HYBRID` run the server additionally overwrites bounded metadata for cloud transfer mode,
+gateway/provider/model/consent-policy versions, outcome, received routing policy/reasons, zero tool
+and mutation calls, and resolved fields. Matching columns on `analysis_runs` are authoritative. A
+clear `LOCAL` run stores `NOT_REQUIRED`/`none` evidence in the run. Historical pre-V13 `CLOUD` or
+`HYBRID` rows are marked `LEGACY_UNKNOWN`, never retroactively described as no-network or successful.
 
 ## Application
 
@@ -381,10 +435,11 @@ analyzer/prompt/local-model/embedding-model/routing-policy provenance and are se
 `Cache-Control: no-store`.
 
 This evidence makes personal review behavior observable, but it does not open the real-LLM gate.
-Independent adjudication of the version-2 date/item gold, a separately reviewed version-3 binding
-label policy and dataset, a separately held blind release with a pre-registered gate, provider
-privacy/consent/cost/failure boundaries, and the remaining criteria in
-[EVALUATION.md](EVALUATION.md) are still required.
+Completed independent adjudication of the version-2 date/item gold, an approved and independently
+reviewed version-3 binding label policy/dataset, a separately held blind release with a
+pre-registered gate, approved provider/region/retention/cost limits, a descriptor-bound run snapshot
+of the consent grant, and bounded out-of-transaction idempotent provider execution are still required
+along with the remaining criteria in [EVALUATION.md](EVALUATION.md).
 
 ## Personalization without fine-tuning
 
@@ -448,3 +503,10 @@ explicit only, uses the deterministic `FakeAnalyzer` without network access, and
 aggregate-only report with no per-case identifiers, results, labels, hashes, spans, paths, or raw
 text. Its metric status stays `NOT_CONFIGURED` until humans pre-register the release policy and
 thresholds before examining candidate output.
+
+Preparation now also includes a strict two-reviewer version-2 manifest contract/verifier and an
+ID-only version-3 TASK-due overlay contract/integrity validator. They validate release identity,
+coverage, references, and aggregate agreement only. They do not create human evidence: no reviewer
+manifest, completed adjudication, version-3 dataset, binding score, or `PASS` is checked in. The
+governing [label policy](EVALUATION_LABEL_POLICY.md) is explicitly
+`DRAFT_REQUIRES_INDEPENDENT_HUMAN_APPROVAL`, so the real-LLM gate remains closed.
