@@ -128,21 +128,35 @@ class TrackedBlindDataLeakageGuardTest {
 
   @Test
   void detectsBlindReviewerAndAdjudicationValuesWithoutFlaggingSchemaDefinitions() {
-    assertThat(containsSensitiveEvaluationMarker("{\"split\":\"BLIND\"}")).isTrue();
+    assertThat(containsSensitiveEvaluationMarker("release.json", "{\"split\":\"BLIND\"}")).isTrue();
     assertThat(
-            containsSensitiveEvaluationMarker("{\"sourcePolicy\":\"INDEPENDENT_HUMAN_CURATED\"}"))
-        .isTrue();
-    assertThat(containsSensitiveEvaluationMarker("{\"reviewKind\":\"PUBLIC_V2_DATE_ITEM_GOLD\"}"))
-        .isTrue();
-    assertThat(containsSensitiveEvaluationMarker("{\"reviewerId\":\"reviewer-a\"}")).isTrue();
-    assertThat(containsSensitiveEvaluationMarker("adjudicationStatus: COMPLETE")).isTrue();
-    assertThat(containsSensitiveEvaluationMarker("caseId,reviewerToken,label")).isTrue();
-    assertThat(containsSensitiveEvaluationMarker("caseId\tadjudicationProtocolVersion\tlabel"))
+            containsSensitiveEvaluationMarker(
+                "release.json", "{\"sourcePolicy\":\"INDEPENDENT_HUMAN_CURATED\"}"))
         .isTrue();
     assertThat(
             containsSensitiveEvaluationMarker(
+                "release.json", "{\"reviewKind\":\"PUBLIC_V2_DATE_ITEM_GOLD\"}"))
+        .isTrue();
+    assertThat(containsSensitiveEvaluationMarker("release.json", "{\"reviewerId\":\"reviewer-a\"}"))
+        .isTrue();
+    assertThat(
+            containsSensitiveEvaluationMarker(
+                "release.json.backup~", "{\"reviewerId\":\"reviewer-a\"}"))
+        .isTrue();
+    assertThat(containsSensitiveEvaluationMarker("release.yaml", "adjudicationStatus: COMPLETE"))
+        .isTrue();
+    assertThat(containsSensitiveEvaluationMarker("release.csv", "caseId,reviewerToken,label"))
+        .isTrue();
+    assertThat(
+            containsSensitiveEvaluationMarker(
+                "release.tsv", "caseId\tadjudicationProtocolVersion\tlabel"))
+        .isTrue();
+    assertThat(
+            containsSensitiveEvaluationMarker(
+                "public-contract.json",
                 """
                 {
+                  "required": ["reviewSchemaVersion", "reviewKind", "reviewerId"],
                   "properties": {
                     "split": {"enum": ["BLIND"]},
                     "sourcePolicy": {"const": "INDEPENDENT_HUMAN_CURATED"},
@@ -156,23 +170,7 @@ class TrackedBlindDataLeakageGuardTest {
   }
 
   static boolean isRelevantEvaluationTextPath(String name) {
-    if (name == null || name.isBlank()) {
-      return false;
-    }
-    String candidate = name.toLowerCase(Locale.ROOT);
-    boolean suffixRemoved;
-    do {
-      suffixRemoved = false;
-      for (String suffix : BACKUP_OR_TEMP_SUFFIXES) {
-        if (candidate.endsWith(suffix)) {
-          candidate = candidate.substring(0, candidate.length() - suffix.length());
-          suffixRemoved = true;
-          break;
-        }
-      }
-    } while (suffixRemoved);
-    String normalized = candidate;
-    return EVALUATION_TEXT_EXTENSIONS.stream().anyMatch(normalized::endsWith);
+    return !evaluationTextExtension(name).isEmpty();
   }
 
   static boolean isSensitiveEvaluationArtifactPath(String name) {
@@ -203,23 +201,54 @@ class TrackedBlindDataLeakageGuardTest {
       if (containsDisallowedControlCharacter(value)) {
         throw new AssertionError("Tracked evaluation text could not be inspected safely.");
       }
-      return containsSensitiveEvaluationMarker(value);
+      return containsSensitiveEvaluationMarker(path.getFileName().toString(), value);
     } catch (Exception exception) {
       throw new AssertionError("Tracked evaluation text could not be inspected safely.");
     }
   }
 
-  static boolean containsSensitiveEvaluationMarker(String value) {
-    return BLIND_SPLIT.matcher(value).find()
-        || INDEPENDENT_SOURCE.matcher(value).find()
-        || YAML_BLIND_SPLIT.matcher(value).find()
-        || YAML_INDEPENDENT_SOURCE.matcher(value).find()
-        || DELIMITED_BLIND_VALUE.matcher(value).find()
-        || DELIMITED_INDEPENDENT_SOURCE.matcher(value).find()
-        || JSON_REVIEW_ARTIFACT_VALUE.matcher(value).find()
-        || JSON_REVIEW_ARTIFACT_ARRAY.matcher(value).find()
-        || YAML_REVIEW_ARTIFACT_VALUE.matcher(value).find()
-        || DELIMITED_REVIEW_ARTIFACT_HEADER.matcher(value).find();
+  static boolean containsSensitiveEvaluationMarker(String name, String value) {
+    String extension = evaluationTextExtension(name);
+    if (".json".equals(extension) || ".jsonl".equals(extension)) {
+      return BLIND_SPLIT.matcher(value).find()
+          || INDEPENDENT_SOURCE.matcher(value).find()
+          || JSON_REVIEW_ARTIFACT_VALUE.matcher(value).find()
+          || JSON_REVIEW_ARTIFACT_ARRAY.matcher(value).find();
+    }
+    if (".yaml".equals(extension) || ".yml".equals(extension)) {
+      return BLIND_SPLIT.matcher(value).find()
+          || INDEPENDENT_SOURCE.matcher(value).find()
+          || JSON_REVIEW_ARTIFACT_VALUE.matcher(value).find()
+          || JSON_REVIEW_ARTIFACT_ARRAY.matcher(value).find()
+          || YAML_BLIND_SPLIT.matcher(value).find()
+          || YAML_INDEPENDENT_SOURCE.matcher(value).find()
+          || YAML_REVIEW_ARTIFACT_VALUE.matcher(value).find();
+    }
+    if (".csv".equals(extension) || ".tsv".equals(extension)) {
+      return DELIMITED_BLIND_VALUE.matcher(value).find()
+          || DELIMITED_INDEPENDENT_SOURCE.matcher(value).find()
+          || DELIMITED_REVIEW_ARTIFACT_HEADER.matcher(value).find();
+    }
+    return false;
+  }
+
+  private static String evaluationTextExtension(String name) {
+    if (name == null || name.isBlank()) {
+      return "";
+    }
+    String candidate = name.toLowerCase(Locale.ROOT);
+    boolean suffixRemoved;
+    do {
+      suffixRemoved = false;
+      for (String suffix : BACKUP_OR_TEMP_SUFFIXES) {
+        if (candidate.endsWith(suffix)) {
+          candidate = candidate.substring(0, candidate.length() - suffix.length());
+          suffixRemoved = true;
+          break;
+        }
+      }
+    } while (suffixRemoved);
+    return EVALUATION_TEXT_EXTENSIONS.stream().filter(candidate::endsWith).findFirst().orElse("");
   }
 
   static boolean containsDisallowedControlCharacter(String value) {
