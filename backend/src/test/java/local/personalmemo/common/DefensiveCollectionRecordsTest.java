@@ -73,7 +73,7 @@ class DefensiveCollectionRecordsTest {
 
   @Test
   void graphAndAuthViewsSnapshotAndProtectTheirCollections() {
-    var node = new GraphDtos.Node("memo-1", "MEMO", "Memo", "TASK", null, false);
+    var node = new GraphDtos.Node("memo-1", "MEMO", "Memo", "TASK", null, false, false);
     var edge = new GraphDtos.Edge("edge-1", "memo-1", "tag-1", "TAGGED_WITH");
     List<GraphDtos.Node> nodes = new ArrayList<>(List.of(node));
     List<GraphDtos.Edge> edges = new ArrayList<>(List.of(edge));

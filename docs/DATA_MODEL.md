@@ -138,6 +138,12 @@ version BIGINT
 
 휴지통 이동은 row를 삭제하지 않고 `status = TRASHED`와 `deleted_at`을 설정한다. 복원은 `status = ACTIVE`로 되돌리고 `deleted_at`을 비운다. raw revision과 이미 승인된 파생 record는 어느 동작에서도 삭제하지 않으며, task/graph projection은 활성 memo만 조회한다.
 
+`pinned`는 graph-home 우선순위를 위한 owner-owned memo metadata다. idempotent pin mutation은
+authenticated owner의 memo row를 잠그고 `ACTIVE` 상태에서만 값을 바꾸며 `version`과
+`updated_at`을 증가시킨다. 이 동작은 `memo_revisions`, analysis proposal, item/tag/task를
+수정하지 않는다. Graph recency는 `memos.updated_at`이 아니라 현재 raw revision의
+server-created 시각을 사용하므로 pin/unpin이나 restore가 원문 edit recency로 오인되지 않는다.
+
 ### `memo_revisions`
 
 원문 snapshot은 append-only 방식으로 추가한다.
@@ -602,15 +608,19 @@ Undo는 application provenance가 가리키는 `item_tags`, `task_details`, `mem
 
 ## Graph projection
 
-현재 graph response는 다음 canonical data에서 bounded query로 만든다. 대표 label/type은 최신 `APPLIED` application의 승인 selection에서 가져오고, task state와 overdue는 같은 memo의 모든 활성 task를 집계한다. 따라서 여러 child item이 있어도 임의 UUID가 대표 metadata를 결정하지 않는다.
+현재 graph response는 다음 canonical data에서 bounded query로 만든다. 대표 label/type은 최신 `APPLIED` application의 승인 selection에서 가져오고, task state와 overdue는 같은 memo의 모든 활성 task를 집계한다. 따라서 여러 child item이 있어도 임의 UUID가 대표 metadata를 결정하지 않는다. memo 후보는 pin, overdue, TODO, nearest due, 현재 raw revision 시각, UUID 순으로 정렬하고, 선택된 memo 집합의 tag 후보는 연결 memo 수와 안정적인 이름/UUID 순으로 정렬한다. node 예산이 찰 때 memo만으로 response가 채워지는 것을 막기 위해 `limit > 1`에서는 최소 1개이자 전체의 1/5인 슬롯을 tag에 우선 예약한다. 실제 tag가 예약보다 적으면 남은 슬롯을 memo로 채운 뒤 final memo set에서 tag 순위·생략 여부를 다시 계산한다. initial memo 밖에만 tag가 있으면 unexamined 관계를 complete로 표시하지 않고 underfill과 `truncated`를 유지하며, `limit=1`도 생략 tag를 probe한다.
 
 ```text
-memos + analysis_applications + memo_items + task_details
+memos + current memo_revisions + analysis_applications + memo_items + task_details
                                          │
                                          └── item_tags ── tags
 ```
 
 별도 graph JSON, 화면 좌표, Neo4j가 source of truth가 아니다. frontend React Flow layout은 표시 책임만 가진다.
+node 상세도 별도 저장하지 않는다. memo drawer는 현재 raw revision을 다시 읽고, memo/tag의 직접
+이웃 강조와 목록은 현재 bounded projection에서 계산한다. 전체-corpus neighborhood와 search
+index는 계속 deferred다. 기존 owner/status/latest-application/active-item index가 이 query
+경계를 지원하며, 계산된 overdue/due 우선순위만을 위해 근거 없는 V18 index를 추가하지 않는다.
 
 ## Current indexes
 

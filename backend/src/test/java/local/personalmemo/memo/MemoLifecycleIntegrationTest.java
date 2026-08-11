@@ -34,6 +34,7 @@ class MemoLifecycleIntegrationTest extends PostgresIntegrationTestSupport {
     var invalid = mvc.perform(get("/api/v1/memos").param("status", "DELETED")).andReturn();
 
     assertThat(active.getResponse().getStatus()).isEqualTo(200);
+    assertThat(active.getResponse().getHeader("Cache-Control")).contains("no-store");
     assertThat(response(active).size()).isEqualTo(2);
     assertThat(response(active).toString()).contains(activeMemoId.toString());
     assertThat(response(active).toString()).contains(anotherActiveMemoId.toString());
@@ -72,6 +73,64 @@ class MemoLifecycleIntegrationTest extends PostgresIntegrationTestSupport {
                 .query(String.class)
                 .list())
         .containsExactly("raw revision one", "raw revision two");
+  }
+
+  @Test
+  void pinIsIdempotentOwnerScopedAndRestrictedToActiveMemos() throws Exception {
+    UUID memoId = UUID.randomUUID();
+    UUID trashedMemoId = UUID.randomUUID();
+    UUID foreignMemoId = seedForeignMemo();
+    createMemo(memoId, "pin-create", "memo to pin");
+    createMemo(trashedMemoId, "pin-trashed-create", "trashed memo to reject");
+    db.sql("update memos set updated_at=cast(:updatedAt as timestamptz) where id=:memoId")
+        .param("updatedAt", "2025-01-01T00:00:00Z")
+        .param("memoId", memoId)
+        .update();
+
+    var first = pinMemo(memoId, "same-pin-key", true);
+    var replay = pinMemo(memoId, "same-pin-key", true);
+    var mismatch = pinMemo(memoId, "same-pin-key", false);
+    var unchanged = pinMemo(memoId, "pin-no-change-key", true);
+
+    assertThat(first.getResponse().getStatus()).isEqualTo(200);
+    assertThat(response(first).path("id").asText()).isEqualTo(memoId.toString());
+    assertThat(response(first).path("pinned").asBoolean()).isTrue();
+    assertThat(response(first).path("updated").asBoolean()).isTrue();
+    assertThat(response(replay)).isEqualTo(response(first));
+    assertThat(mismatch.getResponse().getStatus()).isEqualTo(409);
+    assertThat(response(mismatch).path("code").asText()).isEqualTo("IDEMPOTENCY_KEY_REUSED");
+    assertThat(unchanged.getResponse().getStatus()).isEqualTo(200);
+    assertThat(response(unchanged).path("updated").asBoolean()).isFalse();
+    assertThat(
+            db.sql("select version from memos where id=:memoId and owner_id=:ownerId")
+                .param("memoId", memoId)
+                .param("ownerId", OWNER_ID)
+                .query(Long.class)
+                .single())
+        .isEqualTo(1L);
+
+    var detail = mvc.perform(get("/api/v1/memos/{id}", memoId)).andReturn();
+    var list = mvc.perform(get("/api/v1/memos")).andReturn();
+    assertThat(detail.getResponse().getStatus()).isEqualTo(200);
+    assertThat(detail.getResponse().getHeader("Cache-Control")).contains("no-store");
+    assertThat(response(detail).path("pinned").asBoolean()).isTrue();
+    assertThat(list.getResponse().getHeader("Cache-Control")).contains("no-store");
+    assertThat(response(list).toString()).contains("\"pinned\":true");
+
+    trashMemo(trashedMemoId, "pin-trash");
+    var trashed = pinMemo(trashedMemoId, "pin-trashed-rejected", true);
+    var foreign = pinMemo(foreignMemoId, "pin-foreign-rejected", true);
+    assertThat(trashed.getResponse().getStatus()).isEqualTo(409);
+    assertThat(response(trashed).path("code").asText()).isEqualTo("MEMO_NOT_ACTIVE");
+    assertThat(foreign.getResponse().getStatus()).isEqualTo(404);
+    assertThat(
+            db.sql(
+                    "select count(*) from idempotency_records "
+                        + "where operation='MEMO_PIN_UPDATE' "
+                        + "and idempotency_key in ('pin-trashed-rejected','pin-foreign-rejected')")
+                .query(Integer.class)
+                .single())
+        .isZero();
   }
 
   @Test
@@ -208,5 +267,15 @@ class MemoLifecycleIntegrationTest extends PostgresIntegrationTestSupport {
         .param("now", now)
         .update();
     return memoId;
+  }
+
+  private org.springframework.test.web.servlet.MvcResult pinMemo(
+      UUID memoId, String key, boolean pinned) throws Exception {
+    return mvc.perform(
+            patch("/api/v1/memos/{id}/pin", memoId)
+                .header("Idempotency-Key", key)
+                .contentType("application/json")
+                .content(json.writeValueAsBytes(Map.of("pinned", pinned))))
+        .andReturn();
   }
 }

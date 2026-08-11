@@ -191,6 +191,7 @@ X-XSRF-TOKEN: ...
 | --- | --- |
 | memo 생성 | `POST /memos` |
 | memo 수정 | `PATCH /memos/{memoId}` |
+| graph-home 고정 변경 | `PATCH /memos/{memoId}/pin` |
 | memo 휴지통 이동/복원 | `DELETE /memos/{memoId}`, `POST /memos/{memoId}/restore` |
 | 결정론적 분석 시작 | `POST /memos/{memoId}/analysis-runs` |
 | 제안 적용 | `POST /analysis-proposals/{proposalId}/apply` |
@@ -230,7 +231,8 @@ Content-Type: application/json
   "content": "11.25 OS과제 제출",
   "status": "ACTIVE",
   "analysisState": "NOT_STARTED",
-  "createdAt": "2026-08-05T02:00:00Z"
+  "createdAt": "2026-08-05T02:00:00Z",
+  "pinned": false
 }
 ```
 
@@ -242,7 +244,9 @@ Content-Type: application/json
 GET /api/v1/memos/{memoId}
 ```
 
-현재 revision의 원문과 최신 analysis state를 memo view 형식으로 반환한다.
+현재 revision의 원문, 최신 analysis state, graph-home 고정 여부를 memo view 형식으로 반환한다.
+원문을 포함하는 단건·목록 읽기는 `Cache-Control: no-store`를 반환하며 PWA도 단건 상세를
+`cache: no-store`로 요청한다.
 
 ### List by lifecycle status
 
@@ -273,6 +277,34 @@ Content-Type: application/json
 `clientUpdatedAt`과 `timeZone`은 둘 다 제공하거나 둘 다 생략해야 한다. `timeZone`은 실제 IANA zone이어야 하며 한쪽만 보내면 `422 INVALID_CAPTURE_CONTEXT`다. 현재 PWA는 항상 둘 다 전송한다. 호환 client가 둘 다 생략하면 서버 기록 시각과 직전 revision의 시간대를 사용한다.
 
 성공하면 `200 OK`와 갱신된 `MemoView`를 반환하고, immutable `memo_revisions` row에 원문과 해당 revision의 client recorded time·source time zone을 함께 추가해 `currentRevision`을 증가시킨다. 적용되지 않은 과거 revision 분석은 `STALE`이 된다. revision이 이미 바뀌었으면 `409 STALE_MEMO_REVISION`이다. 휴지통의 memo는 수정할 수 없다.
+
+### Pin or unpin for graph-home priority
+
+```http
+PATCH /api/v1/memos/{memoId}/pin
+Idempotency-Key: memo-pin-018f...
+Content-Type: application/json
+```
+
+```json
+{ "pinned": true }
+```
+
+`200 OK`:
+
+```json
+{
+  "id": "61c6c3e8-846a-4472-a58a-321920001868",
+  "pinned": true,
+  "updated": true
+}
+```
+
+서버는 authenticated owner의 memo row를 잠그고 `ACTIVE`인지 확인한 뒤 `pinned` metadata와
+memo version을 갱신한다. 원문 revision, analysis proposal, 승인된 item/tag/task는 바꾸지 않는다.
+이미 같은 상태이면 `updated`가 false다. 같은 owner/operation/key의 재시도는 최초 응답을
+재생하며, 같은 key를 다른 memo나 반대 `pinned` 값에 재사용하면 `409 IDEMPOTENCY_KEY_REUSED`다.
+다른 owner의 memo는 `404`, 휴지통 memo는 `409 MEMO_NOT_ACTIVE`다.
 
 ### Move to trash and restore
 
@@ -661,12 +693,15 @@ GET /api/v1/graph/home?limit=100
       "label": "OS 과제 제출",
       "memoType": "TASK",
       "taskState": "TODO",
-      "overdue": false
+      "overdue": false,
+      "pinned": false
     },
     {
       "id": "tag:10000000-0000-0000-0000-000000000001",
       "kind": "TAG",
-      "label": "운영체제"
+      "label": "운영체제",
+      "overdue": false,
+      "pinned": false
     }
   ],
   "edges": [
@@ -682,7 +717,35 @@ GET /api/v1/graph/home?limit=100
 }
 ```
 
-이 응답은 `analysis_applications`, `memo_items`, `task_details`, `tags`, `item_tags`에서 매번 투영된다. memo node의 `label`과 `memoType`은 최신 `APPLIED` application의 사용자 승인 selection을 사용하므로 여러 항목의 UUID나 생성 시각에 따라 대표값이 바뀌지 않는다. `taskState`는 해당 memo의 모든 활성 child task를 `TODO` 우선으로 집계하고, 그중 하나라도 현재 시각 기준으로 overdue이면 memo의 `overdue`가 true다. `memoType`, `taskState`, `overdue`는 metadata이며 별도 system-type hub node가 아니다.
+이 응답은 `memos`, 현재 `memo_revisions`, `analysis_applications`, `memo_items`, `task_details`,
+`tags`, `item_tags`에서 매번 투영하며 `Cache-Control: no-store`다. memo node의 `label`과
+`memoType`은 최신 `APPLIED` application의 사용자 승인 selection을 사용하므로 여러 항목의
+UUID나 생성 시각에 따라 대표값이 바뀌지 않는다. `taskState`는 해당 memo의 모든 활성 child
+task를 `TODO` 우선으로 집계하고, 그중 하나라도 현재 시각 기준으로 overdue이면 memo의
+`overdue`가 true다. `pinned`, `memoType`, `taskState`, `overdue`는 metadata이며 별도 system-type
+hub node가 아니다.
+
+memo 후보는 `pinned` → overdue → unfinished TODO → 가장 가까운 TODO due → 현재 raw revision의
+server-created 시각 → UUID 순으로 제한 전에 정렬한다. pin/unpin이 `memos.updated_at`을
+갱신하더라도 현재 raw revision의 recency는 바뀌지 않는다. 제한된 memo 집합 안의 tag 후보는
+서로 연결된 memo 수가 많은 순서, normalized 표시 이름, UUID로 정렬한다. access-frequency나
+영속 중요도 score는 아직 사용하지 않는다.
+
+`limit > 1`이면 `max(1, floor(limit / 5))` 슬롯을 tag 쪽에 먼저 예약하고 나머지를 위
+우선순위의 memo에 배정한다. memo 수가 그 예산보다 적으면 남은 슬롯도 tag budget이 된다.
+initial memo에 실제로 존재하는 tag 수만큼만 tag 슬롯을 유지하고 남은 슬롯은 다음 memo 후보로
+채운다. 이때 final selected memo 집합에서 tag 연결도·순위와 생략 여부를 다시 조회한다. initial
+memo에는 tag가 없을 때도 전체 잠재 memo 범위를 한 번 probe하며, 그 범위에 tag가 전혀 없다고
+확인된 경우에만 memo로 전부 backfill한다. tag가 initial 범위 밖에만 있으면 관계를 누락한 채
+complete라고 하지 않고 underfill과 `truncated=true`를 유지한다. `limit=1`도 선택 memo의 tag
+존재를 probe하므로 표시할 edge 공간이 없어 tag를 생략했다면 `truncated=true`다.
+
+PWA에서 node를 누르면 현재 home response 안의 직접 이웃만 강조하고 상세 drawer를 연다.
+memo node는 owner-scoped `GET /memos/{memoId}`를 다시 읽어 현재 raw revision과 고정 상태를
+표시하고, tag node는 현재 bounded projection에 보이는 연결 memo만 표시한다. drawer의 이웃
+목록은 20개로 제한하며 home이 `truncated=true`이거나 이웃이 잘리면 전체 corpus가 아니라
+“현재 홈 그래프 기준”임을 알린다. 전체-corpus neighborhood, tag alias 상세, 검색 결과 상세는
+Milestone 5 범위로 남는다.
 
 ## Health
 

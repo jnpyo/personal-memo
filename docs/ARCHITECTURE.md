@@ -140,7 +140,7 @@ Each module may contain `api`, `application`, `domain`, and `infrastructure` pac
 - `memo`: source revisions, soft delete, restore and idempotent capture
 - `analysis`: local validation, ambiguity routing, cloud orchestration and stale-result handling
 - `taxonomy`: tags, aliases, provisional topics, centroids and taxonomy proposals
-- `graph`: bounded graph projections, activity scoring and reversible clusters
+- `graph`: bounded canonical graph projection, hard-priority selection, and current-home detail
 - `task`: derived task/event records and state transitions
 - `reminder`: schedule, Web Push and retry
 - `search`: lexical/semantic retrieval and cloud context preparation
@@ -338,7 +338,25 @@ MVP edge kinds:
 
 Task/event/information type is metadata and styling on a memo, not a universal type node. This prevents giant `TASK` and `INFORMATION` hubs.
 
-The home query is bounded and ranks nodes using recency, pin, unfinished status, due proximity, access frequency, and connectivity. It must never default to the full corpus.
+The current home query is bounded before it reaches the PWA. Memo candidates use canonical hard
+priorities only: pin, overdue, unfinished TODO, nearest TODO due, current raw-revision creation time,
+then UUID. Using the raw-revision time prevents a pin toggle or lifecycle metadata update from
+masquerading as a recent source edit. Tag candidates use degree within the already selected memo set,
+then stable name and UUID ordering. Access-frequency scoring, learned importance, cluster projection,
+and persistent layout are not implemented.
+
+When `limit > 1`, the projection reserves `max(1, floor(limit / 5))` slots for tag nodes before
+selecting memos. It retains only the slots used by actual selected tags, safely backfills the rest
+with the next memo candidates, and recomputes tag rank and truncation over that final memo set. When
+tags exist only beyond the initial memo set, it underfills instead of claiming an unexamined relation
+set is complete. A one-node request still probes for an omitted tag. Omitted memo or tag candidates
+set `truncated=true`.
+
+React Flow owns only the bounded display layout. A node button highlights direct neighbors that are
+already present in the current projection and opens an accessible mobile drawer. Memo detail performs
+an owner-scoped, no-store read of the current raw revision; tag detail is explicitly limited to the
+current home snapshot. This closes the current node-detail interaction without claiming Milestone 5's
+full-corpus neighborhood or search contract.
 
 ## Security boundary
 

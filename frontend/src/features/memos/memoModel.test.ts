@@ -12,6 +12,7 @@ function memo(overrides: Partial<MemoView> = {}): MemoView {
     id: 'memo-1',
     currentRevision: 1,
     content: '원문',
+    pinned: false,
     status: 'ACTIVE',
     analysisState: 'NOT_STARTED',
     createdAt: '2026-08-05T00:00:00.000Z',

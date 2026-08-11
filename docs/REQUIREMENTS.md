@@ -116,8 +116,20 @@
 - Render memo and topic-tag nodes.
 - Treat semantic type as metadata/filter/style rather than a universal graph hub.
 - Return a bounded initial graph in the current checkpoint.
-- Milestone 5: return bounded local neighborhoods; search memo body, title, canonical tag, alias,
-  task state, and date range; and open detail views from graph and search results.
+- Rank current memo nodes deterministically by pin, overdue, unfinished task, nearest due, current raw
+  revision recency, and UUID; rank tag nodes by connectivity inside the selected memo set and stable
+  name/UUID ordering. Reserve a deterministic tag share under node-budget pressure so a large memo
+  corpus cannot erase every relation edge; release unused tag slots only after rechecking the final
+  memo set, underfill when a safe relation-complete backfill is not proven, and surface omitted
+  candidates through `truncated`. Do not claim access-frequency or learned importance scoring.
+- Let the user pin or unpin an active memo with an owner-scoped idempotent mutation that does not
+  create a raw revision or canonical analysis output.
+- Make every current-home node a keyboard/touch control. Selecting it highlights only visible direct
+  neighbors and opens a mobile detail drawer; memo detail re-reads the current owner-scoped raw
+  revision with no-store semantics, while tag detail is explicitly limited to the current projection.
+- Milestone 5: return independently bounded full-corpus local neighborhoods; search memo body, title,
+  canonical tag, alias, task state, and date range; and open the same detail experience from search
+  results.
 
 ### Security and control
 

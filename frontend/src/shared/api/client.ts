@@ -12,6 +12,7 @@ import type {
   CsrfToken,
   GraphProjection,
   LatestApplication,
+  MemoPinResult,
   MemoView,
   MemoStatus,
   ReviewDispositionResult,
@@ -369,6 +370,12 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
         `/api/v1/memos?status=${status}&limit=${Math.min(Math.max(limit, 1), 50)}`,
       ),
 
+    memo: (memoId: string, signal?: AbortSignal) =>
+      request<MemoView>(`/api/v1/memos/${encodeURIComponent(memoId)}`, {
+        cache: 'no-store',
+        signal,
+      }),
+
     updateMemo: (
       memoId: string,
       body: UpdateMemoRequest,
@@ -390,6 +397,13 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
       request<MemoView>(`/api/v1/memos/${memoId}/restore`, {
         method: 'POST',
         headers: { 'Idempotency-Key': idempotencyKey },
+      }),
+
+    setMemoPinned: (memoId: string, pinned: boolean, idempotencyKey: string) =>
+      request<MemoPinResult>(`/api/v1/memos/${encodeURIComponent(memoId)}/pin`, {
+        method: 'PATCH',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify({ pinned }),
       }),
 
     analyze: (memoId: string, memoRevision: number, idempotencyKey: string) =>
@@ -463,7 +477,10 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
       }),
 
     graph: (limit = 100) =>
-      request<GraphProjection>(`/api/v1/graph/home?limit=${Math.min(Math.max(limit, 1), 100)}`),
+      request<GraphProjection>(
+        `/api/v1/graph/home?limit=${Math.min(Math.max(limit, 1), 100)}`,
+        { cache: 'no-store' },
+      ),
   };
 }
 

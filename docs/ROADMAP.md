@@ -7,7 +7,10 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
 ## Current checkpoint
 
 - Milestone 0: complete.
-- Milestone 1: complete, including memo lifecycle/recovery, production PWA packaging, and mobile E2E coverage.
+- Milestone 1: complete, including memo lifecycle/recovery, bounded hard-priority graph home,
+  accessible current-home node detail/pin interaction, production PWA packaging, and mobile E2E
+  coverage. The detail drawer deliberately uses only the current projection plus the existing
+  owner-scoped memo read; it is not Milestone 5 full-corpus neighborhood or search.
 - Milestone 2: in progress. Korean date policy, versioned regression/`VISIBLE_CHALLENGE` fixtures, a content-free deterministic evaluation report and narrow regression safety gate, runtime schema/domain validation, versioned field-level routing with persisted provenance, provider-independent Fake cloud enrichment, prompt-injection boundaries, `UNKNOWN` user resolution, and raw-content-free owner-scoped review-outcome aggregation are implemented. `fake-v6` / `korean-rules-v4` emits proposal schema v2 with source-aligned sequential items, proposal-local date IDs, and nullable TASK due references; historical schema v1 remains recoverable and `review-default-v3` uses only explicit v2 bindings. V13 adds exact owner/policy/timestamp consent and server-owned cloud evidence, V14 adds internal authorization/grant/token evidence, V15 adds durable prepare/claim/fence/lease/deadline/recovery/finalize mechanics, and V16 adds owner-active exact tag/alias K=8 context with pre-call raw/hash/version/count snapshot and final raw scrubbing. V17 adds `gateway-attempt-v1`: at most one owner-scoped row per claimed fence and no more than `max_attempts`, monotonic local elapsed when observed, explicit executor-rejection versus gateway-result semantics, and truthful `UNKNOWN`/`NOT_APPLICABLE`/`NOT_REPORTED` model-token/cost states. Existing dispatches remain `attempt_history_version=none` with no backfilled attempt rows. The production profile runs the same lifecycle through a 25-row, 30-second bounded recovery scanner. No V17 evidence appears in public POST/DTO/proposal/`providerMetadata`/UI/evaluation-report/log/browser/service-worker contracts, and attempt rows contain no provider text/ID/token/raw/context. `NO_NETWORK` Fake needs no consent; unconsented `EXTERNAL_MEMO_CONTENT` is zero-call; typed failure/exception/invalid output persists a validated local fallback without canonical changes. Evaluation dataset v2 still has no date-to-item binding gold. A local-only static reviewer packet and an external two-manifest aggregate verifier now make the prepared protocol executable without exposing fixture notes or analyzer output, but they cannot create human evidence or prove reviewer identity/independence. Completed human review and resolution, an approved version-3 binding dataset and separately held blind gate, provider/region/consent/retention decisions including attempt purge, related-memo/fuzzy/vector/embedding context, and real-model numeric usage/cost reporting, aggregation, and budget enforcement remain before a real provider decision. No blind `PASS` is claimed. Ollama/LiquidAI and every real provider remain untouched.
 - Milestone 2 compatibility hardening now negotiates proposal reads: an absent/`1` schema header returns strict v1 for an installed older PWA, while the current PWA requests `2`; responses are `no-store`/`Vary` and projection never rewrites stored v2 JSON. Apply also canonicalizes due source zones from the immutable memo revision instead of trusting the review device's zone. These are contract/application changes over existing JSONB and task columns, so they require no Flyway migration.
 - Authentication hardening: complete for the MVP checkpoint. Local email/password, optional Google OpenID Connect, explicit account linking, PostgreSQL-backed server sessions, CSRF protection, owner identity derived from Spring Security, and a deterministic 5-failure/15-minute local-account lock are implemented. Authentication unit/integration coverage and the full local-account primary browser E2E suite pass.
@@ -138,7 +141,9 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
 - deterministic `FakeAnalyzer`
 - proposal review endpoints
 - transactional apply and undo
-- bounded graph home endpoint
+- bounded graph home endpoint with canonical pin/overdue/TODO/due/revision priority, deterministic
+  memo/tag budget reservation, and stable tag connectivity ordering
+- idempotent owner-scoped active-memo pin mutation
 - task list and state update
 
 ### Frontend
@@ -149,7 +154,7 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
 - review chips for type, title, tags, and date
 - partial apply and reject
 - task side panel/list
-- graph memo/tag rendering
+- keyboard/touch graph memo/tag rendering, direct-neighbor highlight, and mobile node detail drawer
 
 ### Tests
 
@@ -158,6 +163,8 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
 - stale revision rejection
 - undo preserves source
 - owner isolation
+- graph pin replay/mismatch, priority ordering, no-store detail, focus restoration, and current-home
+  neighborhood bounds
 
 ### Exit criteria
 
@@ -275,7 +282,10 @@ Do not hard-code a model before the benchmark and licensing review.
 
 ### Deliverables
 
+- independently bounded full-corpus local-neighborhood endpoint; the current-home snapshot drawer is
+  already available but does not satisfy this item
 - lexical/fuzzy search and alias search
+- open the shared detail experience from results outside the recent memo/home-graph bounds
 - optional vector retrieval after measurement
 - provisional topic collection
 - confirmed-only tag centroids

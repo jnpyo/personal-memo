@@ -14,6 +14,8 @@ import local.personalmemo.common.error.DomainException;
 import local.personalmemo.common.idempotency.IdempotencyService;
 import local.personalmemo.common.security.Hashing;
 import local.personalmemo.memo.api.MemoDtos.Create;
+import local.personalmemo.memo.api.MemoDtos.Pin;
+import local.personalmemo.memo.api.MemoDtos.PinView;
 import local.personalmemo.memo.api.MemoDtos.Update;
 import local.personalmemo.memo.api.MemoDtos.View;
 import local.personalmemo.memo.domain.MemoSnapshot;
@@ -26,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class MemoService {
   private static final String CREATE_OPERATION = "MEMO_CREATE";
   private static final String UPDATE_OPERATION = "MEMO_UPDATE";
+  private static final String PIN_OPERATION = "MEMO_PIN_UPDATE";
   private static final String TRASH_OPERATION = "MEMO_TRASH";
   private static final String RESTORE_OPERATION = "MEMO_RESTORE";
   private static final Set<String> LISTABLE_STATUSES = Set.of("ACTIVE", "TRASHED");
@@ -114,6 +117,7 @@ public class MemoService {
                    r.source_time_zone,
                    m.status,
                    m.created_at,
+                   m.pinned,
                    coalesce((
                      select ar.status
                        from analysis_runs ar
@@ -235,6 +239,45 @@ public class MemoService {
   }
 
   @Transactional
+  public PinView pin(UUID id, String key, Pin command) {
+    String requestHash = idempotency.hashRequest(new PinRequest(id, command));
+    Optional<IdempotencyService.StoredResult> replay =
+        idempotency.find(PIN_OPERATION, key, requestHash);
+    if (replay.isPresent()) {
+      return idempotency.convert(replay.get().response(), PinView.class);
+    }
+
+    MemoSnapshot current = findCurrent(id, true);
+    if (!current.isActive()) {
+      throw DomainException.conflict("MEMO_NOT_ACTIVE", "A trashed memo cannot be pinned.");
+    }
+
+    boolean pinned = command.pinned();
+    boolean changed = current.pinned() != pinned;
+    if (changed) {
+      db.sql(
+              """
+              update memos
+                 set pinned = :pinned,
+                     updated_at = :now,
+                     version = version + 1
+               where id = :memoId
+                 and owner_id = :ownerId
+                 and status = 'ACTIVE'
+              """)
+          .param("pinned", pinned)
+          .param("now", Timestamp.from(Instant.now()))
+          .param("memoId", id)
+          .param("ownerId", identity.ownerId())
+          .update();
+    }
+
+    PinView response = new PinView(id, pinned, changed);
+    idempotency.store(PIN_OPERATION, key, requestHash, id, response);
+    return response;
+  }
+
+  @Transactional
   public View trash(UUID id, String key) {
     String requestHash = idempotency.hashRequest(new StatusChangeRequest(id));
     Optional<IdempotencyService.StoredResult> replay =
@@ -326,6 +369,7 @@ public class MemoService {
                    r.source_time_zone,
                    m.status,
                    m.created_at,
+                   m.pinned,
                    coalesce((
                      select ar.status
                        from analysis_runs ar
@@ -360,7 +404,8 @@ public class MemoService {
         resultSet.getString("source_time_zone"),
         resultSet.getString("status"),
         resultSet.getTimestamp("created_at").toInstant(),
-        resultSet.getString("analysis_state"));
+        resultSet.getString("analysis_state"),
+        resultSet.getBoolean("pinned"));
   }
 
   private View toView(MemoSnapshot memo) {
@@ -370,7 +415,8 @@ public class MemoService {
         memo.content(),
         memo.status(),
         memo.analysisState(),
-        memo.createdAt());
+        memo.createdAt(),
+        memo.pinned());
   }
 
   private void validateTimeZone(String timeZone) {
@@ -406,6 +452,8 @@ public class MemoService {
   }
 
   private record UpdateRequest(UUID memoId, Update command) {}
+
+  private record PinRequest(UUID memoId, Pin command) {}
 
   private record StatusChangeRequest(UUID memoId) {}
 }

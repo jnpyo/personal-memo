@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { hasPendingServerOperation } from './workspaceOperationState';
+import {
+  hasPendingServerOperation,
+  isLatestWorkspaceRequest,
+} from './workspaceOperationState';
 
 describe('workspace server-operation lock', () => {
   it.each([
@@ -16,5 +19,12 @@ describe('workspace server-operation lock', () => {
       pendingTaskId: null,
       authOperation: null,
     })).toBe(false);
+  });
+});
+
+describe('workspace refresh generation', () => {
+  it('allows only the latest-started request to commit data, error, or loading state', () => {
+    expect(isLatestWorkspaceRequest(4, 5)).toBe(false);
+    expect(isLatestWorkspaceRequest(5, 5)).toBe(true);
   });
 });

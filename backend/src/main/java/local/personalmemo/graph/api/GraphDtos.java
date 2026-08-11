@@ -7,7 +7,13 @@ public final class GraphDtos {
   private GraphDtos() {}
 
   public record Node(
-      String id, String kind, String label, String memoType, String taskState, boolean overdue) {}
+      String id,
+      String kind,
+      String label,
+      String memoType,
+      String taskState,
+      boolean overdue,
+      boolean pinned) {}
 
   public record Edge(String id, String source, String target, String kind) {}
 

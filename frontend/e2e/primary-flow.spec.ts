@@ -644,10 +644,63 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
   await expect(
     page.locator('.review-outcome-metric').filter({ hasText: '수정 후 적용' }).locator('dd'),
   ).toHaveText('1');
-  const graphNode = page.locator('.graph-node__content').filter({ hasText: approvedTitle });
+  const graphNode = page.locator('.graph-node--memo .graph-node__content')
+    .filter({ hasText: approvedTitle });
   await graphNode.scrollIntoViewIfNeeded();
   await expect(graphNode).toBeVisible();
   await expect(graphNode).toBeInViewport();
+  await expectMinimumTouchHeight(graphNode, 48);
+
+  await graphNode.press('Enter');
+  const graphDetail = page.getByRole('dialog', { name: `${approvedTitle} 상세` });
+  const graphDetailDrawer = graphDetail.locator('.graph-detail-drawer');
+  await expect(graphDetail).toBeVisible();
+  await expectInsideViewport(page, graphDetailDrawer);
+  await expectNoHorizontalOverflow(page);
+  await expect(graphDetail.getByRole('heading', { name: `${approvedTitle} 상세` })).toBeFocused();
+  await expect(
+    graphDetail.getByRole('region', { name: '현재 원문' }).locator('pre'),
+  ).toHaveText(rawMemo);
+  await expect(graphDetail.getByText('revision 1')).toBeVisible();
+  await expect(graphDetail.getByText(/할 일 상태 미완료/)).toBeVisible();
+  await expect(graphDetail.getByText('#운영체제')).toBeVisible();
+  await expect(graphDetail.getByText('현재 홈 그래프 스냅샷에 보이는 1단계 연결만 표시합니다.'))
+    .toBeVisible();
+
+  const pinMemo = graphDetail.getByRole('button', { name: '홈 그래프에 고정' });
+  await expectMinimumTouchHeight(pinMemo, 48);
+  await pinMemo.click();
+  await expect(graphDetail.getByRole('button', { name: '홈 그래프 고정 해제' })).toBeVisible();
+  await expect(graphNode).toContainText('고정됨');
+
+  await page.setViewportSize({ width: 854, height: 384 });
+  await expectInsideViewport(page, graphDetailDrawer);
+  await expectNoHorizontalOverflow(page);
+  await expectMinimumTouchHeight(
+    graphDetail.getByRole('button', { name: '그래프 상세 닫기' }),
+    48,
+  );
+  await page.setViewportSize({ width: 412, height: 915 });
+
+  await graphDetail.getByRole('button', { name: '그래프 상세 닫기' }).click();
+  await expect(graphDetail).toHaveCount(0);
+  await expect(graphNode).toBeFocused();
+
+  const tagNode = page.locator('.graph-node--tag .graph-node__content')
+    .filter({ hasText: '운영체제' });
+  await page.locator('.graph-canvas').evaluate((element) => {
+    element.scrollIntoView({ block: 'start', behavior: 'auto' });
+  });
+  await expect(tagNode).toBeVisible();
+  await expectMinimumTouchHeight(tagNode, 48);
+  await tagNode.click({ position: { x: 24, y: 24 } });
+  const tagDetail = page.getByRole('dialog', { name: '운영체제 상세' });
+  await expect(tagDetail.getByText(`#운영체제`)).toBeVisible();
+  await expect(tagDetail.getByText(approvedTitle)).toBeVisible();
+  await expect(tagDetail.getByRole('button', { name: '홈 그래프에 고정' })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(tagDetail).toHaveCount(0);
+  await expect(tagNode).toBeFocused();
 
   await page.reload();
   await expect(page.getByRole('button', { name: '마지막 적용 되돌리기' })).toBeVisible();

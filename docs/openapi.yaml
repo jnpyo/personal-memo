@@ -227,6 +227,12 @@ paths:
       responses:
         "200":
           description: Owner-scoped memo views ordered by most recently updated first.
+          headers:
+            Cache-Control:
+              description: Raw memo views are never reusable from an HTTP cache.
+              schema:
+                type: string
+                const: no-store
           content:
             application/json:
               schema:
@@ -285,6 +291,12 @@ paths:
       responses:
         "200":
           description: Current memo view.
+          headers:
+            Cache-Control:
+              description: Raw memo content is never reusable from an HTTP cache.
+              schema:
+                type: string
+                const: no-store
           content:
             application/json:
               schema:
@@ -330,6 +342,7 @@ paths:
           $ref: "#/components/responses/OwnerOrDomainConflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
+
     delete:
       tags: [Memos]
       operationId: trashMemo
@@ -358,6 +371,44 @@ paths:
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
+  /memos/{memoId}/pin:
+    parameters:
+      - $ref: "#/components/parameters/MemoId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    patch:
+      tags: [Memos]
+      operationId: updateMemoPin
+      summary: Pin or unpin an active memo for graph-home priority
+      description: >-
+        Updates memo metadata without creating a raw revision or changing any analysis proposal.
+        The authenticated owner row is locked before the ACTIVE-state check, and the
+        Idempotency-Key is bound to the memo ID and requested pinned value.
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PinMemoRequest"
+      responses:
+        "200":
+          description: Pin state and whether this request changed it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PinMemoView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
   /memos/{memoId}/restore:
     parameters:
       - $ref: "#/components/parameters/MemoId"
@@ -995,7 +1046,20 @@ paths:
             default: 100
       responses:
         "200":
-          description: Canonical memo/tag projection. System type remains node metadata.
+          description: >-
+            Canonical memo/tag projection. Memo candidates use pinned, overdue, unfinished,
+            next-due, current-revision recency, and UUID hard priorities; tag candidates use
+            current-projection connectivity and stable name ordering. When limit is greater than
+            one, max(1, floor(limit / 5)) of the node budget is initially reserved for tags. Unused
+            tag slots are backfilled only with a final-memo-set tag recheck; omitted memo or tag
+            candidates set truncated, and an unsafe backfill underfills instead. System type remains
+            node metadata.
+          headers:
+            Cache-Control:
+              description: Time-sensitive owner graph projections are never reusable from an HTTP cache.
+              schema:
+                type: string
+                const: no-store
           content:
             application/json:
               schema:
@@ -1381,12 +1445,31 @@ components:
           maxLength: 64
           examples: [Asia/Seoul]
           description: IANA time zone captured with clientUpdatedAt.
+    PinMemoRequest:
+      type: object
+      additionalProperties: false
+      required: [pinned]
+      properties:
+        pinned:
+          type: boolean
+    PinMemoView:
+      type: object
+      additionalProperties: false
+      required: [id, pinned, updated]
+      properties:
+        id:
+          type: string
+          format: uuid
+        pinned:
+          type: boolean
+        updated:
+          type: boolean
     MemoStatus:
       enum: [ACTIVE, TRASHED]
     MemoView:
       type: object
       additionalProperties: false
-      required: [id, currentRevision, content, status, analysisState, createdAt]
+      required: [id, currentRevision, content, status, analysisState, createdAt, pinned]
       properties:
         id:
           type: string
@@ -1403,6 +1486,8 @@ components:
         createdAt:
           type: string
           format: date-time
+        pinned:
+          type: boolean
 
     StartAnalysisRequest:
       type: object
@@ -1840,7 +1925,7 @@ components:
     GraphNode:
       type: object
       additionalProperties: false
-      required: [id, kind, label]
+      required: [id, kind, label, overdue, pinned]
       properties:
         id:
           type: string
@@ -1858,6 +1943,10 @@ components:
         overdue:
           type: boolean
           readOnly: true
+        pinned:
+          type: boolean
+          readOnly: true
+          description: Always false for TAG nodes; reflects canonical memo metadata for MEMO nodes.
     GraphEdge:
       type: object
       additionalProperties: false

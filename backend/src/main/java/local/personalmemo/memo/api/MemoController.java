@@ -5,6 +5,7 @@ import java.net.URI;
 import java.util.List;
 import java.util.UUID;
 import local.personalmemo.memo.application.MemoService;
+import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,15 +35,17 @@ public class MemoController {
   }
 
   @GetMapping("/{id}")
-  MemoDtos.View get(@PathVariable UUID id) {
-    return service.get(id);
+  ResponseEntity<MemoDtos.View> get(@PathVariable UUID id) {
+    return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(service.get(id));
   }
 
   @GetMapping
-  List<MemoDtos.View> list(
+  ResponseEntity<List<MemoDtos.View>> list(
       @RequestParam(defaultValue = "ACTIVE") String status,
       @RequestParam(defaultValue = "50") int limit) {
-    return service.list(status, limit);
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(service.list(status, limit));
   }
 
   @PatchMapping("/{id}")
@@ -51,6 +54,14 @@ public class MemoController {
       @RequestHeader("Idempotency-Key") String key,
       @Valid @RequestBody MemoDtos.Update body) {
     return service.update(id, key, body);
+  }
+
+  @PatchMapping("/{id}/pin")
+  MemoDtos.PinView pin(
+      @PathVariable UUID id,
+      @RequestHeader("Idempotency-Key") String key,
+      @Valid @RequestBody MemoDtos.Pin body) {
+    return service.pin(id, key, body);
   }
 
   @DeleteMapping("/{id}")

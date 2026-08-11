@@ -13,6 +13,7 @@ const memo: MemoView = {
   id: 'memo-1',
   currentRevision: 2,
   content: '수정한 원문',
+  pinned: false,
   status: 'ACTIVE',
   analysisState: 'NOT_STARTED',
   createdAt: '2026-08-05T00:00:00.000Z',
@@ -132,6 +133,69 @@ function validReviewOutcomeSummary() {
 }
 
 describe('memo API client', () => {
+  it('loads graph and current memo detail through uncached owner-scoped reads', async () => {
+    const { client, applicationFetch } = testClient(memo);
+    client.setSessionOwner('user-a');
+
+    await client.graph(999);
+    await client.memo('memo-1');
+
+    const expectedRead = {
+      cache: 'no-store',
+      credentials: 'same-origin',
+      signal: expect.any(AbortSignal),
+      headers: {
+        'Content-Type': 'application/json',
+        [EXPECTED_OWNER_ID_HEADER]: 'user-a',
+      },
+    };
+    expect(applicationFetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/graph/home?limit=100',
+      expectedRead,
+    );
+    expect(applicationFetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/memos/memo-1',
+      expectedRead,
+    );
+  });
+
+  it('reuses the exact pin body and caller-owned key on retry', async () => {
+    const { client, applicationFetch } = testClient({
+      id: 'memo-1',
+      pinned: true,
+      updated: true,
+    });
+    client.setSessionOwner('user-a');
+
+    await client.setMemoPinned('memo-1', true, 'stable-pin-key');
+    await client.setMemoPinned('memo-1', true, 'stable-pin-key');
+
+    const expectedRequest = {
+      method: 'PATCH',
+      credentials: 'same-origin',
+      signal: expect.any(AbortSignal),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-TOKEN': 'csrf-test-token',
+        [EXPECTED_OWNER_ID_HEADER]: 'user-a',
+        'Idempotency-Key': 'stable-pin-key',
+      },
+      body: JSON.stringify({ pinned: true }),
+    };
+    expect(applicationFetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/memos/memo-1/pin',
+      expectedRequest,
+    );
+    expect(applicationFetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/memos/memo-1/pin',
+      expectedRequest,
+    );
+  });
+
   it('reuses the exact update body snapshot and caller-owned key on retry', async () => {
     const { client, applicationFetch } = testClient();
 

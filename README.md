@@ -26,6 +26,11 @@
 - **승인 단위를 되돌립니다.** application provenance를 따라 파생 데이터만 제거하며 원본 메모와 revision 이력은 남깁니다.
 - **기한 초과는 사실이 아니라 시점에 따른 상태입니다.** `OVERDUE`를 저장하지 않고 `TODO`와 현재 시각을 기준으로 조회할 때 계산합니다. 날짜만 지정한 기한은 UTC 자정으로 왜곡하지 않고 `due_local_date`로 보존합니다.
 - **그래프는 canonical 데이터의 투영입니다.** 메모 유형을 거대한 공통 노드로 만들지 않고 노드의 속성·필터·아이콘으로 표현합니다.
+- **그래프 노드는 실제 탐색 진입점입니다.** 고정·기한 초과·미완료·가까운 기한·현재 원문
+  revision 순으로 제한된 홈을 만들되, node 예산이 찰 때도 memo가 tag를 전부 밀어내지 않도록
+  관계용 tag 예산을 예약합니다. 노드를 누르면 보이는 직접 이웃을 강조한 뒤 mobile
+  drawer에서 현재 원문 또는 현재 홈 기준 tag 연결을 확인합니다. active memo의 pin/unpin은
+  멱등 mutation이며 원문 revision이나 승인된 파생 데이터를 바꾸지 않습니다.
 - **소유권 경계는 서버와 데이터베이스에 있습니다.** 각 로그인 수단은 internal user UUID에 매핑되고, 명시적으로 연결한 local·Google 수단은 같은 UUID를 사용합니다. 서버가 Spring Security principal에서 `owner_id`를 결정하며, V5의 owner-aware composite foreign key는 서로 다른 사용자의 하위 record를 데이터베이스 수준에서도 연결할 수 없게 합니다.
 - **브라우저에 인증 token을 보관하지 않습니다.** opaque session은 PostgreSQL에 저장하고 항상 HttpOnly인 cookie(운영에서는 Secure)와 CSRF 검증을 사용합니다. Google email 일치만으로 계정을 합치지 않으며, 기존 로그인 뒤 명시적으로 연결해야 합니다.
 - **라우팅은 신호 기반으로 결정합니다.** 모델의 confidence 하나에 의존하지 않고 날짜·참조·행동·복합 의도 신호를 enum으로 검증합니다. 명확한 메모는 cloud를 호출하지 않으며, 모호한 메모도 현재는 외부 통신 없는 Fake adapter만 거칩니다.
@@ -48,7 +53,7 @@
 - 제안 승인·보류·거절과 마지막 application 되돌리기
 - 새로고침 뒤 마지막 application과 검토 중·보류한 제안 복구
 - `TODO` / `DONE` / `CANCELLED` 전환, 날짜 전용 기한과 기한 초과 표시
-- `@xyflow/react` 기반 bounded 메모–태그 그래프
+- `@xyflow/react` 기반 bounded 메모–태그 그래프, keyboard/touch node detail drawer와 pin control
 - 요청 재시도 동안 동일한 client UUID와 idempotency key 유지
 - 192px/512px 설치 아이콘, service worker, 오프라인 app shell
 
@@ -70,7 +75,8 @@
 - LOCAL·cloud SUCCESS·fallback 모두에 같은 `providerMetadata` allowlist canonicalizer를 적용해 임의 provider detail 제거
 - 직렬화된 proposal 64 KiB, `providerMetadata` 8 KiB 상한으로 분석 결과 저장 크기 제한
 - authoritative routing reason을 전달하는 provider-independent cloud request, typed success/failure 결과와 no-tool `NO_NETWORK` Fake adapter
-- owner-scoped memo/analysis/task/graph API와 승인 transaction 안의 tag application
+- owner-scoped memo/analysis/task/graph API, no-store raw/detail reads, idempotent memo pin, 승인
+  transaction 안의 tag application
 - 메모 lifecycle API와 owner-scoped 보류 제안/마지막 application 복구 API
 - revision 경쟁 검증, transactional apply/undo, tag 정규화와 provenance
 - HTTP DTO·domain snapshot과 JDBC persistence mapping의 분리
@@ -80,7 +86,8 @@
 ### Verification
 
 - local 가입·로그인, CSRF, session fixation 방지, owner 격리, 명시적 Google 연결/해제를 검증하는 통합 테스트. Google 경로는 mocked OIDC claim으로 검증하며 실제 provider credential이나 Google network를 사용하지 않음
-- 날짜 처리, DST·윤일·잘못된 시각, 모호성 gate, 태그 정규화, 제안 편집, 그래프 변환, 재시도 identity 단위 테스트
+- 날짜 처리, DST·윤일·잘못된 시각, 모호성 gate, 태그 정규화, 제안 편집, 그래프 priority·이웃
+  변환, 재시도 identity 단위 테스트
 - 12개 regression + 12개 visible synthetic challenge 한국어 memo fixture, fixture JSON Schema, content-free
   평가 report와 prompt-injection/no-tool 경계 테스트
 - Testcontainers PostgreSQL + MockMvc 통합 테스트
@@ -89,7 +96,8 @@
 - V15 fresh/V14-upgrade migration, durable prepare·binding mismatch·bounded timeout·caller-driven 및 운영 scheduler recovery·fence·stale finalize·owner 격리 통합 검증
 - V16의 V15 `none/0/NULL/NULL` 보존, exact lookup owner 격리·결정성·unique resolution, strict context codec와 PREPARED/RUNNING/FINALIZED raw lifecycle 통합 검증
 - V17의 과거 dispatch `attempt_history_version=none`/0-row 보존, fence별 최대-attempt ledger, executor 거절·provider result·timeout/interrupt의 시작 관측·process-loss·늦은 fence 분리와 evidence nullability 통합 검증
-- Playwright의 모바일 viewport에서 보류·새로고침·승인·그래프·되돌리기와 설치 가능한 오프라인 app shell 검증
+- Playwright의 모바일 viewport에서 보류·새로고침·승인·그래프 node 상세·pin·focus 복원·되돌리기와
+  설치 가능한 오프라인 app shell 검증
 - 로컬 초안 owner 격리·저장 실패, 교차 탭 인증 전이, 미저장 편집 guard와 prompt형 service-worker 업데이트 단위 테스트
 - GitHub Actions에서 OpenAPI/JSON Schema, backend, frontend, 브라우저 E2E 검사를 실행
 
@@ -129,7 +137,7 @@ docker compose --env-file .env.dev -p $devProject -f compose.yaml -f compose.dev
 
 frontend container는 unprivileged Nginx로 빌드된 PWA를 제공하고 `/api`, `/oauth2`, `/login/oauth2`를 `http://backend:8080`으로 proxy합니다. 브라우저에는 같은 origin의 상대 URL만 노출됩니다.
 
-처음 열면 자체 계정을 만든 뒤 로그인합니다. 비밀번호는 12자 이상이며 bcrypt 안전 범위인 UTF-8 72바이트 이하여야 합니다. 그 다음 확인할 시나리오는 `11.25 OS과제 제출`입니다. 원문 저장 후 제안의 제목과 태그를 수정하거나 제외할 수 있고, 승인하면 할 일과 그래프가 갱신됩니다. 이후 **마지막 적용 되돌리기**를 누르면 파생 데이터만 제거됩니다.
+처음 열면 자체 계정을 만든 뒤 로그인합니다. 비밀번호는 12자 이상이며 bcrypt 안전 범위인 UTF-8 72바이트 이하여야 합니다. 그 다음 확인할 시나리오는 `11.25 OS과제 제출`입니다. 원문 저장 후 제안의 제목과 태그를 수정하거나 제외할 수 있고, 승인하면 할 일과 그래프가 갱신됩니다. 그래프 memo/tag 노드를 누르면 현재 홈의 이웃과 원문 상세를 확인하고 memo를 고정할 수 있습니다. 이후 **마지막 적용 되돌리기**를 누르면 파생 데이터만 제거됩니다.
 
 작성 중 원문은 서버 저장 전까지 internal owner UUID로 분리된 브라우저 `localStorage` 초안입니다. 저장소가 막히거나 가득 차면 화면에 데이터 손실 경고가 표시되고 이탈·업데이트 guard가 켜집니다. 이 초안은 암호화된 보관소가 아니며 로그아웃만으로 삭제되지 않으므로, 공유 기기에서는 브라우저 프로필 자체를 분리하거나 원문을 서버에 저장한 뒤 입력을 비워야 합니다. canonical memo와 완전한 오프라인 동기화 대기열로 취급해서는 안 됩니다.
 

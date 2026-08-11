@@ -11,7 +11,8 @@ public record MemoSnapshot(
     String sourceTimeZone,
     String status,
     Instant createdAt,
-    String analysisState) {
+    String analysisState,
+    boolean pinned) {
   public boolean isActive() {
     return "ACTIVE".equals(status);
   }

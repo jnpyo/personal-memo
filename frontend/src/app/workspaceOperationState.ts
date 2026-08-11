@@ -7,3 +7,7 @@ export function hasPendingServerOperation(input: {
 }): boolean {
   return input.workspaceBusy || input.pendingTaskId !== null || input.authOperation !== null;
 }
+
+export function isLatestWorkspaceRequest(request: number, latestStarted: number): boolean {
+  return request === latestStarted;
+}

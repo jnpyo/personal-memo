@@ -336,7 +336,20 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         projection={workspace.graph}
         loading={workspace.workspaceLoading}
         error={workspace.workspaceError}
+        selectedNode={workspace.selectedGraphNode}
+        selectionProjectionVersion={workspace.selectedGraphProjectionVersion}
+        memoDetail={workspace.selectedGraphMemo}
+        detailLoading={workspace.graphDetailLoading}
+        detailError={workspace.graphDetailError}
+        pinPending={workspace.pinPending}
+        pinError={workspace.graphPinError}
+        interactionDisabled={interactionLocked}
         onRetry={workspace.refreshWorkspace}
+        onSelectNode={workspace.selectGraphNode}
+        onCloseDetail={workspace.closeGraphNode}
+        onRetryDetail={workspace.retryGraphNodeDetail}
+        onSetPinned={workspace.setMemoPinned}
+        onRetryPin={workspace.retryGraphPin}
       />
 
       <TaskList

@@ -8,6 +8,7 @@ import {
 } from '../shared/api/retryIdentity';
 import type {
   AnalysisReviewOutcomeSummary,
+  GraphNode,
   GraphProjection,
   MemoView,
   Task,
@@ -19,6 +20,7 @@ import {
   type ConnectionState,
 } from '../features/capture/captureAvailability';
 import { rawMemoDraftStore } from '../features/capture/rawMemoDraftStore';
+import { graphNodeEntityId } from '../features/graph/graphModel';
 import { buildUpdateMemoRequest } from '../features/memos/memoModel';
 import { buildApplyRequest, createReviewDraft, type ReviewDraft } from '../features/review/reviewModel';
 import {
@@ -26,6 +28,7 @@ import {
   deriveRecoveryState,
   type CapturePolicy,
 } from '../features/review/recoveryModel';
+import { isLatestWorkspaceRequest } from './workspaceOperationState';
 
 const EMPTY_GRAPH: GraphProjection = {
   nodes: [],
@@ -54,6 +57,13 @@ export function useMemoWorkspace(ownerId: string) {
   const [applicationId, setApplicationId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [graph, setGraph] = useState<GraphProjection>(EMPTY_GRAPH);
+  const [selectedGraphNode, setSelectedGraphNode] = useState<GraphNode | null>(null);
+  const [selectedGraphProjectionVersion, setSelectedGraphProjectionVersion] =
+    useState<string | null>(null);
+  const [selectedGraphMemo, setSelectedGraphMemo] = useState<MemoView | null>(null);
+  const [graphDetailLoading, setGraphDetailLoading] = useState(false);
+  const [graphDetailError, setGraphDetailError] = useState<string | null>(null);
+  const [graphPinError, setGraphPinError] = useState<string | null>(null);
   const [activeMemos, setActiveMemos] = useState<MemoView[]>([]);
   const [trashedMemos, setTrashedMemos] = useState<MemoView[]>([]);
   const [workspaceLoading, setWorkspaceLoading] = useState(true);
@@ -73,7 +83,11 @@ export function useMemoWorkspace(ownerId: string) {
 
   const captureAttempt = useRef<CaptureAttempt | null>(null);
   const retryIdentities = useRef(new RetryIdentityStore());
+  const workspaceRequest = useRef(0);
+  const memoListRequest = useRef(0);
   const reviewOutcomeRequest = useRef(0);
+  const graphDetailRequest = useRef(0);
+  const graphDetailAbort = useRef<AbortController | null>(null);
   const timeZone = useRef(browserTimeZone());
   const capturePolicy = deriveCapturePolicy(recoveryLoading, recoveryError);
 
@@ -88,20 +102,28 @@ export function useMemoWorkspace(ownerId: string) {
   }, []);
 
   const refreshWorkspace = useCallback(async () => {
+    const request = ++workspaceRequest.current;
     setWorkspaceLoading(true);
     setWorkspaceError(null);
     try {
       const [nextTasks, nextGraph] = await Promise.all([api.tasks(), api.graph(100)]);
-      setTasks(nextTasks);
-      setGraph(nextGraph);
+      if (isLatestWorkspaceRequest(request, workspaceRequest.current)) {
+        setTasks(nextTasks);
+        setGraph(nextGraph);
+      }
     } catch (error) {
-      setWorkspaceError(errorMessage(error));
+      if (isLatestWorkspaceRequest(request, workspaceRequest.current)) {
+        setWorkspaceError(errorMessage(error));
+      }
     } finally {
-      setWorkspaceLoading(false);
+      if (isLatestWorkspaceRequest(request, workspaceRequest.current)) {
+        setWorkspaceLoading(false);
+      }
     }
   }, []);
 
   const refreshMemos = useCallback(async () => {
+    const request = ++memoListRequest.current;
     setMemosLoading(true);
     setMemosError(null);
     try {
@@ -109,14 +131,80 @@ export function useMemoWorkspace(ownerId: string) {
         api.memos('ACTIVE', 50),
         api.memos('TRASHED', 50),
       ]);
-      setActiveMemos(active);
-      setTrashedMemos(trashed);
+      if (isLatestWorkspaceRequest(request, memoListRequest.current)) {
+        setActiveMemos(active);
+        setTrashedMemos(trashed);
+      }
     } catch (error) {
-      setMemosError(errorMessage(error));
+      if (isLatestWorkspaceRequest(request, memoListRequest.current)) {
+        setMemosError(errorMessage(error));
+      }
     } finally {
-      setMemosLoading(false);
+      if (isLatestWorkspaceRequest(request, memoListRequest.current)) {
+        setMemosLoading(false);
+      }
     }
   }, []);
+
+  const loadGraphMemoDetail = useCallback(async (node: GraphNode) => {
+    const request = ++graphDetailRequest.current;
+    graphDetailAbort.current?.abort();
+    const controller = new AbortController();
+    graphDetailAbort.current = controller;
+    setSelectedGraphMemo(null);
+    setGraphDetailLoading(true);
+    setGraphDetailError(null);
+
+    try {
+      const memo = await api.memo(graphNodeEntityId(node), controller.signal);
+      if (graphDetailRequest.current === request && !controller.signal.aborted) {
+        setSelectedGraphMemo(memo);
+      }
+    } catch (error) {
+      if (graphDetailRequest.current === request && !controller.signal.aborted) {
+        setGraphDetailError(errorMessage(error));
+      }
+    } finally {
+      if (graphDetailRequest.current === request && !controller.signal.aborted) {
+        setGraphDetailLoading(false);
+      }
+    }
+  }, []);
+
+  const selectGraphNode = useCallback((node: GraphNode) => {
+    setSelectedGraphNode(node);
+    setSelectedGraphProjectionVersion(graph.projectionVersion);
+    setGraphPinError(null);
+    if (node.kind === 'MEMO') {
+      void loadGraphMemoDetail(node);
+      return;
+    }
+
+    graphDetailRequest.current += 1;
+    graphDetailAbort.current?.abort();
+    graphDetailAbort.current = null;
+    setSelectedGraphMemo(null);
+    setGraphDetailLoading(false);
+    setGraphDetailError(null);
+  }, [graph.projectionVersion, loadGraphMemoDetail]);
+
+  const closeGraphNode = useCallback(() => {
+    graphDetailRequest.current += 1;
+    graphDetailAbort.current?.abort();
+    graphDetailAbort.current = null;
+    setSelectedGraphNode(null);
+    setSelectedGraphProjectionVersion(null);
+    setSelectedGraphMemo(null);
+    setGraphDetailLoading(false);
+    setGraphDetailError(null);
+    setGraphPinError(null);
+  }, []);
+
+  const retryGraphNodeDetail = useCallback(() => {
+    if (selectedGraphNode?.kind === 'MEMO') {
+      void loadGraphMemoDetail(selectedGraphNode);
+    }
+  }, [loadGraphMemoDetail, selectedGraphNode]);
 
   const refreshReviewOutcomes = useCallback(async () => {
     const request = ++reviewOutcomeRequest.current;
@@ -173,6 +261,21 @@ export function useMemoWorkspace(ownerId: string) {
     refreshReviewOutcomes,
     refreshWorkspace,
   ]);
+
+  useEffect(() => {
+    if (
+      !workspaceLoading &&
+      selectedGraphNode &&
+      !graph.nodes.some((node) => node.id === selectedGraphNode.id)
+    ) {
+      closeGraphNode();
+    }
+  }, [closeGraphNode, graph.nodes, selectedGraphNode, workspaceLoading]);
+
+  useEffect(() => () => {
+    graphDetailRequest.current += 1;
+    graphDetailAbort.current?.abort();
+  }, []);
 
   useEffect(() => {
     const handleOffline = () => setConnection('offline');
@@ -578,6 +681,60 @@ export function useMemoWorkspace(ownerId: string) {
     }
   }
 
+  async function runSetMemoPinned(memoId: string, pinned: boolean) {
+    const scope = `pin:${memoId}`;
+    const body = { pinned };
+    const idempotencyKey = retryIdentities.current.keyFor(scope, JSON.stringify(body));
+    setBusyAction(scope);
+    clearRetry(scope);
+    setGraphPinError(null);
+    setFeedback({
+      kind: 'info',
+      message: pinned ? '메모를 홈 그래프에 고정하고 있습니다.' : '메모 고정을 해제하고 있습니다.',
+    });
+
+    try {
+      const result = await api.setMemoPinned(memoId, pinned, idempotencyKey);
+      setSelectedGraphMemo((current) =>
+        current?.id === result.id ? { ...current, pinned: result.pinned } : current,
+      );
+      setSelectedGraphNode((current) =>
+        current?.kind === 'MEMO' && graphNodeEntityId(current) === result.id
+          ? { ...current, pinned: result.pinned }
+          : current,
+      );
+      clearRetry(scope);
+      setFeedback({
+        kind: 'success',
+        message: result.pinned
+          ? '메모를 홈 그래프에 고정했습니다.'
+          : '메모의 홈 그래프 고정을 해제했습니다.',
+      });
+      await Promise.all([refreshWorkspace(), refreshMemos()]);
+      retryIdentities.current.clear(scope);
+    } catch (error) {
+      setGraphPinError(errorMessage(error));
+      if (
+        error instanceof ApiError &&
+        (error.status === 404 || error.code === 'MEMO_NOT_ACTIVE')
+      ) {
+        clearRetry(scope);
+        retryIdentities.current.clear(scope);
+        setFeedback({ kind: 'error', message: errorMessage(error) });
+        await Promise.all([refreshWorkspace(), refreshMemos()]);
+      } else {
+        fail(
+          error,
+          scope,
+          '고정 변경 다시 시도',
+          () => void runSetMemoPinned(memoId, pinned),
+        );
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   function dismissFeedback() {
     setFeedback(null);
     setRetryAction(null);
@@ -593,6 +750,12 @@ export function useMemoWorkspace(ownerId: string) {
     applicationId,
     tasks,
     graph,
+    selectedGraphNode,
+    selectedGraphProjectionVersion,
+    selectedGraphMemo,
+    graphDetailLoading,
+    graphDetailError,
+    graphPinError,
     activeMemos,
     trashedMemos,
     workspaceLoading,
@@ -619,6 +782,7 @@ export function useMemoWorkspace(ownerId: string) {
       review !== null ||
       postponedReview !== null,
     pendingTaskId,
+    pinPending: busyAction?.startsWith('pin:') ?? false,
     feedback,
     retryAction,
     checkConnection,
@@ -626,6 +790,9 @@ export function useMemoWorkspace(ownerId: string) {
     refreshMemos,
     refreshRecovery,
     refreshReviewOutcomes,
+    selectGraphNode,
+    closeGraphNode,
+    retryGraphNodeDetail,
     changeContent,
     captureMemo,
     changeReview,
@@ -639,6 +806,10 @@ export function useMemoWorkspace(ownerId: string) {
     analyzeMemo: (memo: MemoView) => void analyzeMemo(memo),
     undoApplication: () => void undoApplication(),
     updateTaskStatus: (task: Task, status: TaskStatus) => void updateTaskStatus(task, status),
+    setMemoPinned: (memoId: string, pinned: boolean) => void runSetMemoPinned(memoId, pinned),
+    retryGraphPin: () => {
+      if (retryAction?.scope.startsWith('pin:')) retryAction.run();
+    },
     retry: () => retryAction?.run(),
     dismissFeedback,
   };

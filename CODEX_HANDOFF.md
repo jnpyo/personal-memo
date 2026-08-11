@@ -213,6 +213,20 @@ Codex는 바로 실제 모델을 연결하지 말고 다음 세로 흐름부터 
 ## 12. 현재 구현 체크포인트
 
 - Phase 0과 Phase 1의 AI-free 수직 흐름은 구현되어 있다.
+- graph home은 별도 graph 저장소 없이 canonical memo/application/item/task/tag에서 최대 100개를
+  투영한다. memo는 pin → overdue → TODO → nearest due → 현재 raw revision 시각 → UUID,
+  tag는 선택된 memo 안의 연결도 → 이름 → UUID 순으로 안정적으로 제한한다. `limit > 1`이면
+  최소 1개이자 전체의 1/5인 슬롯을 tag 쪽에 먼저 예약하여 큰 memo corpus에서도 edge를
+  memo node가 전부 밀어내지 않는다. 실제 선택된 tag 수만큼만 슬롯을 유지하고 나머지는 memo로
+  안전하게 채운 뒤 final memo set에서 tag 순위와 truncation을 다시 계산한다. tag가 initial
+  memo 밖에만 있으면 관계를 빠뜨린 채 complete라 하지 않고 underfill+`truncated`를 유지한다.
+  node는 실제
+  keyboard/touch button이며 current-home direct neighbor를 강조하고 mobile detail drawer를 연다.
+  memo detail은 owner-scoped `GET /memos/{id}`를 no-store로 다시 읽고, tag detail은 현재 home
+  snapshot만 보여 준다. active memo pin/unpin은 owner row lock과 idempotency key/body hash를
+  사용하고 raw revision·proposal·item/tag/task를 바꾸지 않는다. 전체-corpus neighborhood와
+  search는 여전히 Milestone 5다. 이 기능은 기존 V1/V12 schema와 index를 사용하므로 V18을
+  추가하지 않았다.
 - Flyway `V1`–`V17`이 memo/revision, proposal/application, canonical item/tag/task, owner integrity, revision capture context, analyzer·prompt·local model·embedding model·routing policy provenance, local/Google identity, JDBC session schema, claimed user identity 무결성과 일회성 initial-account provisioning gate를 관리한다. `V11`은 owner별 proposal의 최신 application을 찾는 review-outcome 조회 인덱스, `V12`는 memo별 최신 `APPLIED` selection과 활성 item을 읽는 graph projection partial index만 추가한다. `V13`은 boolean-only legacy cloud consent를 폐기하고 owner row의 exact policy-version·granted-at pin을 강제하며, run마다 cloud transfer/gateway/provider/model/policy/outcome evidence를 추가한다. `V14`는 새 run의 내부 authorization/grant snapshot과 결정론적 provider-request token을 일관되게 저장하고 과거 row는 `legacy-v0`로 보존한다. `V15`는 호출 전에 `durable-v1` run과 1:1 `analysis_run_dispatches` preparation을 commit하고 immutable executor binding·descriptor, deadline/lease/fence, reserved proposal와 idempotency evidence를 보존한다. `V16`은 새 dispatch에 owner-scoped exact tag/alias K=8 context의 raw/hash/version/count를 함께 준비하고, 기존 V15 row는 `none/0/NULL/NULL`로 보존한다. `V17`은 새 dispatch를 `gateway-attempt-v1`로 versioning하고 claim fence별 owner-scoped `analysis_run_dispatch_attempts` row를 `max_attempts` 상한 안에서 보존한다. 기존 dispatch는 `attempt_history_version=none`이고 attempt row를 소급 생성하지 않는다. V14까지의 row에도 dispatch를 소급 생성하지 않는다. 새 raw analytics 복제본이나 일반 clickstream table은 만들지 않는다.
 - 각 local/Google 로그인 수단은 internal UUID에 매핑되고, 명시적으로 연결한 두 수단은 같은 UUID와 PostgreSQL-backed server session을 사용한다. Google email만으로 자동 연결하지 않고 기존 로그인 뒤 명시적 link intent를 요구하며, 마지막 login method는 해제할 수 없다. domain owner는 client 값이나 개발 상수가 아니라 Spring Security context에서 가져온다.
 - React 인증 shell은 capability·CSRF·현재 session을 먼저 확인하고, 로그인 전에는 owner domain API를 호출하지 않는다. service worker는 API와 OAuth/login 경로를 cache하지 않는다.

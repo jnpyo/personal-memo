@@ -23,11 +23,16 @@ public final class MemoDtos {
       OffsetDateTime clientUpdatedAt,
       @Size(max = 64) String timeZone) {}
 
+  public record Pin(@NotNull Boolean pinned) {}
+
+  public record PinView(UUID id, boolean pinned, boolean updated) {}
+
   public record View(
       UUID id,
       int currentRevision,
       String content,
       String status,
       String analysisState,
-      Instant createdAt) {}
+      Instant createdAt,
+      boolean pinned) {}
 }

@@ -5,6 +5,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import local.personalmemo.common.auth.CurrentIdentity;
+import org.springframework.http.CacheControl;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,22 +30,41 @@ public class GraphController {
 
   @GetMapping("/home")
   @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-  GraphDtos.Home home(@RequestParam(name = "limit", defaultValue = "100") int requestedLimit) {
+  ResponseEntity<GraphDtos.Home> home(
+      @RequestParam(name = "limit", defaultValue = "100") int requestedLimit) {
     int limit = Math.max(1, Math.min(requestedLimit, MAX_HOME_NODES));
     List<MemoCandidate> memoCandidates = findMemoCandidates(limit + 1);
-    boolean memoOverflow = memoCandidates.size() > limit;
-    List<MemoCandidate> selectedMemos =
-        List.copyOf(memoCandidates.subList(0, Math.min(memoCandidates.size(), limit)));
+    int preferredMemoBudget = limit == 1 ? 1 : limit - Math.max(1, limit / 5);
+    int initialMemoCount = Math.min(memoCandidates.size(), preferredMemoBudget);
+    List<MemoCandidate> initialMemos = List.copyOf(memoCandidates.subList(0, initialMemoCount));
 
-    int remainingTagBudget = limit - selectedMemos.size();
-    List<TagCandidate> tagCandidates =
-        memoOverflow
-            ? List.of()
-            : findTagCandidates(
-                selectedMemos.stream().map(MemoCandidate::id).toList(), remainingTagBudget + 1);
-    boolean truncated = memoOverflow || tagCandidates.size() > remainingTagBudget;
+    int tagBudget = limit - initialMemos.size();
+    List<TagCandidate> initialTagCandidates =
+        findTagCandidates(initialMemos.stream().map(MemoCandidate::id).toList(), tagBudget + 1);
+    int selectedTagCount = Math.min(initialTagCandidates.size(), tagBudget);
+
+    List<MemoCandidate> selectedMemos = initialMemos;
+    List<TagCandidate> tagCandidates = initialTagCandidates;
+    if (selectedTagCount > 0) {
+      int finalMemoCount = Math.min(memoCandidates.size(), limit - selectedTagCount);
+      selectedMemos = List.copyOf(memoCandidates.subList(0, finalMemoCount));
+      tagCandidates =
+          findTagCandidates(
+              selectedMemos.stream().map(MemoCandidate::id).toList(), selectedTagCount + 1);
+    } else if (tagBudget > 0 && memoCandidates.size() > initialMemos.size()) {
+      int probeMemoCount = Math.min(memoCandidates.size(), limit);
+      List<MemoCandidate> probeMemos = List.copyOf(memoCandidates.subList(0, probeMemoCount));
+      List<TagCandidate> probeTags =
+          findTagCandidates(probeMemos.stream().map(MemoCandidate::id).toList(), 1);
+      if (probeTags.isEmpty()) {
+        selectedMemos = probeMemos;
+        tagCandidates = List.of();
+      }
+    }
     List<TagCandidate> selectedTags =
-        List.copyOf(tagCandidates.subList(0, Math.min(tagCandidates.size(), remainingTagBudget)));
+        List.copyOf(tagCandidates.subList(0, Math.min(tagCandidates.size(), selectedTagCount)));
+    boolean truncated =
+        memoCandidates.size() > selectedMemos.size() || tagCandidates.size() > selectedTags.size();
 
     List<GraphDtos.Node> nodes = new ArrayList<>(limit);
     selectedMemos.stream().map(this::memoNode).forEach(nodes::add);
@@ -54,18 +75,27 @@ public class GraphController {
             selectedTags.stream().map(TagCandidate::id).toList());
     UUID projectionVersion = projectionVersion(nodes, edges, truncated);
 
-    return new GraphDtos.Home(List.copyOf(nodes), edges, truncated, projectionVersion);
+    GraphDtos.Home home =
+        new GraphDtos.Home(List.copyOf(nodes), edges, truncated, projectionVersion);
+    return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(home);
   }
 
   private List<MemoCandidate> findMemoCandidates(int candidateLimit) {
     return db.sql(
             """
             select m.id,
+                   m.pinned,
                    latest_application.selection_json ->> 'title' as title,
                    latest_application.selection_json ->> 'selectedType' as kind,
                    task_summary.task_status,
-                   coalesce(task_summary.overdue, false) as overdue
+                   coalesce(task_summary.overdue, false) as overdue,
+                   coalesce(task_summary.has_todo, false) as has_todo,
+                   task_summary.next_todo_due
               from memos m
+              join memo_revisions current_revision
+                on current_revision.memo_id = m.id
+               and current_revision.owner_id = m.owner_id
+               and current_revision.revision = m.current_revision
               join lateral (
                 select a.id, a.selection_json
                   from analysis_applications a
@@ -95,7 +125,18 @@ public class GraphController {
                            )
                          ),
                          false
-                       ) as overdue
+                       ) as overdue,
+                       coalesce(bool_or(t.status = 'TODO'), false) as has_todo,
+                       min(
+                           case
+                             when t.status = 'TODO' then
+                               coalesce(
+                                 t.due_at_utc,
+                                 t.due_local_date::timestamp at time zone t.source_time_zone
+                               )
+                             else null
+                           end
+                         ) as next_todo_due
                   from memo_items i
                   join task_details t
                     on t.memo_item_id = i.id
@@ -120,7 +161,12 @@ public class GraphController {
                     and latest_item.owner_id = m.owner_id
                     and latest_item.archived_at is null
                )
-             order by m.updated_at desc, m.id
+             order by m.pinned desc,
+                      coalesce(task_summary.overdue, false) desc,
+                      coalesce(task_summary.has_todo, false) desc,
+                      task_summary.next_todo_due asc nulls last,
+                      current_revision.created_at desc,
+                      m.id
              limit :limit
             """)
         .param("ownerId", identity.ownerId())
@@ -132,7 +178,8 @@ public class GraphController {
                     resultSet.getString("title"),
                     resultSet.getString("kind"),
                     resultSet.getString("task_status"),
-                    resultSet.getBoolean("overdue")))
+                    resultSet.getBoolean("overdue"),
+                    resultSet.getBoolean("pinned")))
         .list();
   }
 
@@ -142,7 +189,9 @@ public class GraphController {
     }
     return db.sql(
             """
-            select t.id, t.canonical_name
+            select t.id,
+                   t.canonical_name,
+                   count(distinct i.memo_id) as connected_memo_count
               from tags t
               join item_tags it
                 on it.tag_id = t.id
@@ -159,7 +208,10 @@ public class GraphController {
                and i.archived_at is null
                and i.memo_id in (:memoIds)
              group by t.id, t.canonical_name
-             order by lower(t.canonical_name), t.canonical_name, t.id
+             order by count(distinct i.memo_id) desc,
+                      lower(t.canonical_name),
+                      t.canonical_name,
+                      t.id
              limit :limit
             """)
         .param("ownerId", identity.ownerId())
@@ -213,11 +265,13 @@ public class GraphController {
         memo.title(),
         memo.kind(),
         memo.taskStatus() == null ? "NONE" : memo.taskStatus(),
-        memo.overdue());
+        memo.overdue(),
+        memo.pinned());
   }
 
   private GraphDtos.Node tagNode(TagCandidate tag) {
-    return new GraphDtos.Node("tag:" + tag.id(), "TAG", tag.canonicalName(), null, null, false);
+    return new GraphDtos.Node(
+        "tag:" + tag.id(), "TAG", tag.canonicalName(), null, null, false, false);
   }
 
   private UUID projectionVersion(
@@ -229,7 +283,7 @@ public class GraphController {
   }
 
   private record MemoCandidate(
-      UUID id, String title, String kind, String taskStatus, boolean overdue) {}
+      UUID id, String title, String kind, String taskStatus, boolean overdue, boolean pinned) {}
 
   private record TagCandidate(UUID id, String canonicalName) {}
 }

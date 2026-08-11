@@ -2,6 +2,7 @@ export type MemoView = {
   id: string;
   currentRevision: number;
   content: string;
+  pinned: boolean;
   status: MemoStatus;
   analysisState: string;
   createdAt: string;
@@ -271,6 +272,7 @@ export type GraphNode = {
   id: string;
   kind: 'MEMO' | 'TAG';
   label: string;
+  pinned: boolean;
   memoType?: ItemKind | null;
   taskState?: TaskStatus | 'NONE' | null;
   overdue?: boolean;
@@ -288,4 +290,10 @@ export type GraphProjection = {
   edges: GraphEdge[];
   truncated: boolean;
   projectionVersion: string;
+};
+
+export type MemoPinResult = {
+  id: string;
+  pinned: boolean;
+  updated: boolean;
 };
