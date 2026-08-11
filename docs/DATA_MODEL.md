@@ -617,10 +617,50 @@ memos + current memo_revisions + analysis_applications + memo_items + task_detai
 ```
 
 별도 graph JSON, 화면 좌표, Neo4j가 source of truth가 아니다. frontend React Flow layout은 표시 책임만 가진다.
-node 상세도 별도 저장하지 않는다. memo drawer는 현재 raw revision을 다시 읽고, memo/tag의 직접
-이웃 강조와 목록은 현재 bounded projection에서 계산한다. 전체-corpus neighborhood와 search
-index는 계속 deferred다. 기존 owner/status/latest-application/active-item index가 이 query
-경계를 지원하며, 계산된 overdue/due 우선순위만을 위해 근거 없는 V18 index를 추가하지 않는다.
+node 상세와 pagination cursor도 저장하지 않는다. memo drawer는 현재 raw revision을 다시 읽고,
+별도 full-corpus neighborhood query가 현재 owner의 `ACTIVE` memo/tag, 최신 유효 `APPLIED`
+selection, unarchived item과 confirmed `item_tags`에서 한 hop을 투영한다. MEMO→TAG는
+`normalized_name`/UUID keyset, TAG→MEMO는 pin/overdue/TODO/due/current revision/UUID 복합
+keyset을 사용한다. cursor version 2는 identity, 24시간 `snapshotAsOf`, 마지막 neighbor와 함께
+첫 page의 전체 visible center/neighborhood membership·표시 field·정렬 tuple을 결합한 opaque
+SHA-256 digest를 보존한다. 각 continuation은 같은 owner 범위에서 digest를 다시 계산한 뒤 마지막
+neighbor의 tuple을 hydrate하므로, canonical 상태가 바뀐 traversal은 `422`로 폐기되고 첫 page부터
+다시 읽는다. cursor는 저장 schema나 authorization이 아니다. lexical search index는 계속 deferred다.
+
+`GraphNeighborhoodQueryPlanBenchmarkRunner`는 기본 Surefire pattern에서 제외된 명시적 opt-in
+PostgreSQL 17.6 runner다. 10,000 memo, 10,000 tag, 19,999 canonical link를 seed하고 `ANALYZE`한
+뒤 양방향 page와 visible-neighborhood digest query 네 개를 각각
+`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`으로 실행한다. 2026-08-11의 한 격리 실행에서는
+MEMO→TAG page/digest가 각각 약 17.0/54.8 ms, TAG→MEMO page/digest가 약 105.3/180.9 ms였다.
+네 query 모두 shared read와 temp read/write가 0이었고 기존 V5/V12/PK index를 사용했다. 이는
+warm-cache 단일 실행 관측이며 endpoint SLA나 CI latency threshold가 아니다. continuation은 이
+digest 검증 외에도 center·last-neighbor hydration과 page query를 수행하므로 개별 plan 시간을
+end-to-end latency로 해석하지 않는다.
+
+저장소 root의 PowerShell에서 아래처럼 재현한다. 명시적 env가 없거나 Maven이 nonzero이면 기존
+report를 증거로 사용하지 않는다. runner는 시작 전에 stale report를 지우고 성공한 bounded JSON만
+원자적으로 `backend/target/graph-neighborhood-query-plan-report.json`에 발행한다.
+
+```powershell
+$planProject = "personal-memo-neighborhood-plan-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+try {
+  docker compose -p $planProject -f compose.test.yaml run --rm `
+    -e RUN_GRAPH_NEIGHBORHOOD_PLAN_BENCHMARK=true `
+    backend-integration `
+    mvn -B -Dtest=GraphNeighborhoodQueryPlanBenchmarkRunner test
+  if ($LASTEXITCODE -ne 0) { throw "Graph neighborhood benchmark failed." }
+
+  docker compose -p $planProject -f compose.test.yaml run --rm --no-deps `
+    backend-integration sh -c 'cat target/graph-neighborhood-query-plan-report.json'
+  if ($LASTEXITCODE -ne 0) { throw "Graph neighborhood report read failed." }
+} finally {
+  docker compose -p $planProject -f compose.test.yaml down --volumes --remove-orphans
+}
+```
+
+이 개인용 10k checkpoint에서는 새 index 효용 근거가 없어 V18을 추가하지 않았다. production
+분포에서 runner를 다시 측정해 근거가 생기기 전에는 계산된 overdue/due 우선순위만을 위해
+speculative index를 만들지 않는다.
 
 ## Current indexes
 

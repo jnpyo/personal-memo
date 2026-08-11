@@ -184,6 +184,89 @@ if ($personalCompose.Contains('${PERSONAL_MEMO_HTTPS_PORT')) {
     throw 'The private Compose overlay must not interpolate a different TLS host port.'
 }
 
+$frontendDockerfile = Read-SourceContractFile -Path (Join-Path $repositoryRoot 'frontend\Dockerfile')
+Assert-SourceContains `
+    -Source $frontendDockerfile `
+    -Needle 'NGINX_ENVSUBST_FILTER=^API_PROXY_TARGET$' `
+    -Contract 'Nginx template rendering substitutes only the backend proxy target'
+$nginxTemplate = Read-SourceContractFile -Path (Join-Path $repositoryRoot 'frontend\nginx\default.conf')
+$renderedNginx = $nginxTemplate.Replace('${API_PROXY_TARGET}', 'http://backend:8080')
+if ($renderedNginx.Contains('${API_PROXY_TARGET}')) {
+    throw 'The production Nginx source contract must inspect a fully rendered proxy target.'
+}
+$safeLogFormat = [regex]::Match(
+    $renderedNginx,
+    '(?m)^\s*log_format\s+personal_memo_safe\s+(?<value>[^;]+);\s*$'
+)
+if (-not $safeLogFormat.Success) {
+    throw 'Production Nginx must define the personal_memo_safe access-log format.'
+}
+$loggedVariables = @(
+    [regex]::Matches($safeLogFormat.Groups['value'].Value, '\$[A-Za-z0-9_]+') |
+        ForEach-Object { $_.Value }
+)
+$allowedLogVariables = @(
+    '$remote_addr',
+    '$time_local',
+    '$request_method',
+    '$uri',
+    '$status',
+    '$body_bytes_sent'
+)
+foreach ($requiredLogVariable in $allowedLogVariables) {
+    if ($loggedVariables -cnotcontains $requiredLogVariable) {
+        throw "Production Nginx safe access log is missing $requiredLogVariable."
+    }
+}
+$unexpectedLogVariables = @($loggedVariables | Where-Object { $allowedLogVariables -cnotcontains $_ })
+if ($unexpectedLogVariables.Count -ne 0) {
+    throw "Production Nginx safe access log has non-allow-listed variables: $($unexpectedLogVariables -join ', ')."
+}
+Assert-SourceContains `
+    -Source $renderedNginx `
+    -Needle 'access_log /var/log/nginx/access.log personal_memo_safe;' `
+    -Contract 'the production server selects the query-free access-log format'
+foreach ($requiredNoStoreFragment in @(
+    'map $uri $personal_memo_cache_control {',
+    '~^/(?:api|oauth2)(?:/|$) "no-store";',
+    '~^/login/oauth2(?:/|$) "no-store";',
+    'add_header Cache-Control $personal_memo_cache_control always;',
+    'proxy_hide_header Cache-Control;'
+)) {
+    Assert-SourceContains `
+        -Source $renderedNginx `
+        -Needle $requiredNoStoreFragment `
+        -Contract "Nginx API no-store fragment $requiredNoStoreFragment"
+}
+foreach ($staticLocation in @('/assets/', '/icons/', '/sw.js', '/registerSW.js', '/manifest.webmanifest')) {
+    if (-not [regex]::IsMatch(
+        $renderedNginx,
+        "(?ms)location\s+(?:\^~\s+|=\s+)?$([regex]::Escape($staticLocation))\s*\{.*?access_log\s+off;"
+    )) {
+        throw "Production Nginx must keep static access logging disabled for $staticLocation."
+    }
+}
+$accessLogValues = @(
+    [regex]::Matches(
+        $renderedNginx,
+        '(?m)^\s*access_log\s+(?<value>[^;]+);\s*$'
+    ) | ForEach-Object { $_.Groups['value'].Value.Trim() }
+)
+$disabledAccessLogCount = @($accessLogValues | Where-Object { $_ -ceq 'off' }).Count
+$safeAccessLogCount = @(
+    $accessLogValues |
+        Where-Object { $_ -ceq '/var/log/nginx/access.log personal_memo_safe' }
+).Count
+if ($accessLogValues.Count -ne 7 -or $safeAccessLogCount -ne 1 -or $disabledAccessLogCount -ne 6) {
+    throw 'Production Nginx access-log directives must be one safe server log and six disabled asset logs.'
+}
+if ([regex]::Matches(
+    $renderedNginx,
+    '(?m)^\s*access_log\s+[^;]*(?:\$request(?:\s|"|;)|\$request_uri|\$args|\$query_string|\$is_args)[^;]*;\s*$'
+).Count -ne 0) {
+    throw 'Production Nginx access-log directives must not reference a query-bearing request variable.'
+}
+
 if ($env:OS -eq 'Windows_NT') {
     $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
     $aclTestDirectory = Join-Path $tempRoot ('personal-memo-acl-contract-' + [Guid]::NewGuid().ToString('N'))

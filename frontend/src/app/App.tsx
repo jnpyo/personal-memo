@@ -338,9 +338,15 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         error={workspace.workspaceError}
         selectedNode={workspace.selectedGraphNode}
         selectionProjectionVersion={workspace.selectedGraphProjectionVersion}
+        activeMemoNode={workspace.activeGraphMemoNode}
         memoDetail={workspace.selectedGraphMemo}
         detailLoading={workspace.graphDetailLoading}
         detailError={workspace.graphDetailError}
+        neighborhood={workspace.graphNeighborhood}
+        neighborhoodLoading={workspace.graphNeighborhoodLoading}
+        neighborhoodLoadingMore={workspace.graphNeighborhoodLoadingMore}
+        neighborhoodError={workspace.graphNeighborhoodError}
+        neighborhoodRestartRequired={workspace.graphNeighborhoodRestartRequired}
         pinPending={workspace.pinPending}
         pinError={workspace.graphPinError}
         interactionDisabled={interactionLocked}
@@ -348,6 +354,10 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         onSelectNode={workspace.selectGraphNode}
         onCloseDetail={workspace.closeGraphNode}
         onRetryDetail={workspace.retryGraphNodeDetail}
+        onRetryNeighborhood={workspace.retryGraphNeighborhood}
+        onLoadMoreNeighborhood={workspace.loadMoreGraphNeighborhood}
+        onOpenNeighborhoodMemo={workspace.openGraphNeighborhoodMemo}
+        onBackToNeighborhood={workspace.backToGraphNeighborhood}
         onSetPinned={workspace.setMemoPinned}
         onRetryPin={workspace.retryGraphPin}
       />

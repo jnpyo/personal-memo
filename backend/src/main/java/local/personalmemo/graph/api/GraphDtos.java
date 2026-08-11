@@ -24,4 +24,12 @@ public final class GraphDtos {
       edges = List.copyOf(edges);
     }
   }
+
+  public record Neighborhood(
+      Node center, List<Node> neighbors, List<Edge> edges, boolean truncated, String nextCursor) {
+    public Neighborhood {
+      neighbors = List.copyOf(neighbors);
+      edges = List.copyOf(edges);
+    }
+  }
 }

@@ -2,7 +2,7 @@ openapi: 3.1.0
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 info:
   title: Personal Memo API
-  version: 0.4.0
+  version: 0.5.0
   description: >-
     Server-session 인증, Milestone 1의 AI-free vertical slice와 외부 모델 없는 결정론적 분석 계약입니다.
     분석 결과는 제안이며, canonical 태그와 할 일은 사용자 승인 endpoint를
@@ -1069,6 +1069,78 @@ paths:
         "409":
           $ref: "#/components/responses/OwnerOrDomainConflict"
 
+  /graph/nodes/{kind}/{id}/neighborhood:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+      - name: kind
+        in: path
+        required: true
+        description: Exact graph center kind.
+        schema:
+          type: string
+          enum: [MEMO, TAG]
+      - name: id
+        in: path
+        required: true
+        description: Center entity UUID without the graph-node prefix.
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Graph]
+      operationId: getGraphNeighborhood
+      summary: Page one owner-scoped canonical MEMO_TAG hop from the full corpus
+      description: >-
+        Verifies the requested ACTIVE center before inspecting the cursor. MEMO centers page ACTIVE
+        tags by normalized name and UUID; TAG centers page eligible ACTIVE memos by the graph-home
+        pin, overdue, TODO, next-due, current-revision, and UUID priority. The version-2 cursor
+        contains owner/center/last-neighbor identities, a bounded snapshot instant, and a lowercase
+        SHA-256 neighborhoodDigest used only as an opaque change token. It is not an authorization
+        credential, and no raw memo, label, task, due, proposal, or alias value is stored in it. A
+        visible center, membership, value, or order change invalidates continuation with 422. This
+        read does not change or expand the current home projection.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Strict per-page neighbor and edge bound. Values outside 1–20 return 422.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          description: >-
+            Canonical opaque URL-safe cursor returned by the preceding page. Cursors expire after 24
+            hours, allow at most one minute of clock skew, and are bound to owner, center, sort shape,
+            and a version-2 lowercase SHA-256 digest of the visible neighborhood state. A digest
+            mismatch returns INVALID_GRAPH_CURSOR; the digest does not grant access.
+          schema:
+            $ref: "#/components/schemas/GraphNeighborhoodCursor"
+      responses:
+        "200":
+          description: One independently bounded full-corpus neighborhood page.
+          headers:
+            Cache-Control:
+              description: Owner graph neighborhoods are never reusable from an HTTP cache.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphNeighborhood"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
 components:
   securitySchemes:
     sessionCookie:
@@ -1922,43 +1994,85 @@ components:
         updated:
           type: boolean
 
-    GraphNode:
+    GraphMemoNode:
       type: object
       additionalProperties: false
-      required: [id, kind, label, overdue, pinned]
+      required: [id, kind, label, memoType, taskState, overdue, pinned]
       properties:
         id:
           type: string
+          pattern: "^memo:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         kind:
-          enum: [MEMO, TAG]
+          type: string
+          const: MEMO
         label:
           type: string
+          minLength: 1
+          maxLength: 200
         memoType:
-          anyOf:
-            - $ref: "#/components/schemas/ItemKind"
-            - type: "null"
+          $ref: "#/components/schemas/ItemKind"
         taskState:
-          type: [string, "null"]
-          enum: [NONE, TODO, DONE, CANCELLED, null]
+          type: string
+          enum: [NONE, TODO, DONE, CANCELLED]
         overdue:
           type: boolean
           readOnly: true
         pinned:
           type: boolean
           readOnly: true
-          description: Always false for TAG nodes; reflects canonical memo metadata for MEMO nodes.
+          description: Reflects canonical memo metadata.
+    GraphTagNode:
+      type: object
+      additionalProperties: false
+      required: [id, kind, label, memoType, taskState, overdue, pinned]
+      properties:
+        id:
+          type: string
+          pattern: "^tag:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        kind:
+          type: string
+          const: TAG
+        label:
+          type: string
+          minLength: 1
+          maxLength: 100
+        memoType:
+          type: "null"
+          const: null
+        taskState:
+          type: "null"
+          const: null
+        overdue:
+          type: boolean
+          const: false
+          readOnly: true
+        pinned:
+          type: boolean
+          const: false
+          readOnly: true
+    GraphNode:
+      oneOf:
+        - $ref: "#/components/schemas/GraphMemoNode"
+        - $ref: "#/components/schemas/GraphTagNode"
     GraphEdge:
       type: object
       additionalProperties: false
+      description: >-
+        Canonical oriented MEMO_TAG edge. source is the memo node, target is the tag node, and id is
+        exactly memo-tag:{source UUID}:{target UUID}; neighborhood responses return one per neighbor.
       required: [id, source, target, kind]
       properties:
         id:
           type: string
+          pattern: "^memo-tag:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         source:
           type: string
+          pattern: "^memo:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         target:
           type: string
+          pattern: "^tag:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         kind:
+          type: string
           const: MEMO_TAG
     GraphProjection:
       type: object
@@ -1979,3 +2093,72 @@ components:
         projectionVersion:
           type: string
           format: uuid
+
+    GraphNeighborhood:
+      type: object
+      additionalProperties: false
+      required: [center, neighbors, edges, truncated, nextCursor]
+      allOf:
+        - oneOf:
+            - type: object
+              properties:
+                truncated:
+                  const: true
+                nextCursor:
+                  $ref: "#/components/schemas/GraphNeighborhoodCursor"
+            - type: object
+              properties:
+                truncated:
+                  const: false
+                nextCursor:
+                  type: "null"
+        - oneOf:
+            - type: object
+              properties:
+                center:
+                  $ref: "#/components/schemas/GraphMemoNode"
+                neighbors:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/GraphTagNode"
+            - type: object
+              properties:
+                center:
+                  $ref: "#/components/schemas/GraphTagNode"
+                neighbors:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/GraphMemoNode"
+      properties:
+        center:
+          $ref: "#/components/schemas/GraphNode"
+        neighbors:
+          type: array
+          maxItems: 20
+          uniqueItems: true
+          description: Opposite-kind canonical nodes in the endpoint's deterministic keyset order.
+          items:
+            $ref: "#/components/schemas/GraphNode"
+        edges:
+          type: array
+          maxItems: 20
+          uniqueItems: true
+          description: Exactly one oriented MEMO_TAG edge for each returned neighbor.
+          items:
+            $ref: "#/components/schemas/GraphEdge"
+        truncated:
+          type: boolean
+          description: True exactly when nextCursor is non-null.
+        nextCursor:
+          oneOf:
+            - $ref: "#/components/schemas/GraphNeighborhoodCursor"
+            - type: "null"
+    GraphNeighborhoodCursor:
+      type: string
+      minLength: 1
+      maxLength: 1024
+      pattern: "^[A-Za-z0-9_-]+$"
+      description: >-
+        Canonical unpadded URL-safe Base64 version-2 cursor containing owner/center/last-neighbor
+        identities, snapshot, sort shape, and an opaque lowercase SHA-256 neighborhood change token;
+        never an authorization credential and never a container for raw or display values.

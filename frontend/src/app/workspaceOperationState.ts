@@ -11,3 +11,15 @@ export function hasPendingServerOperation(input: {
 export function isLatestWorkspaceRequest(request: number, latestStarted: number): boolean {
   return request === latestStarted;
 }
+
+export function isCurrentScopedRequest(input: {
+  request: number;
+  latestStarted: number;
+  aborted: boolean;
+  expectedScope: string;
+  currentScope: string | null;
+}): boolean {
+  return input.request === input.latestStarted &&
+    !input.aborted &&
+    input.expectedScope === input.currentScope;
+}

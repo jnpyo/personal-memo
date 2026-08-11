@@ -29,8 +29,12 @@
 - **그래프 노드는 실제 탐색 진입점입니다.** 고정·기한 초과·미완료·가까운 기한·현재 원문
   revision 순으로 제한된 홈을 만들되, node 예산이 찰 때도 memo가 tag를 전부 밀어내지 않도록
   관계용 tag 예산을 예약합니다. 노드를 누르면 보이는 직접 이웃을 강조한 뒤 mobile
-  drawer에서 현재 원문 또는 현재 홈 기준 tag 연결을 확인합니다. active memo의 pin/unpin은
-  멱등 mutation이며 원문 revision이나 승인된 파생 데이터를 바꾸지 않습니다.
+  drawer에서 owner-scoped 전체 corpus의 직접 연결을 페이지당 20개씩 탐색합니다. tag에서 홈
+  밖의 오래된 memo를 열어 현재 원문으로 이동할 수 있고, 브라우저는 한 drawer에서 최대
+  5 page/100개 연결만 유지합니다. 페이지 사이 canonical 정렬·연결 상태가 바뀌면 snapshot
+  digest가 cursor를 무효화하고 화면은 첫 page 재시작을 요청하므로 이웃을 조용히 건너뛰지
+  않습니다. active memo의 pin/unpin은 멱등 mutation이며 원문 revision이나 승인된 파생 데이터를
+  바꾸지 않습니다.
 - **소유권 경계는 서버와 데이터베이스에 있습니다.** 각 로그인 수단은 internal user UUID에 매핑되고, 명시적으로 연결한 local·Google 수단은 같은 UUID를 사용합니다. 서버가 Spring Security principal에서 `owner_id`를 결정하며, V5의 owner-aware composite foreign key는 서로 다른 사용자의 하위 record를 데이터베이스 수준에서도 연결할 수 없게 합니다.
 - **브라우저에 인증 token을 보관하지 않습니다.** opaque session은 PostgreSQL에 저장하고 항상 HttpOnly인 cookie(운영에서는 Secure)와 CSRF 검증을 사용합니다. Google email 일치만으로 계정을 합치지 않으며, 기존 로그인 뒤 명시적으로 연결해야 합니다.
 - **라우팅은 신호 기반으로 결정합니다.** 모델의 confidence 하나에 의존하지 않고 날짜·참조·행동·복합 의도 신호를 enum으로 검증합니다. 명확한 메모는 cloud를 호출하지 않으며, 모호한 메모도 현재는 외부 통신 없는 Fake adapter만 거칩니다.
@@ -53,7 +57,8 @@
 - 제안 승인·보류·거절과 마지막 application 되돌리기
 - 새로고침 뒤 마지막 application과 검토 중·보류한 제안 복구
 - `TODO` / `DONE` / `CANCELLED` 전환, 날짜 전용 기한과 기한 초과 표시
-- `@xyflow/react` 기반 bounded 메모–태그 그래프, keyboard/touch node detail drawer와 pin control
+- `@xyflow/react` 기반 bounded 메모–태그 홈, full-corpus 1-hop pagination, keyboard/touch detail
+  drawer, off-home memo raw-detail navigation과 pin control
 - 요청 재시도 동안 동일한 client UUID와 idempotency key 유지
 - 192px/512px 설치 아이콘, service worker, 오프라인 app shell
 
@@ -96,7 +101,8 @@
 - V15 fresh/V14-upgrade migration, durable prepare·binding mismatch·bounded timeout·caller-driven 및 운영 scheduler recovery·fence·stale finalize·owner 격리 통합 검증
 - V16의 V15 `none/0/NULL/NULL` 보존, exact lookup owner 격리·결정성·unique resolution, strict context codec와 PREPARED/RUNNING/FINALIZED raw lifecycle 통합 검증
 - V17의 과거 dispatch `attempt_history_version=none`/0-row 보존, fence별 최대-attempt ledger, executor 거절·provider result·timeout/interrupt의 시작 관측·process-loss·늦은 fence 분리와 evidence nullability 통합 검증
-- Playwright의 모바일 viewport에서 보류·새로고침·승인·그래프 node 상세·pin·focus 복원·되돌리기와
+- Playwright의 모바일 viewport에서 보류·새로고침·승인·그래프 node 상세·full-corpus off-home
+  탐색·pin·focus 복원·되돌리기와
   설치 가능한 오프라인 app shell 검증
 - 로컬 초안 owner 격리·저장 실패, 교차 탭 인증 전이, 미저장 편집 guard와 prompt형 service-worker 업데이트 단위 테스트
 - GitHub Actions에서 OpenAPI/JSON Schema, backend, frontend, 브라우저 E2E 검사를 실행
@@ -137,7 +143,7 @@ docker compose --env-file .env.dev -p $devProject -f compose.yaml -f compose.dev
 
 frontend container는 unprivileged Nginx로 빌드된 PWA를 제공하고 `/api`, `/oauth2`, `/login/oauth2`를 `http://backend:8080`으로 proxy합니다. 브라우저에는 같은 origin의 상대 URL만 노출됩니다.
 
-처음 열면 자체 계정을 만든 뒤 로그인합니다. 비밀번호는 12자 이상이며 bcrypt 안전 범위인 UTF-8 72바이트 이하여야 합니다. 그 다음 확인할 시나리오는 `11.25 OS과제 제출`입니다. 원문 저장 후 제안의 제목과 태그를 수정하거나 제외할 수 있고, 승인하면 할 일과 그래프가 갱신됩니다. 그래프 memo/tag 노드를 누르면 현재 홈의 이웃과 원문 상세를 확인하고 memo를 고정할 수 있습니다. 이후 **마지막 적용 되돌리기**를 누르면 파생 데이터만 제거됩니다.
+처음 열면 자체 계정을 만든 뒤 로그인합니다. 비밀번호는 12자 이상이며 bcrypt 안전 범위인 UTF-8 72바이트 이하여야 합니다. 그 다음 확인할 시나리오는 `11.25 OS과제 제출`입니다. 원문 저장 후 제안의 제목과 태그를 수정하거나 제외할 수 있고, 승인하면 할 일과 그래프가 갱신됩니다. 그래프 memo/tag 노드를 누르면 전체 corpus의 직접 이웃을 bounded page로 확인하고, tag에서 홈 밖의 오래된 memo 원문까지 열거나 memo를 고정할 수 있습니다. 이후 **마지막 적용 되돌리기**를 누르면 파생 데이터만 제거됩니다.
 
 작성 중 원문은 서버 저장 전까지 internal owner UUID로 분리된 브라우저 `localStorage` 초안입니다. 저장소가 막히거나 가득 차면 화면에 데이터 손실 경고가 표시되고 이탈·업데이트 guard가 켜집니다. 이 초안은 암호화된 보관소가 아니며 로그아웃만으로 삭제되지 않으므로, 공유 기기에서는 브라우저 프로필 자체를 분리하거나 원문을 서버에 저장한 뒤 입력을 비워야 합니다. canonical memo와 완전한 오프라인 동기화 대기열로 취급해서는 안 됩니다.
 
@@ -307,7 +313,7 @@ docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.p
 
 - 실제 로컬 AI 모델 또는 클라우드 LLM
 - 실제 external provider 설정과 사용자 consent grant/revoke API
-- related-memo context, fuzzy/vector/embedding retrieval과 전체 검색 UI
+- related-memo analysis context, fuzzy/vector/embedding retrieval과 전체 lexical 검색 UI
 - 실제 model token·cost 숫자 수집·예산 집행·집계와 승인된 attempt 보존/삭제 정책
 - local email 검증·비밀번호 재설정 delivery, IP·edge rate limit/abuse protection, MFA/passkey, 완전한 계정 삭제 자동화
 - 완전한 오프라인 동기화와 IndexedDB outbox

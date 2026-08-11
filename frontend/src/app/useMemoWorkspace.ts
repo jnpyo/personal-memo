@@ -21,6 +21,15 @@ import {
 } from '../features/capture/captureAvailability';
 import { rawMemoDraftStore } from '../features/capture/rawMemoDraftStore';
 import { graphNodeEntityId } from '../features/graph/graphModel';
+import {
+  GRAPH_NEIGHBORHOOD_PAGE_LIMIT,
+  GraphNeighborhoodMergeError,
+  graphNeighborhoodRetryRequest,
+  mergeGraphNeighborhoodPage,
+  reconcileGraphNeighborhoodAfterMemoPin,
+  type GraphNeighborhoodCollection,
+  type GraphNeighborhoodRetryRequest,
+} from '../features/graph/graphNeighborhoodModel';
 import { buildUpdateMemoRequest } from '../features/memos/memoModel';
 import { buildApplyRequest, createReviewDraft, type ReviewDraft } from '../features/review/reviewModel';
 import {
@@ -28,7 +37,10 @@ import {
   deriveRecoveryState,
   type CapturePolicy,
 } from '../features/review/recoveryModel';
-import { isLatestWorkspaceRequest } from './workspaceOperationState';
+import {
+  isCurrentScopedRequest,
+  isLatestWorkspaceRequest,
+} from './workspaceOperationState';
 
 const EMPTY_GRAPH: GraphProjection = {
   nodes: [],
@@ -61,8 +73,15 @@ export function useMemoWorkspace(ownerId: string) {
   const [selectedGraphProjectionVersion, setSelectedGraphProjectionVersion] =
     useState<string | null>(null);
   const [selectedGraphMemo, setSelectedGraphMemo] = useState<MemoView | null>(null);
+  const [activeGraphMemoNode, setActiveGraphMemoNode] = useState<GraphNode | null>(null);
   const [graphDetailLoading, setGraphDetailLoading] = useState(false);
   const [graphDetailError, setGraphDetailError] = useState<string | null>(null);
+  const [graphNeighborhood, setGraphNeighborhood] =
+    useState<GraphNeighborhoodCollection | null>(null);
+  const [graphNeighborhoodLoading, setGraphNeighborhoodLoading] = useState(false);
+  const [graphNeighborhoodLoadingMore, setGraphNeighborhoodLoadingMore] = useState(false);
+  const [graphNeighborhoodError, setGraphNeighborhoodError] = useState<string | null>(null);
+  const [graphNeighborhoodRestartRequired, setGraphNeighborhoodRestartRequired] = useState(false);
   const [graphPinError, setGraphPinError] = useState<string | null>(null);
   const [activeMemos, setActiveMemos] = useState<MemoView[]>([]);
   const [trashedMemos, setTrashedMemos] = useState<MemoView[]>([]);
@@ -88,6 +107,13 @@ export function useMemoWorkspace(ownerId: string) {
   const reviewOutcomeRequest = useRef(0);
   const graphDetailRequest = useRef(0);
   const graphDetailAbort = useRef<AbortController | null>(null);
+  const graphNeighborhoodRequest = useRef(0);
+  const graphNeighborhoodAbort = useRef<AbortController | null>(null);
+  const graphNeighborhoodSnapshot = useRef<GraphNeighborhoodCollection | null>(null);
+  const graphSelectionIdentity = useRef<string | null>(null);
+  const graphSelectionNodeSnapshot = useRef<GraphNode | null>(null);
+  const activeGraphMemoIdentity = useRef<string | null>(null);
+  const graphNeighborhoodRetry = useRef<GraphNeighborhoodRetryRequest | null>(null);
   const timeZone = useRef(browserTimeZone());
   const capturePolicy = deriveCapturePolicy(recoveryLoading, recoveryError);
 
@@ -171,10 +197,108 @@ export function useMemoWorkspace(ownerId: string) {
     }
   }, []);
 
+  const loadGraphNeighborhood = useCallback(async (
+    node: GraphNode,
+    cursor: string | null,
+    append: boolean,
+  ) => {
+    const request = ++graphNeighborhoodRequest.current;
+    graphNeighborhoodAbort.current?.abort();
+    const controller = new AbortController();
+    graphNeighborhoodAbort.current = controller;
+    graphNeighborhoodRetry.current = graphNeighborhoodRetryRequest(
+      node,
+      cursor,
+      append,
+      false,
+    );
+    setGraphNeighborhoodError(null);
+    setGraphNeighborhoodRestartRequired(false);
+    if (append) {
+      setGraphNeighborhoodLoadingMore(true);
+    } else {
+      graphNeighborhoodSnapshot.current = null;
+      setGraphNeighborhood(null);
+      setGraphNeighborhoodLoading(true);
+      setGraphNeighborhoodLoadingMore(false);
+    }
+
+    try {
+      const page = await api.graphNeighborhood(
+        node.kind,
+        graphNodeEntityId(node),
+        cursor,
+        controller.signal,
+        GRAPH_NEIGHBORHOOD_PAGE_LIMIT,
+      );
+      if (!isCurrentScopedRequest({
+        request,
+        latestStarted: graphNeighborhoodRequest.current,
+        aborted: controller.signal.aborted,
+        expectedScope: node.id,
+        currentScope: graphSelectionIdentity.current,
+      })) return;
+
+      const merged = mergeGraphNeighborhoodPage(
+        append ? graphNeighborhoodSnapshot.current : null,
+        page,
+        cursor,
+      );
+      graphNeighborhoodSnapshot.current = merged;
+      graphNeighborhoodRetry.current = null;
+      setGraphNeighborhood(merged);
+    } catch (error) {
+      if (isCurrentScopedRequest({
+        request,
+        latestStarted: graphNeighborhoodRequest.current,
+        aborted: controller.signal.aborted,
+        expectedScope: node.id,
+        currentScope: graphSelectionIdentity.current,
+      })) {
+        const restartFromFirstPage = error instanceof GraphNeighborhoodMergeError || (
+          append &&
+          error instanceof ApiError &&
+          error.status === 422 &&
+          error.code === 'INVALID_GRAPH_CURSOR'
+        );
+        if (restartFromFirstPage) {
+          graphNeighborhoodRetry.current = graphNeighborhoodRetryRequest(
+            node,
+            cursor,
+            append,
+            true,
+          );
+          setGraphNeighborhoodRestartRequired(true);
+          setGraphNeighborhoodError(
+            '연결 순서가 변경되었거나 페이지 정보가 만료되었습니다. 현재 목록은 이전 페이지 기준일 수 있으므로 전체 연결을 처음부터 다시 불러와 주세요.',
+          );
+        } else {
+          setGraphNeighborhoodError(errorMessage(error));
+        }
+      }
+    } finally {
+      if (isCurrentScopedRequest({
+        request,
+        latestStarted: graphNeighborhoodRequest.current,
+        aborted: controller.signal.aborted,
+        expectedScope: node.id,
+        currentScope: graphSelectionIdentity.current,
+      })) {
+        setGraphNeighborhoodLoading(false);
+        setGraphNeighborhoodLoadingMore(false);
+      }
+    }
+  }, []);
+
   const selectGraphNode = useCallback((node: GraphNode) => {
+    graphSelectionIdentity.current = node.id;
+    graphSelectionNodeSnapshot.current = node;
     setSelectedGraphNode(node);
     setSelectedGraphProjectionVersion(graph.projectionVersion);
     setGraphPinError(null);
+    activeGraphMemoIdentity.current = node.kind === 'MEMO' ? graphNodeEntityId(node) : null;
+    setActiveGraphMemoNode(node.kind === 'MEMO' ? node : null);
+    void loadGraphNeighborhood(node, null, false);
     if (node.kind === 'MEMO') {
       void loadGraphMemoDetail(node);
       return;
@@ -186,25 +310,87 @@ export function useMemoWorkspace(ownerId: string) {
     setSelectedGraphMemo(null);
     setGraphDetailLoading(false);
     setGraphDetailError(null);
-  }, [graph.projectionVersion, loadGraphMemoDetail]);
+  }, [graph.projectionVersion, loadGraphMemoDetail, loadGraphNeighborhood]);
 
-  const closeGraphNode = useCallback(() => {
+  const openGraphNeighborhoodMemo = useCallback((node: GraphNode) => {
+    const neighborhood = graphNeighborhoodSnapshot.current;
+    if (
+      node.kind !== 'MEMO' ||
+      !neighborhood ||
+      graphSelectionIdentity.current !== neighborhood.center.id ||
+      !neighborhood.neighbors.some(
+        (neighbor) => neighbor.kind === 'MEMO' && neighbor.id === node.id,
+      )
+    ) return;
+
+    setGraphPinError(null);
+    activeGraphMemoIdentity.current = graphNodeEntityId(node);
+    setActiveGraphMemoNode(node);
+    void loadGraphMemoDetail(node);
+  }, [loadGraphMemoDetail]);
+
+  const backToGraphNeighborhood = useCallback(() => {
     graphDetailRequest.current += 1;
     graphDetailAbort.current?.abort();
     graphDetailAbort.current = null;
-    setSelectedGraphNode(null);
-    setSelectedGraphProjectionVersion(null);
+    activeGraphMemoIdentity.current = null;
+    setActiveGraphMemoNode(null);
     setSelectedGraphMemo(null);
     setGraphDetailLoading(false);
     setGraphDetailError(null);
     setGraphPinError(null);
   }, []);
 
+  const closeGraphNode = useCallback(() => {
+    graphSelectionIdentity.current = null;
+    graphSelectionNodeSnapshot.current = null;
+    activeGraphMemoIdentity.current = null;
+    graphDetailRequest.current += 1;
+    graphDetailAbort.current?.abort();
+    graphDetailAbort.current = null;
+    graphNeighborhoodRequest.current += 1;
+    graphNeighborhoodAbort.current?.abort();
+    graphNeighborhoodAbort.current = null;
+    graphNeighborhoodSnapshot.current = null;
+    graphNeighborhoodRetry.current = null;
+    setSelectedGraphNode(null);
+    setSelectedGraphProjectionVersion(null);
+    setActiveGraphMemoNode(null);
+    setSelectedGraphMemo(null);
+    setGraphDetailLoading(false);
+    setGraphDetailError(null);
+    setGraphNeighborhood(null);
+    setGraphNeighborhoodLoading(false);
+    setGraphNeighborhoodLoadingMore(false);
+    setGraphNeighborhoodError(null);
+    setGraphNeighborhoodRestartRequired(false);
+    setGraphPinError(null);
+  }, []);
+
   const retryGraphNodeDetail = useCallback(() => {
-    if (selectedGraphNode?.kind === 'MEMO') {
-      void loadGraphMemoDetail(selectedGraphNode);
+    if (activeGraphMemoNode) {
+      void loadGraphMemoDetail(activeGraphMemoNode);
     }
-  }, [loadGraphMemoDetail, selectedGraphNode]);
+  }, [activeGraphMemoNode, loadGraphMemoDetail]);
+
+  const retryGraphNeighborhood = useCallback(() => {
+    const retry = graphNeighborhoodRetry.current;
+    if (retry && graphSelectionIdentity.current === retry.node.id) {
+      void loadGraphNeighborhood(retry.node, retry.cursor, retry.append);
+    }
+  }, [loadGraphNeighborhood]);
+
+  const loadMoreGraphNeighborhood = useCallback(() => {
+    const current = graphNeighborhoodSnapshot.current;
+    const node = selectedGraphNode;
+    if (
+      !current?.nextCursor ||
+      !node ||
+      graphNeighborhoodLoadingMore ||
+      graphSelectionIdentity.current !== node.id
+    ) return;
+    void loadGraphNeighborhood(node, current.nextCursor, true);
+  }, [graphNeighborhoodLoadingMore, loadGraphNeighborhood, selectedGraphNode]);
 
   const refreshReviewOutcomes = useCallback(async () => {
     const request = ++reviewOutcomeRequest.current;
@@ -263,18 +449,20 @@ export function useMemoWorkspace(ownerId: string) {
   ]);
 
   useEffect(() => {
-    if (
-      !workspaceLoading &&
-      selectedGraphNode &&
-      !graph.nodes.some((node) => node.id === selectedGraphNode.id)
-    ) {
+    if (workspaceLoading || !selectedGraphNode) return;
+    const projectedNode = graph.nodes.find((node) => node.id === selectedGraphNode.id);
+    if (!projectedNode) {
       closeGraphNode();
+      return;
     }
+    graphSelectionNodeSnapshot.current = projectedNode;
   }, [closeGraphNode, graph.nodes, selectedGraphNode, workspaceLoading]);
 
   useEffect(() => () => {
     graphDetailRequest.current += 1;
     graphDetailAbort.current?.abort();
+    graphNeighborhoodRequest.current += 1;
+    graphNeighborhoodAbort.current?.abort();
   }, []);
 
   useEffect(() => {
@@ -685,6 +873,8 @@ export function useMemoWorkspace(ownerId: string) {
     const scope = `pin:${memoId}`;
     const body = { pinned };
     const idempotencyKey = retryIdentities.current.keyFor(scope, JSON.stringify(body));
+    const selectionIdAtStart = graphSelectionIdentity.current;
+    const activeMemoIdAtStart = activeGraphMemoIdentity.current;
     setBusyAction(scope);
     clearRetry(scope);
     setGraphPinError(null);
@@ -695,14 +885,47 @@ export function useMemoWorkspace(ownerId: string) {
 
     try {
       const result = await api.setMemoPinned(memoId, pinned, idempotencyKey);
-      setSelectedGraphMemo((current) =>
-        current?.id === result.id ? { ...current, pinned: result.pinned } : current,
-      );
-      setSelectedGraphNode((current) =>
-        current?.kind === 'MEMO' && graphNodeEntityId(current) === result.id
-          ? { ...current, pinned: result.pinned }
-          : current,
-      );
+      const selectionStillActive = selectionIdAtStart !== null &&
+        graphSelectionIdentity.current === selectionIdAtStart;
+      const detailStillActive = selectionStillActive &&
+        activeMemoIdAtStart === result.id &&
+        activeGraphMemoIdentity.current === result.id;
+      let neighborhoodReload: Promise<void> | null = null;
+      if (selectionStillActive) {
+        if (detailStillActive) {
+          setSelectedGraphMemo((current) =>
+            current?.id === result.id ? { ...current, pinned: result.pinned } : current,
+          );
+          setActiveGraphMemoNode((current) =>
+            current?.kind === 'MEMO' && graphNodeEntityId(current) === result.id
+              ? { ...current, pinned: result.pinned }
+              : current,
+          );
+        }
+        setSelectedGraphNode((current) =>
+          current?.kind === 'MEMO' && graphNodeEntityId(current) === result.id
+            ? { ...current, pinned: result.pinned }
+            : current,
+        );
+
+        const rootNode = graphSelectionNodeSnapshot.current;
+        const reconciled = reconcileGraphNeighborhoodAfterMemoPin(
+          graphNeighborhoodSnapshot.current,
+          result.id,
+          result.pinned,
+        );
+        const reloadCenter = reconciled.reloadCenter ?? (
+          rootNode?.kind === 'TAG' && rootNode.id === selectionIdAtStart
+            ? rootNode
+            : null
+        );
+        if (reloadCenter) {
+          neighborhoodReload = loadGraphNeighborhood(reloadCenter, null, false);
+        } else {
+          graphNeighborhoodSnapshot.current = reconciled.collection;
+          setGraphNeighborhood(reconciled.collection);
+        }
+      }
       clearRetry(scope);
       setFeedback({
         kind: 'success',
@@ -710,10 +933,21 @@ export function useMemoWorkspace(ownerId: string) {
           ? '메모를 홈 그래프에 고정했습니다.'
           : '메모의 홈 그래프 고정을 해제했습니다.',
       });
-      await Promise.all([refreshWorkspace(), refreshMemos()]);
+      await Promise.all([
+        refreshWorkspace(),
+        refreshMemos(),
+        neighborhoodReload ?? Promise.resolve(),
+      ]);
       retryIdentities.current.clear(scope);
     } catch (error) {
-      setGraphPinError(errorMessage(error));
+      if (
+        selectionIdAtStart !== null &&
+        graphSelectionIdentity.current === selectionIdAtStart &&
+        activeMemoIdAtStart !== null &&
+        activeGraphMemoIdentity.current === activeMemoIdAtStart
+      ) {
+        setGraphPinError(errorMessage(error));
+      }
       if (
         error instanceof ApiError &&
         (error.status === 404 || error.code === 'MEMO_NOT_ACTIVE')
@@ -753,8 +987,14 @@ export function useMemoWorkspace(ownerId: string) {
     selectedGraphNode,
     selectedGraphProjectionVersion,
     selectedGraphMemo,
+    activeGraphMemoNode,
     graphDetailLoading,
     graphDetailError,
+    graphNeighborhood,
+    graphNeighborhoodLoading,
+    graphNeighborhoodLoadingMore,
+    graphNeighborhoodError,
+    graphNeighborhoodRestartRequired,
     graphPinError,
     activeMemos,
     trashedMemos,
@@ -791,8 +1031,12 @@ export function useMemoWorkspace(ownerId: string) {
     refreshRecovery,
     refreshReviewOutcomes,
     selectGraphNode,
+    openGraphNeighborhoodMemo,
+    backToGraphNeighborhood,
     closeGraphNode,
     retryGraphNodeDetail,
+    retryGraphNeighborhood,
+    loadMoreGraphNeighborhood,
     changeContent,
     captureMemo,
     changeReview,

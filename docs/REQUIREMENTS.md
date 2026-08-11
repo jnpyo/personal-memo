@@ -125,11 +125,16 @@
 - Let the user pin or unpin an active memo with an owner-scoped idempotent mutation that does not
   create a raw revision or canonical analysis output.
 - Make every current-home node a keyboard/touch control. Selecting it highlights only visible direct
-  neighbors and opens a mobile detail drawer; memo detail re-reads the current owner-scoped raw
-  revision with no-store semantics, while tag detail is explicitly limited to the current projection.
-- Milestone 5: return independently bounded full-corpus local neighborhoods; search memo body, title,
-  canonical tag, alias, task state, and date range; and open the same detail experience from search
-  results.
+  neighbors and opens a mobile detail drawer. Independently page the selected canonical MEMO_TAG
+  neighborhood from the full owner corpus with a strict opaque cursor and no-store semantics; let a
+  tag open a memo outside the home bound without injecting that memo into the React Flow projection.
+  Memo detail always re-reads the current owner-scoped raw revision. Bound each server page to 20 and
+  each browser drawer to 5 pages/100 neighbors. Bind continuation cursors to a digest of the complete
+  visible center/neighborhood membership, ordering inputs, and node fields from the first-page
+  snapshot. If any of that canonical state changes between pages, fail closed and require a
+  first-page restart instead of silently skipping or duplicating a neighbor.
+- Milestone 5 follow-up: search memo body, title, canonical tag, alias, task state, and date range, and
+  open the same detail experience from search results.
 
 ### Security and control
 

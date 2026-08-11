@@ -161,6 +161,63 @@ describe('memo API client', () => {
     );
   });
 
+  it('loads an encoded, uncached neighborhood page with the caller abort signal', async () => {
+    const neighborhood = {
+      center: {
+        id: 'tag:10000000-0000-0000-0000-000000000001',
+        kind: 'TAG',
+        label: '운영 체제',
+        pinned: false,
+        overdue: false,
+        memoType: null,
+        taskState: null,
+      },
+      neighbors: [],
+      edges: [],
+      truncated: false,
+      nextCursor: null,
+    };
+    const { client, applicationFetch } = testClient(neighborhood);
+    const controller = new AbortController();
+    client.setSessionOwner('user-a');
+
+    await client.graphNeighborhood(
+      'TAG',
+      '10000000-0000-0000-0000-000000000001',
+      'opaque cursor/+',
+      controller.signal,
+      999,
+    );
+
+    expect(applicationFetch).toHaveBeenCalledWith(
+      '/api/v1/graph/nodes/TAG/10000000-0000-0000-0000-000000000001/neighborhood?limit=20&cursor=opaque+cursor%2F%2B',
+      {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        signal: expect.any(AbortSignal),
+        headers: {
+          'Content-Type': 'application/json',
+          [EXPECTED_OWNER_ID_HEADER]: 'user-a',
+        },
+      },
+    );
+    const requestSignal = applicationFetch.mock.calls[0]?.[1]?.signal;
+    expect(requestSignal).not.toBe(controller.signal);
+    controller.abort();
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it('rejects a noncanonical neighborhood center before sending a request', async () => {
+    const { client, applicationFetch } = testClient({});
+    client.setSessionOwner('user-a');
+
+    await expect(client.graphNeighborhood(
+      'TAG',
+      '10000000-0000-0000-0000-00000000000A',
+    )).rejects.toThrow(/expectedCenter/);
+    expect(applicationFetch).not.toHaveBeenCalled();
+  });
+
   it('reuses the exact pin body and caller-owned key on retry', async () => {
     const { client, applicationFetch } = testClient({
       id: 'memo-1',

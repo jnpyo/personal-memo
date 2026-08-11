@@ -140,7 +140,8 @@ Each module may contain `api`, `application`, `domain`, and `infrastructure` pac
 - `memo`: source revisions, soft delete, restore and idempotent capture
 - `analysis`: local validation, ambiguity routing, cloud orchestration and stale-result handling
 - `taxonomy`: tags, aliases, provisional topics, centroids and taxonomy proposals
-- `graph`: bounded canonical graph projection, hard-priority selection, and current-home detail
+- `graph`: bounded canonical home projection, hard-priority selection, full-corpus 1-hop pagination,
+  and owner-scoped detail navigation
 - `task`: derived task/event records and state transitions
 - `reminder`: schedule, Web Push and retry
 - `search`: lexical/semantic retrieval and cloud context preparation
@@ -352,11 +353,24 @@ tags exist only beyond the initial memo set, it underfills instead of claiming a
 set is complete. A one-node request still probes for an omitted tag. Omitted memo or tag candidates
 set `truncated=true`.
 
-React Flow owns only the bounded display layout. A node button highlights direct neighbors that are
-already present in the current projection and opens an accessible mobile drawer. Memo detail performs
-an owner-scoped, no-store read of the current raw revision; tag detail is explicitly limited to the
-current home snapshot. This closes the current node-detail interaction without claiming Milestone 5's
-full-corpus neighborhood or search contract.
+React Flow owns only the bounded display layout. A node button highlights direct neighbors already in
+the current projection and opens an accessible mobile drawer. The drawer then calls a separate
+owner-scoped, no-store full-corpus endpoint for one canonical `MEMO_TAG` hop. MEMO→TAG pages use
+normalized tag name/UUID order; TAG→MEMO pages reuse the home pin/overdue/TODO/due/current-revision/UUID
+priority. Each page is bounded to 20. Cursor v2 freezes time-derived overdue at `snapshotAsOf` for at
+most 24 hours and carries identities plus an opaque SHA-256 digest of the first page's complete visible
+center/neighborhood membership, ordering inputs, and node fields. A continuation recomputes that
+digest inside its owner-scoped `REPEATABLE_READ` transaction and returns `INVALID_GRAPH_CURSOR` when
+canonical state changed, preventing mutable priority keys from silently skipping or duplicating a
+neighbor. Center availability is verified before cursor parsing, so the cursor never grants access.
+
+The PWA keeps at most five pages/100 neighbors in one drawer. A tag neighbor can open the existing
+no-store current memo detail even when that memo is outside the home projection; it is not injected
+into React Flow. Independent abort/generation guards prevent stale page or raw-detail responses from
+replacing the current root. A stale cursor keeps the accumulated list visibly stale, hides further
+pagination, and offers an explicit first-page restart. This completes the first read-only Milestone 5
+neighborhood slice without claiming lexical/fuzzy search, alias detail, taxonomy evolution, or graph
+compression.
 
 ## Security boundary
 
@@ -375,6 +389,10 @@ full-corpus neighborhood or search contract.
   read-only before confirmation.
 - Model output undergoes JSON Schema and domain validation.
 - Logs omit raw memo bodies by default.
+- Production Nginx access logs use an explicit allow-list format. The request target is limited to
+  method plus normalized `$uri`; `$request`, `$request_uri`, `$args`, query strings, and Referer are
+  absent, so opaque graph cursors and future query terms do not enter edge access logs. Static asset
+  access logging remains disabled.
 - Current exact tag/alias context is owner-scoped, purpose-limited, and bounded to K=8. It is an
   internal hint, while final owner/reference validation remains authoritative; broader
   related-memo/fuzzy/vector/embedding context is not implemented.

@@ -292,6 +292,14 @@ export type GraphProjection = {
   projectionVersion: string;
 };
 
+export type GraphNeighborhoodPage = {
+  center: GraphNode;
+  neighbors: GraphNode[];
+  edges: GraphEdge[];
+  truncated: boolean;
+  nextCursor: string | null;
+};
+
 export type MemoPinResult = {
   id: string;
   pinned: boolean;

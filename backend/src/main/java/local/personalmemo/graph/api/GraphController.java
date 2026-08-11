@@ -5,12 +5,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import local.personalmemo.common.auth.CurrentIdentity;
+import local.personalmemo.graph.application.GraphNeighborhoodService;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -22,10 +24,13 @@ public class GraphController {
 
   private final JdbcClient db;
   private final CurrentIdentity identity;
+  private final GraphNeighborhoodService neighborhoods;
 
-  public GraphController(JdbcClient db, CurrentIdentity identity) {
+  public GraphController(
+      JdbcClient db, CurrentIdentity identity, GraphNeighborhoodService neighborhoods) {
     this.db = db;
     this.identity = identity;
+    this.neighborhoods = neighborhoods;
   }
 
   @GetMapping("/home")
@@ -78,6 +83,17 @@ public class GraphController {
     GraphDtos.Home home =
         new GraphDtos.Home(List.copyOf(nodes), edges, truncated, projectionVersion);
     return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(home);
+  }
+
+  @GetMapping("/nodes/{kind}/{id}/neighborhood")
+  ResponseEntity<GraphDtos.Neighborhood> neighborhood(
+      @PathVariable String kind,
+      @PathVariable UUID id,
+      @RequestParam(name = "limit", defaultValue = "20") int limit,
+      @RequestParam(name = "cursor", required = false) String cursor) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(neighborhoods.neighborhood(kind, id, limit, cursor));
   }
 
   private List<MemoCandidate> findMemoCandidates(int candidateLimit) {

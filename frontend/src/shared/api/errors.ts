@@ -1,4 +1,5 @@
 import { ProposalContractError } from './proposalDecoder';
+import { GraphNeighborhoodContractError } from './graphNeighborhoodDecoder';
 
 export class ApiError extends Error {
   constructor(
@@ -21,6 +22,10 @@ type ErrorPayload = {
 export function errorMessage(error: unknown): string {
   if (error instanceof ProposalContractError) {
     return '서버가 지원하지 않는 형식의 분석 제안을 반환했습니다. 원본 메모는 그대로 보존됩니다.';
+  }
+
+  if (error instanceof GraphNeighborhoodContractError) {
+    return '서버가 지원하지 않는 형식의 그래프 연결을 반환했습니다. 홈 그래프와 원본 메모는 변경되지 않습니다.';
   }
 
   if (error instanceof ApiError) {

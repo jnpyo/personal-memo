@@ -595,11 +595,27 @@ test('recovers from a stale proposal without offering the same apply retry', asy
 
 test('raw memo survives review, apply, reload, and undo', async ({ page }, testInfo) => {
   const marker = `primary-${Date.now()}-${testInfo.retry}`;
+  const oldRawMemo = `기록: 운영체제 이전 참고 E2E ${marker}`;
   const rawMemo = `2026.11.25 운영체제 과제 E2E ${marker} 제출`;
   const proposedTitle = `운영체제 과제 E2E ${marker} 제출`;
   const approvedTitle = `${proposedTitle} 수정`;
+  let rewrittenHomeRequests = 0;
+
+  await page.route('**/api/v1/graph/home?limit=100', async (route) => {
+    const url = new URL(route.request().url());
+    expect(url.searchParams.get('limit')).toBe('100');
+    rewrittenHomeRequests += 1;
+    url.searchParams.set('limit', '2');
+    await route.continue({ url: url.toString() });
+  });
 
   await registerIsolatedUser(page, testInfo);
+
+  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(oldRawMemo);
+  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await expect(page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' })).toBeVisible();
+  await page.getByRole('button', { name: '예, 이대로 적용' }).click();
+  await expect(page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' })).toHaveCount(0);
 
   await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(rawMemo);
   await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
@@ -622,6 +638,7 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
   await expect(reviewHeading).toBeFocused();
   await expect(reviewHeading).toBeInViewport();
   await openProposalEditor(page);
+  await page.getByRole('button', { name: '과제 태그 제외' }).click();
   await page.getByLabel('새 태그').fill('운영체제');
   await page.getByRole('button', { name: '추가', exact: true }).click();
   await expect(page.getByLabel('새 태그')).toHaveValue('');
@@ -664,7 +681,7 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
   await expect(graphDetail.getByText('revision 1')).toBeVisible();
   await expect(graphDetail.getByText(/할 일 상태 미완료/)).toBeVisible();
   await expect(graphDetail.getByText('#운영체제')).toBeVisible();
-  await expect(graphDetail.getByText('현재 홈 그래프 스냅샷에 보이는 1단계 연결만 표시합니다.'))
+  await expect(graphDetail.getByText(/전체 메모에서 직접 연결된 태그를 페이지당 20개씩/))
     .toBeVisible();
 
   const pinMemo = graphDetail.getByRole('button', { name: '홈 그래프에 고정' });
@@ -688,19 +705,38 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
 
   const tagNode = page.locator('.graph-node--tag .graph-node__content')
     .filter({ hasText: '운영체제' });
+  const oldHomeGraphNode = page.locator('.graph-node--memo .graph-node__content')
+    .filter({ hasText: oldRawMemo });
+  await expect(oldHomeGraphNode).toHaveCount(0);
   await page.locator('.graph-canvas').evaluate((element) => {
     element.scrollIntoView({ block: 'start', behavior: 'auto' });
   });
   await expect(tagNode).toBeVisible();
   await expectMinimumTouchHeight(tagNode, 48);
   await tagNode.click({ position: { x: 24, y: 24 } });
-  const tagDetail = page.getByRole('dialog', { name: '운영체제 상세' });
+  const tagDetail = page.getByRole('dialog', { name: '운영체제 연결' });
+  const graphDrawer = page.locator('dialog.graph-detail-dialog');
   await expect(tagDetail.getByText(`#운영체제`)).toBeVisible();
   await expect(tagDetail.getByText(approvedTitle)).toBeVisible();
   await expect(tagDetail.getByRole('button', { name: '홈 그래프에 고정' })).toHaveCount(0);
-  await page.keyboard.press('Escape');
+  const oldNeighborhoodMemo = tagDetail.getByRole('button', {
+    name: new RegExp(oldRawMemo),
+  });
+  await expect(oldNeighborhoodMemo).toBeVisible();
+  await expectMinimumTouchHeight(oldNeighborhoodMemo, 48);
+  await oldNeighborhoodMemo.click();
+  await expect(graphDrawer.getByRole('heading', { name: `${oldRawMemo} 상세` })).toBeFocused();
+  await expect(
+    graphDrawer.getByRole('region', { name: '현재 원문' }).locator('pre'),
+  ).toHaveText(oldRawMemo);
+  await expect(oldHomeGraphNode).toHaveCount(0);
+  await graphDrawer.getByRole('button', { name: /운영체제 연결로 돌아가기/ }).click();
+  await expect(tagDetail.getByRole('heading', { name: '운영체제 연결' })).toBeVisible();
+  await expect(oldNeighborhoodMemo).toBeFocused();
+  await tagDetail.getByRole('button', { name: '그래프 상세 닫기' }).click();
   await expect(tagDetail).toHaveCount(0);
   await expect(tagNode).toBeFocused();
+  expect(rewrittenHomeRequests).toBeGreaterThan(0);
 
   await page.reload();
   await expect(page.getByRole('button', { name: '마지막 적용 되돌리기' })).toBeVisible();

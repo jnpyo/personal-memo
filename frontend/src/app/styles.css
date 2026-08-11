@@ -1026,6 +1026,13 @@ main {
   line-height: 1.55;
 }
 
+.graph-detail-back,
+.graph-neighborhood-more {
+  width: 100%;
+  min-height: 48px;
+  margin-bottom: 14px;
+}
+
 .graph-detail-metadata {
   display: grid;
   gap: 1px;
@@ -1152,13 +1159,48 @@ main {
 .graph-detail-neighbors--memos li {
   display: grid;
   gap: 4px;
+  overflow: hidden;
   border-radius: 12px;
+  padding: 0;
 }
 
 .graph-detail-neighbors--memos strong,
 .graph-detail-neighbors--memos span {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.graph-neighborhood-memo {
+  display: grid;
+  width: 100%;
+  min-height: 48px;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 12px 13px;
+  text-align: left;
+}
+
+.graph-neighborhood-memo:focus-visible {
+  outline: 3px solid #e4b657;
+  outline-offset: -3px;
+}
+
+.graph-neighborhood-memo:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.graph-neighborhood-memo small {
+  color: #2f6a4d;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.graph-neighborhood-more {
+  margin-top: 16px;
+  margin-bottom: 0;
 }
 
 .graph-detail-neighbors--memos span {

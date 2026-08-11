@@ -700,20 +700,22 @@ GET /api/v1/graph/home?limit=100
       "id": "tag:10000000-0000-0000-0000-000000000001",
       "kind": "TAG",
       "label": "운영체제",
+      "memoType": null,
+      "taskState": null,
       "overdue": false,
       "pinned": false
     }
   ],
   "edges": [
     {
-      "id": "memo-tag:...",
+      "id": "memo-tag:61c6c3e8-846a-4472-a58a-321920001868:10000000-0000-0000-0000-000000000001",
       "source": "memo:61c6c3e8-846a-4472-a58a-321920001868",
       "target": "tag:10000000-0000-0000-0000-000000000001",
       "kind": "MEMO_TAG"
     }
   ],
   "truncated": false,
-  "projectionVersion": "opaque-uuid"
+  "projectionVersion": "7e483d25-5693-4eb8-9638-33a03db521aa"
 }
 ```
 
@@ -740,12 +742,79 @@ memo에는 tag가 없을 때도 전체 잠재 memo 범위를 한 번 probe하며
 complete라고 하지 않고 underfill과 `truncated=true`를 유지한다. `limit=1`도 선택 memo의 tag
 존재를 probe하므로 표시할 edge 공간이 없어 tag를 생략했다면 `truncated=true`다.
 
-PWA에서 node를 누르면 현재 home response 안의 직접 이웃만 강조하고 상세 drawer를 연다.
-memo node는 owner-scoped `GET /memos/{memoId}`를 다시 읽어 현재 raw revision과 고정 상태를
-표시하고, tag node는 현재 bounded projection에 보이는 연결 memo만 표시한다. drawer의 이웃
-목록은 20개로 제한하며 home이 `truncated=true`이거나 이웃이 잘리면 전체 corpus가 아니라
-“현재 홈 그래프 기준”임을 알린다. 전체-corpus neighborhood, tag alias 상세, 검색 결과 상세는
-Milestone 5 범위로 남는다.
+PWA에서 node를 누르면 현재 home response 안의 직접 이웃을 먼저 강조하고 상세 drawer를 연다.
+그 뒤 아래 별도 read endpoint로 전체 owner corpus의 canonical 1-hop을 읽는다. 이 조회는 home
+projection에 node를 주입하거나 home highlight 범위를 바꾸지 않는다.
+
+```http
+GET /api/v1/graph/nodes/{kind}/{id}/neighborhood?limit=20&cursor={opaque}
+X-Expected-Owner-Id: 018f4fad-e9a9-7a01-a4d1-936938a8a1e8
+```
+
+`kind`는 정확히 `MEMO` 또는 `TAG`, `id`는 entity UUID다. `limit` 기본값은 20이며 1–20 밖의
+값은 clamp하지 않고 `422 INVALID_GRAPH_NEIGHBORHOOD_LIMIT`이다. 성공 응답은 owner-scoped
+`ACTIVE` canonical data만 사용하고 `Cache-Control: no-store`를 반환한다.
+
+```json
+{
+  "center": {
+    "id": "tag:10000000-0000-0000-0000-000000000001",
+    "kind": "TAG",
+    "label": "운영체제",
+    "memoType": null,
+    "taskState": null,
+    "overdue": false,
+    "pinned": false
+  },
+  "neighbors": [
+    {
+      "id": "memo:20000000-0000-0000-0000-000000000001",
+      "kind": "MEMO",
+      "label": "운영체제 과제",
+      "memoType": "TASK",
+      "taskState": "TODO",
+      "overdue": false,
+      "pinned": true
+    }
+  ],
+  "edges": [
+    {
+      "id": "memo-tag:20000000-0000-0000-0000-000000000001:10000000-0000-0000-0000-000000000001",
+      "source": "memo:20000000-0000-0000-0000-000000000001",
+      "target": "tag:10000000-0000-0000-0000-000000000001",
+      "kind": "MEMO_TAG"
+    }
+  ],
+  "truncated": false,
+  "nextCursor": null
+}
+```
+
+MEMO center의 이웃은 `normalized_name`, UUID 순의 TAG이고 TAG center의 이웃은 graph home과
+같은 pin → overdue → TODO → nearest due → current raw revision 시각 → UUID 순의 MEMO다.
+각 neighbor에는 center와 연결된 `MEMO_TAG` edge가 정확히 하나 있다. `truncated=true`이면
+`nextCursor`가 반드시 존재하고, 마지막 page는 `truncated=false`, `nextCursor=null`이다.
+
+cursor는 canonical URL-safe Base64 JSON version 2이며 owner UUID, center kind/UUID, sort shape,
+UTC `snapshotAsOf`, opaque lowercase SHA-256 `neighborhoodDigest`, 마지막 neighbor UUID를 포함한다.
+digest는 첫 page와 같은 `REPEATABLE_READ` snapshot에서 보인 center 및 전체 neighbor의 membership,
+표시 field와 정렬 tuple에 결합된다. 다음 page는 같은 owner 범위에서 digest를 다시 계산하므로
+pin/task/due/current revision, tag name/state, 적용 link 등 관련 canonical 상태가 바뀌면 조용한
+skip/duplicate 대신 `422 INVALID_GRAPH_CURSOR`로 처음부터 다시 읽게 한다. digest 바깥의 label,
+raw memo, title, task/due metadata 자체는 cursor에 넣지 않는다.
+
+cursor는 authorization이 아니며 모든 hydration query가 현재 principal owner를 다시 적용한다.
+다른 owner·없는·휴지통 MEMO와 다른 owner·없는·inactive TAG는 cursor를 읽기 전에 동일한
+`404 RESOURCE_NOT_FOUND`다. malformed/non-canonical/mismatched/deleted-last/digest-mismatch cursor,
+24시간이 지난 cursor, 1분을 넘는 미래 cursor는 `422 INVALID_GRAPH_CURSOR`다.
+
+PWA는 page를 dedupe-append하되 한 drawer에서 최대 5 page/100 neighbor와 100 edge만 유지한다.
+`INVALID_GRAPH_CURSOR` 또는 page merge 불일치가 발생하면 이미 보인 목록을 stale로 표시하고
+기존 더 불러오기를 비활성화한 뒤, 사용자가 첫 page부터 다시 시작할 수 있게 한다.
+TAG neighbor memo는 React Flow home에 추가하지 않고 기존 owner-scoped `GET /memos/{memoId}`로
+현재 raw revision을 no-store로 연다. Back은 해당 neighbor control로, Close는 원래 home node로
+focus를 복원하되 node remount나 사용자 focus 이동을 안전하게 처리한다. lexical/alias 검색,
+fuzzy/vector retrieval, tag alias 상세는 이 endpoint가 구현했다고 간주하지 않는다.
 
 ## Health
 

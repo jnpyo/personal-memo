@@ -2,6 +2,10 @@ import { toApiError } from './errors';
 import { decodeProposal, decodeProposalSummaries } from './proposalDecoder';
 import type { ExpectedProposalIdentity } from './proposalDecoder';
 import { decodeReviewOutcomeSummary } from './reviewOutcomeDecoder';
+import {
+  assertGraphNeighborhoodExpectedCenter,
+  decodeGraphNeighborhoodPage,
+} from './graphNeighborhoodDecoder';
 import type {
   AnalysisRun,
   AnalysisReviewOutcomeSummary,
@@ -11,6 +15,7 @@ import type {
   AuthSession,
   CsrfToken,
   GraphProjection,
+  GraphNode,
   LatestApplication,
   MemoPinResult,
   MemoView,
@@ -481,6 +486,27 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
         `/api/v1/graph/home?limit=${Math.min(Math.max(limit, 1), 100)}`,
         { cache: 'no-store' },
       ),
+
+    graphNeighborhood: async (
+      kind: GraphNode['kind'],
+      nodeId: string,
+      cursor?: string | null,
+      signal?: AbortSignal,
+      limit = 20,
+    ) => {
+      assertGraphNeighborhoodExpectedCenter({ kind, entityId: nodeId });
+      const query = new URLSearchParams({
+        limit: String(Math.min(Math.max(Math.trunc(limit), 1), 20)),
+      });
+      if (cursor) query.set('cursor', cursor);
+      return decodeGraphNeighborhoodPage(
+        await request<unknown>(
+          `/api/v1/graph/nodes/${encodeURIComponent(kind)}/${encodeURIComponent(nodeId)}/neighborhood?${query.toString()}`,
+          { cache: 'no-store', signal },
+        ),
+        { kind, entityId: nodeId },
+      );
+    },
   };
 }
 

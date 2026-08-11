@@ -12,9 +12,9 @@ import type { GraphNode, GraphProjection, MemoView } from '../../shared/api/type
 import {
   buildFlowElements,
   selectedNodeForProjection,
-  visibleGraphNeighborhood,
   type MemoGraphNodeData,
 } from './graphModel';
+import type { GraphNeighborhoodCollection } from './graphNeighborhoodModel';
 
 type Props = {
   projection: GraphProjection;
@@ -22,9 +22,15 @@ type Props = {
   error: string | null;
   selectedNode: GraphNode | null;
   selectionProjectionVersion: string | null;
+  activeMemoNode: GraphNode | null;
   memoDetail: MemoView | null;
   detailLoading: boolean;
   detailError: string | null;
+  neighborhood: GraphNeighborhoodCollection | null;
+  neighborhoodLoading: boolean;
+  neighborhoodLoadingMore: boolean;
+  neighborhoodError: string | null;
+  neighborhoodRestartRequired: boolean;
   pinPending: boolean;
   pinError: string | null;
   interactionDisabled: boolean;
@@ -32,6 +38,10 @@ type Props = {
   onSelectNode: (node: GraphNode) => void;
   onCloseDetail: () => void;
   onRetryDetail: () => void;
+  onRetryNeighborhood: () => void;
+  onLoadMoreNeighborhood: () => void;
+  onOpenNeighborhoodMemo: (node: GraphNode) => void;
+  onBackToNeighborhood: () => void;
   onSetPinned: (memoId: string, pinned: boolean) => void;
   onRetryPin: () => void;
 };
@@ -228,10 +238,62 @@ export function shouldResumeGraphFocus(
   return activeElement === null || activeElement === body || activeElement === graphHeading;
 }
 
+export function focusNeighborhoodNode(
+  nodeId: string,
+  originalOpener: HTMLButtonElement | null,
+): () => void {
+  let cancelled = false;
+  let frameId: number | null = null;
+  let attempt = 0;
+
+  const restore = () => {
+    if (cancelled) return;
+    const currentOpener = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-neighborhood-node-id]'),
+    ).find((candidate) => candidate.dataset.neighborhoodNodeId === nodeId);
+    const preferredTarget = originalOpener?.isConnected ? originalOpener : currentOpener;
+    const heading = document.getElementById('graph-neighborhood-title');
+    const activeElement = document.activeElement;
+
+    if (preferredTarget && !preferredTarget.disabled) {
+      if (
+        attempt > 0 &&
+        activeElement &&
+        activeElement !== document.body &&
+        activeElement !== heading &&
+        activeElement !== preferredTarget
+      ) return;
+      preferredTarget.focus({ preventScroll: true });
+      return;
+    }
+
+    if (attempt === 0) heading?.focus({ preventScroll: true });
+    if (
+      attempt > 0 &&
+      activeElement &&
+      activeElement !== document.body &&
+      activeElement !== heading
+    ) return;
+    if (attempt >= 30) return;
+    attempt += 1;
+    frameId = window.requestAnimationFrame(restore);
+  };
+
+  frameId = window.requestAnimationFrame(restore);
+  return () => {
+    cancelled = true;
+    if (frameId !== null) window.cancelAnimationFrame(frameId);
+  };
+}
+
 type GraphNodeDetailDrawerProps = {
   node: GraphNode;
-  neighbors: GraphNode[];
-  truncated: boolean;
+  activeMemoNode: GraphNode | null;
+  neighborhood: GraphNeighborhoodCollection | null;
+  neighborhoodLoading: boolean;
+  neighborhoodLoadingMore: boolean;
+  neighborhoodError: string | null;
+  neighborhoodRestartRequired: boolean;
   memoDetail: MemoView | null;
   loading: boolean;
   error: string | null;
@@ -240,6 +302,10 @@ type GraphNodeDetailDrawerProps = {
   interactionDisabled: boolean;
   onClose: () => void;
   onRetry: () => void;
+  onRetryNeighborhood: () => void;
+  onLoadMoreNeighborhood: () => void;
+  onOpenNeighborhoodMemo: (node: GraphNode) => void;
+  onBackToNeighborhood: () => void;
   onSetPinned: (memoId: string, pinned: boolean) => void;
   onRetryPin: () => void;
 };
@@ -255,10 +321,21 @@ function memoMetadata(node: GraphNode): string[] {
   return metadata.filter((value): value is string => value !== null);
 }
 
+export function shouldMoveGraphDetailFocus(
+  previousMemoNodeId: string | null,
+  nextMemoNodeId: string | null,
+): boolean {
+  return previousMemoNodeId !== nextMemoNodeId;
+}
+
 export function GraphNodeDetailDrawer({
   node,
-  neighbors,
-  truncated,
+  activeMemoNode,
+  neighborhood,
+  neighborhoodLoading,
+  neighborhoodLoadingMore,
+  neighborhoodError,
+  neighborhoodRestartRequired,
   memoDetail,
   loading,
   error,
@@ -267,20 +344,30 @@ export function GraphNodeDetailDrawer({
   interactionDisabled,
   onClose,
   onRetry,
+  onRetryNeighborhood,
+  onLoadMoreNeighborhood,
+  onOpenNeighborhoodMemo,
+  onBackToNeighborhood,
   onSetPinned,
   onRetryPin,
 }: GraphNodeDetailDrawerProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
-  const sortedNeighbors = [...neighbors].sort(
-    (left, right) => left.label.localeCompare(right.label, 'ko') || left.id.localeCompare(right.id),
-  );
-  const allVisibleTags = sortedNeighbors.filter((neighbor) => neighbor.kind === 'TAG');
-  const allVisibleMemos = sortedNeighbors.filter((neighbor) => neighbor.kind === 'MEMO');
-  const visibleTags = allVisibleTags.slice(0, 20);
-  const visibleMemos = allVisibleMemos.slice(0, 20);
-  const neighborsTruncated = allVisibleTags.length > 20 || allVisibleMemos.length > 20;
+  const neighborOpenerRef = useRef<HTMLButtonElement | null>(null);
+  const previousMemoNodeIdRef = useRef<string | null>(null);
+  const neighborFocusCancelRef = useRef<(() => void) | null>(null);
+  const pendingNeighborFocusIdRef = useRef<string | null>(null);
+  const center = neighborhood?.center ?? node;
+  const neighbors = neighborhood?.neighbors ?? [];
+  const memoNeighbors = neighbors.filter((neighbor) => neighbor.kind === 'MEMO');
+  const tagNeighbors = neighbors.filter((neighbor) => neighbor.kind === 'TAG');
+  const isRootMemoDetail = activeMemoNode?.id === node.id;
+  const activeMemoTags = activeMemoNode?.id === node.id
+    ? tagNeighbors
+    : node.kind === 'TAG'
+      ? [center]
+      : [];
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -297,12 +384,66 @@ export function GraphNodeDetailDrawer({
     };
   }, [node.id]);
 
+  useEffect(() => {
+    const previousMemoNodeId = previousMemoNodeIdRef.current;
+    const nextMemoNodeId = activeMemoNode?.id ?? null;
+    if (!shouldMoveGraphDetailFocus(previousMemoNodeId, nextMemoNodeId)) return;
+    previousMemoNodeIdRef.current = nextMemoNodeId;
+    neighborFocusCancelRef.current?.();
+    neighborFocusCancelRef.current = null;
+
+    if (nextMemoNodeId) {
+      pendingNeighborFocusIdRef.current = null;
+      const frame = window.requestAnimationFrame(() => {
+        if (scrollRef.current) scrollRef.current.scrollTop = 0;
+        headingRef.current?.focus({ preventScroll: true });
+      });
+      neighborFocusCancelRef.current = () => window.cancelAnimationFrame(frame);
+      return;
+    }
+    if (!previousMemoNodeId) return;
+
+    pendingNeighborFocusIdRef.current = interactionDisabled ? previousMemoNodeId : null;
+    neighborFocusCancelRef.current = focusNeighborhoodNode(
+      previousMemoNodeId,
+      neighborOpenerRef.current,
+    );
+  }, [activeMemoNode?.id, interactionDisabled]);
+
+  useEffect(() => {
+    if (interactionDisabled || activeMemoNode) return;
+    const pendingNodeId = pendingNeighborFocusIdRef.current;
+    if (!pendingNodeId) return;
+    pendingNeighborFocusIdRef.current = null;
+    if (
+      !shouldResumeGraphFocus(
+        document.activeElement,
+        document.body,
+        document.getElementById('graph-neighborhood-title'),
+      )
+    ) {
+      neighborFocusCancelRef.current?.();
+      neighborFocusCancelRef.current = null;
+      return;
+    }
+    neighborFocusCancelRef.current?.();
+    neighborFocusCancelRef.current = focusNeighborhoodNode(
+      pendingNodeId,
+      neighborOpenerRef.current,
+    );
+  }, [activeMemoNode, interactionDisabled]);
+
+  useEffect(() => () => {
+    neighborFocusCancelRef.current?.();
+    neighborFocusCancelRef.current = null;
+  }, []);
+
   return (
     <dialog
       ref={dialogRef}
       className="graph-detail-dialog"
-      aria-labelledby="graph-detail-title"
-      aria-busy={loading || pinPending}
+      aria-labelledby="graph-neighborhood-title"
+      aria-busy={loading || pinPending || neighborhoodLoading || neighborhoodLoadingMore}
       onCancel={(event) => {
         event.preventDefault();
         onClose();
@@ -311,9 +452,11 @@ export function GraphNodeDetailDrawer({
       <section ref={scrollRef} className="graph-detail-drawer">
         <header className="graph-detail-drawer__header">
           <div>
-            <span className="eyebrow">CURRENT HOME GRAPH</span>
-            <h2 id="graph-detail-title" ref={headingRef} tabIndex={-1}>
-              {node.label} 상세
+            <span className="eyebrow">
+              {activeMemoNode ? 'CURRENT MEMO DETAIL' : 'FULL CORPUS NEIGHBORHOOD'}
+            </span>
+            <h2 id="graph-neighborhood-title" ref={headingRef} tabIndex={-1}>
+              {activeMemoNode ? `${activeMemoNode.label} 상세` : `${center.label} 연결`}
             </h2>
           </div>
           <button
@@ -326,22 +469,36 @@ export function GraphNodeDetailDrawer({
           </button>
         </header>
 
-        <p className="graph-detail-drawer__scope">
-          현재 홈 그래프 스냅샷에 보이는 1단계 연결만 표시합니다.
-          {truncated && ' 홈 그래프 최대 100개 제한 때문에 일부 연결이 보이지 않을 수 있습니다.'}
-          {neighborsTruncated && ' 이 상세 화면에서는 연결을 최대 20개까지 표시합니다.'}
-        </p>
-
-        {node.kind === 'MEMO' ? (
+        {activeMemoNode ? (
           <>
+            {!isRootMemoDetail && (
+              <button
+                type="button"
+                className="secondary-button graph-detail-back"
+                onClick={onBackToNeighborhood}
+              >
+                ← {center.label} 연결로 돌아가기
+              </button>
+            )}
+            {!isRootMemoDetail && (
+              <p className="graph-detail-drawer__scope">
+                홈 그래프에 추가하지 않고 전체 연결에서 연 현재 메모입니다.
+              </p>
+            )}
+            {isRootMemoDetail && (
+              <p className="graph-detail-drawer__scope">
+                현재 홈 그래프의 강조 범위는 바꾸지 않고, 전체 메모에서 직접 연결된 태그를 페이지당 20개씩 불러옵니다.
+                브라우저에는 최대 100개까지만 유지합니다.
+              </p>
+            )}
             <dl className="graph-detail-metadata">
               <div>
                 <dt>분류</dt>
-                <dd>{memoMetadata(node).join(' · ')}</dd>
+                <dd>{memoMetadata(activeMemoNode).join(' · ')}</dd>
               </div>
               <div>
                 <dt>그래프 고정</dt>
-                <dd>{(memoDetail?.pinned ?? node.pinned) ? '고정됨' : '고정 안 됨'}</dd>
+                <dd>{(memoDetail?.pinned ?? activeMemoNode.pinned) ? '고정됨' : '고정 안 됨'}</dd>
               </div>
             </dl>
 
@@ -359,6 +516,17 @@ export function GraphNodeDetailDrawer({
             {!loading && !error && !memoDetail && (
               <p className="graph-detail-state">표시할 최신 원문이 없습니다.</p>
             )}
+            {isRootMemoDetail && neighborhoodLoading && !neighborhood && (
+              <p className="graph-detail-state" role="status">전체 연결을 불러오는 중…</p>
+            )}
+            {isRootMemoDetail && !neighborhoodLoading && neighborhoodError && !neighborhood && (
+              <aside className="graph-detail-state graph-detail-state--error" role="alert">
+                <p>{neighborhoodError}</p>
+                <button type="button" className="secondary-button" onClick={onRetryNeighborhood}>
+                  전체 연결 다시 불러오기
+                </button>
+              </aside>
+            )}
             {!loading && !error && memoDetail && (
               <>
                 <section className="graph-detail-block" aria-labelledby="graph-raw-content-title">
@@ -367,17 +535,6 @@ export function GraphNodeDetailDrawer({
                     <span>revision {memoDetail.currentRevision}</span>
                   </div>
                   <pre aria-label="현재 원문">{memoDetail.content}</pre>
-                </section>
-
-                <section className="graph-detail-block" aria-labelledby="graph-visible-tags-title">
-                  <h3 id="graph-visible-tags-title">보이는 태그 연결</h3>
-                  {visibleTags.length > 0 ? (
-                    <ul className="graph-detail-neighbors">
-                      {visibleTags.map((tag) => <li key={tag.id}>#{tag.label}</li>)}
-                    </ul>
-                  ) : (
-                    <p className="graph-detail-empty">현재 홈 그래프에 보이는 태그 연결이 없습니다.</p>
-                  )}
                 </section>
 
                 {pinError && (
@@ -407,30 +564,135 @@ export function GraphNodeDetailDrawer({
                 </button>
               </>
             )}
+            <section className="graph-detail-block" aria-labelledby="graph-visible-tags-title">
+              <div className="graph-detail-block__heading">
+                <h3 id="graph-visible-tags-title">
+                  {isRootMemoDetail ? '전체 1단계 태그 연결' : '이 경로의 태그 연결'}
+                </h3>
+                {isRootMemoDetail && neighborhood && (
+                  <span>{tagNeighbors.length}개 불러옴</span>
+                )}
+              </div>
+              {activeMemoTags.length > 0 ? (
+                <ul className="graph-detail-neighbors">
+                  {activeMemoTags.map((tag) => <li key={tag.id}>#{tag.label}</li>)}
+                </ul>
+              ) : (!isRootMemoDetail || neighborhood) ? (
+                <p className="graph-detail-empty">불러온 연결에 태그가 없습니다.</p>
+              ) : null}
+            </section>
+            {isRootMemoDetail && neighborhoodError && neighborhood && (
+              <aside className="graph-detail-state graph-detail-state--error" role="alert">
+                <p>{neighborhoodError}</p>
+                <button type="button" className="secondary-button" onClick={onRetryNeighborhood}>
+                  {neighborhoodRestartRequired
+                    ? '전체 연결 처음부터 다시 불러오기'
+                    : '다음 연결 다시 불러오기'}
+                </button>
+              </aside>
+            )}
+            {isRootMemoDetail && !neighborhoodRestartRequired && neighborhood?.nextCursor && (
+              <button
+                type="button"
+                className="secondary-button graph-neighborhood-more"
+                disabled={interactionDisabled || neighborhoodLoadingMore}
+                onClick={onLoadMoreNeighborhood}
+              >
+                {neighborhoodLoadingMore ? '다음 연결 불러오는 중…' : '연결 더 불러오기'}
+              </button>
+            )}
+            {isRootMemoDetail && neighborhood?.browserTruncated && (
+              <p className="graph-detail-state" role="status">
+                브라우저 표시 상한 100개에 도달해 나머지 연결은 불러오지 않았습니다.
+              </p>
+            )}
           </>
         ) : (
           <>
+            <p className="graph-detail-drawer__scope">
+              현재 홈 그래프의 강조 범위는 바꾸지 않고, 전체 메모에서 직접 연결된 항목을 페이지당 20개씩 불러옵니다.
+              브라우저에는 최대 100개까지만 유지합니다.
+            </p>
             <dl className="graph-detail-metadata">
               <div>
-                <dt>태그</dt>
-                <dd>#{node.label}</dd>
+                <dt>{center.kind === 'TAG' ? '태그' : '메모'}</dt>
+                <dd>{center.kind === 'TAG' ? `#${center.label}` : center.label}</dd>
               </div>
             </dl>
-            <section className="graph-detail-block" aria-labelledby="graph-visible-memos-title">
-              <h3 id="graph-visible-memos-title">보이는 메모 연결</h3>
-              {visibleMemos.length > 0 ? (
-                <ul className="graph-detail-neighbors graph-detail-neighbors--memos">
-                  {visibleMemos.map((memo) => (
-                    <li key={memo.id}>
-                      <strong>{memo.label}</strong>
-                      <span>{memoMetadata(memo).join(' · ')}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="graph-detail-empty">현재 홈 그래프에 보이는 메모 연결이 없습니다.</p>
-              )}
-            </section>
+            {neighborhoodLoading && !neighborhood && (
+              <p className="graph-detail-state" role="status">전체 연결을 불러오는 중…</p>
+            )}
+            {!neighborhoodLoading && neighborhoodError && !neighborhood && (
+              <aside className="graph-detail-state graph-detail-state--error" role="alert">
+                <p>{neighborhoodError}</p>
+                <button type="button" className="secondary-button" onClick={onRetryNeighborhood}>
+                  전체 연결 다시 불러오기
+                </button>
+              </aside>
+            )}
+            {neighborhood && (
+              <section className="graph-detail-block" aria-labelledby="graph-full-neighbors-title">
+                <div className="graph-detail-block__heading">
+                  <h3 id="graph-full-neighbors-title">전체 1단계 연결</h3>
+                  <span>{neighbors.length}개 불러옴</span>
+                </div>
+                {center.kind === 'TAG' && memoNeighbors.length > 0 && (
+                  <ul className="graph-detail-neighbors graph-detail-neighbors--memos">
+                    {memoNeighbors.map((memo) => (
+                      <li key={memo.id}>
+                        <button
+                          type="button"
+                          className="graph-neighborhood-memo"
+                          data-neighborhood-node-id={memo.id}
+                          disabled={interactionDisabled}
+                          onClick={(event) => {
+                            neighborOpenerRef.current = event.currentTarget;
+                            onOpenNeighborhoodMemo(memo);
+                          }}
+                        >
+                          <strong>{memo.label}</strong>
+                          <span>{memoMetadata(memo).join(' · ')}</span>
+                          <small>현재 원문 열기</small>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {center.kind === 'MEMO' && tagNeighbors.length > 0 && (
+                  <ul className="graph-detail-neighbors">
+                    {tagNeighbors.map((tag) => <li key={tag.id}>#{tag.label}</li>)}
+                  </ul>
+                )}
+                {neighbors.length === 0 && (
+                  <p className="graph-detail-empty">전체 메모에서 직접 연결된 항목이 없습니다.</p>
+                )}
+              </section>
+            )}
+            {neighborhoodError && neighborhood && (
+              <aside className="graph-detail-state graph-detail-state--error" role="alert">
+                <p>{neighborhoodError}</p>
+                <button type="button" className="secondary-button" onClick={onRetryNeighborhood}>
+                  {neighborhoodRestartRequired
+                    ? '전체 연결 처음부터 다시 불러오기'
+                    : '다음 연결 다시 불러오기'}
+                </button>
+              </aside>
+            )}
+            {!neighborhoodRestartRequired && neighborhood?.nextCursor && (
+              <button
+                type="button"
+                className="secondary-button graph-neighborhood-more"
+                disabled={interactionDisabled || neighborhoodLoadingMore}
+                onClick={onLoadMoreNeighborhood}
+              >
+                {neighborhoodLoadingMore ? '다음 연결 불러오는 중…' : '연결 더 불러오기'}
+              </button>
+            )}
+            {neighborhood?.browserTruncated && (
+              <p className="graph-detail-state" role="status">
+                브라우저 표시 상한 100개에 도달해 나머지 연결은 불러오지 않았습니다.
+              </p>
+            )}
           </>
         )}
       </section>
@@ -444,9 +706,15 @@ export function MemoTagGraph({
   error,
   selectedNode,
   selectionProjectionVersion,
+  activeMemoNode,
   memoDetail,
   detailLoading,
   detailError,
+  neighborhood,
+  neighborhoodLoading,
+  neighborhoodLoadingMore,
+  neighborhoodError,
+  neighborhoodRestartRequired,
   pinPending,
   pinError,
   interactionDisabled,
@@ -454,6 +722,10 @@ export function MemoTagGraph({
   onSelectNode,
   onCloseDetail,
   onRetryDetail,
+  onRetryNeighborhood,
+  onLoadMoreNeighborhood,
+  onOpenNeighborhoodMemo,
+  onBackToNeighborhood,
   onSetPinned,
   onRetryPin,
 }: Props) {
@@ -467,7 +739,6 @@ export function MemoTagGraph({
     loading,
     selectionProjectionVersion,
   );
-  const neighborhood = visibleGraphNeighborhood(projection, currentNode?.id ?? null);
   const { nodes, edges } = buildFlowElements(projection, currentNode?.id ?? null);
   const currentNodeId = currentNode?.id ?? null;
 
@@ -603,8 +874,12 @@ export function MemoTagGraph({
       {currentNode && (
         <GraphNodeDetailDrawer
           node={currentNode}
-          neighbors={neighborhood.neighbors}
-          truncated={projection.truncated}
+          activeMemoNode={activeMemoNode}
+          neighborhood={neighborhood}
+          neighborhoodLoading={neighborhoodLoading}
+          neighborhoodLoadingMore={neighborhoodLoadingMore}
+          neighborhoodError={neighborhoodError}
+          neighborhoodRestartRequired={neighborhoodRestartRequired}
           memoDetail={memoDetail}
           loading={detailLoading}
           error={detailError}
@@ -613,6 +888,10 @@ export function MemoTagGraph({
           interactionDisabled={interactionDisabled}
           onClose={onCloseDetail}
           onRetry={onRetryDetail}
+          onRetryNeighborhood={onRetryNeighborhood}
+          onLoadMoreNeighborhood={onLoadMoreNeighborhood}
+          onOpenNeighborhoodMemo={onOpenNeighborhoodMemo}
+          onBackToNeighborhood={onBackToNeighborhood}
           onSetPinned={onSetPinned}
           onRetryPin={onRetryPin}
         />
