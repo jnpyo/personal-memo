@@ -65,7 +65,7 @@ class BoundedCloudGatewayInvokerTest {
     CloudGatewayAttemptObservation observation = invoker.observe(binding, request());
 
     assertThat(observation.termination()).isEqualTo(CloudGatewayAttemptTermination.GATEWAY_RESULT);
-    assertThat(observation.executionStarted()).isTrue();
+    assertThat(observation.executionState()).isEqualTo(CloudGatewayExecutionState.STARTED);
     assertThat(observation.gatewayResultObserved()).isTrue();
     assertThat(observation.elapsedMillis()).isNotNegative();
     assertThat(observation.effectiveResult()).isInstanceOf(CloudAnalysisResult.Success.class);
@@ -85,7 +85,7 @@ class BoundedCloudGatewayInvokerTest {
     CloudGatewayAttemptObservation observation = invoker.observe(binding, request());
 
     assertThat(observation.termination()).isEqualTo(CloudGatewayAttemptTermination.GATEWAY_RESULT);
-    assertThat(observation.executionStarted()).isTrue();
+    assertThat(observation.executionState()).isEqualTo(CloudGatewayExecutionState.STARTED);
     assertThat(observation.gatewayResultObserved()).isTrue();
     assertThat(observation.effectiveResult())
         .isEqualTo(CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNAVAILABLE));
@@ -171,7 +171,7 @@ class BoundedCloudGatewayInvokerTest {
           invoker.observe(binding, request(), Duration.ofMillis(50));
 
       assertThat(observation.termination()).isEqualTo(CloudGatewayAttemptTermination.TIMEOUT);
-      assertThat(observation.executionStarted()).isFalse();
+      assertThat(observation.executionState()).isEqualTo(CloudGatewayExecutionState.UNKNOWN);
       assertThat(observation.gatewayResultObserved()).isFalse();
       assertThat(observation.effectiveResult())
           .isEqualTo(CloudAnalysisResult.failure(CloudAnalysisFailureReason.TIMEOUT));
@@ -232,7 +232,7 @@ class BoundedCloudGatewayInvokerTest {
 
       assertThat(observation.termination())
           .isEqualTo(CloudGatewayAttemptTermination.EXECUTOR_REJECTED);
-      assertThat(observation.executionStarted()).isFalse();
+      assertThat(observation.executionState()).isEqualTo(CloudGatewayExecutionState.NOT_STARTED);
       assertThat(observation.gatewayResultObserved()).isFalse();
       assertThat(observation.effectiveResult())
           .isEqualTo(CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNAVAILABLE));
@@ -284,7 +284,7 @@ class BoundedCloudGatewayInvokerTest {
 
     assertThat(observation.termination())
         .isEqualTo(CloudGatewayAttemptTermination.UNEXPECTED_EXCEPTION);
-    assertThat(observation.executionStarted()).isTrue();
+    assertThat(observation.executionState()).isEqualTo(CloudGatewayExecutionState.STARTED);
     assertThat(observation.gatewayResultObserved()).isFalse();
     assertThat(observation.effectiveResult())
         .isEqualTo(CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE));
@@ -418,7 +418,7 @@ class BoundedCloudGatewayInvokerTest {
     assertThat(workerInterrupted.await(1, TimeUnit.SECONDS)).isTrue();
     assertThat(observed.get().termination())
         .isEqualTo(CloudGatewayAttemptTermination.CALLER_INTERRUPTED);
-    assertThat(observed.get().executionStarted()).isTrue();
+    assertThat(observed.get().executionState()).isEqualTo(CloudGatewayExecutionState.STARTED);
     assertThat(observed.get().gatewayResultObserved()).isFalse();
     assertThat(observed.get().effectiveResult())
         .isEqualTo(CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE));

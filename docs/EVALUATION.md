@@ -288,8 +288,10 @@ A real provider remains blocked until all of the following are true:
    V16's bounded context hash/version/count evidence, and V17's truthful attempt-state semantics must
    be retained. V15/V16 commit authority and the exact context snapshot before execution, then reuse
    the original token and database snapshot during caller-driven or bounded production recovery for
-   Fake/test gateways. V17 records only local observations and leaves unobserved remote result,
-   duration, usage, and cost unknown rather than inventing values. Any approved external provider
+   Fake/test gateways. V17 treats returned results as `STARTED`, executor rejection as definitive
+   `NOT_STARTED`, and a submitted termination without an observed start as `UNKNOWN`. It leaves
+   unobserved remote result, duration, usage, and cost unknown rather than inventing values. Any
+   approved external provider
    must honor the same token as its deduplication identity and preserve the fail-closed consent and
    finalization checks. Attempt retention/purge and real usage/cost reporting still require explicit
    approval.
@@ -323,8 +325,10 @@ This list distinguishes remaining blockers from the execution mechanics V15/V16/
   so the same token is never paired with different context. This supports recovery after a process
   restart but remains bounded at-least-once execution, not exactly-once delivery. V17 now records one
   internal owner-scoped row per claimed fence, up to `max_attempts`, with monotonic local duration
-  when termination is observed and `UNKNOWN` for unobserved remote truth. This is operational
-  evidence, not provider-selection accuracy evidence.
+  when termination is observed. Gateway result is `STARTED`, executor rejection is definitive
+  `NOT_STARTED`, and timeout/interruption or a post-submit unexpected termination without an observed
+  start is `UNKNOWN`, never `NOT_STARTED`; unobserved remote truth remains `UNKNOWN`. This is
+  operational evidence, not provider-selection accuracy evidence.
 - V13 enforces an owner-scoped exact consent pin: boolean true, the descriptor's exact policy
   version, and a non-null grant timestamp no later than the authorization-check instant. It revokes
   legacy boolean-only grants and rejects future-dated grants. `NO_NETWORK` Fake needs no consent;
@@ -336,10 +340,13 @@ This list distinguishes remaining blockers from the execution mechanics V15/V16/
 - Every new run carries server-owned transfer mode, gateway/provider/model/consent-policy versions,
   and outcome; provider-call runs additionally pin an immutable gateway binding. V15 stores internal
   dispatch/fence/lease evidence. V16 adds context raw/hash/version/count before the call and scrubs raw
-  at finalization while retaining hash/version/count. V17 distinguishes executor rejection from an
-  observed gateway `UNAVAILABLE`, records timeout/interruption/process-loss remote truth as unknown,
-  keeps locally observed Fake model-token/cost `NOT_APPLICABLE` with null numeric values, and leaves
-  process-loss usage/cost `UNKNOWN`. None of the
+  at finalization while retaining hash/version/count. V17 distinguishes definitive executor
+  rejection from an observed `STARTED` gateway `UNAVAILABLE`, records timeout/interruption/process-loss
+  remote truth as unknown, and keeps local termination observations for the model-free Fake at
+  `NOT_APPLICABLE` with null model-token/cost values even when start is uncertain. Observation-free
+  process-loss usage/cost remains `UNKNOWN`; a future real-model attempt is `NOT_APPLICABLE` only when
+  definitively `NOT_STARTED`, `UNKNOWN` when execution or remote completion is uncertain, and
+  `NOT_REPORTED` for an observed result until reporting exists. None of the
   payload/context evidence, attempt ledger, token, binding, fence, or lease is exposed through public
   DTOs, proposal JSON or `providerMetadata`, UI, evaluation reports, logs, browser storage, or
   service-worker caches. Attempt rows contain no provider text/ID/token/raw/context and receive no

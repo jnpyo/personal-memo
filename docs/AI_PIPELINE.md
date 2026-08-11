@@ -30,9 +30,10 @@ The repository now implements the model-free portion of Milestone 2:
   equality, the complete match set is used for unique-tag resolution, and a deterministic maximum of
   8 candidates is supplied as an internal gateway hint;
 - V17 bounded attempt evidence: each claimed fence for a new `gateway-attempt-v1` dispatch gets one
-  owner-scoped internal ledger row, with at most the dispatch's `max_attempts` rows; executor
-  rejection, gateway-returned failure, timeout, interruption, process loss, stale finalization, and
-  fenced-out completion keep separate local/remote truth;
+  owner-scoped internal ledger row, with at most the dispatch's `max_attempts` rows; a returned result
+  is `STARTED`, executor rejection is definitively `NOT_STARTED`, and a submitted termination without
+  an observed start remains `UNKNOWN`; local termination, remote result, process loss, stale
+  finalization, and fenced-out completion keep separate truth;
 - production-profile bounded recovery: every 30 seconds, a scheduler selects at most 25
   `PREPARED` or expired-lease `RUNNING` dispatches, obtains owner and the existing idempotency key
   only from owner-consistent database rows, and reuses the same claim/invoke/finalize lifecycle;
@@ -65,8 +66,9 @@ also enables a bounded periodic recovery worker, so a committed dispatch can res
 interruption or process restart without changing the public contract. V17 persists internal
 per-attempt lifecycle and monotonic local elapsed evidence, but does not expose it through the public
 POST, DTOs, proposal, `providerMetadata`, UI, or evaluation report. The current Fake has no model, so
-locally observed model-token and cost status is `NOT_APPLICABLE` with null numbers; an unobserved
-process loss remains `UNKNOWN`. Real-model numeric usage/cost
+any local termination observation is `NOT_APPLICABLE` with null model-token and cost numbers even
+when execution start is uncertain; an observation-free process loss remains `UNKNOWN`. Real-model
+numeric usage/cost
 reporting, aggregation, budget enforcement, related-memo retrieval, fuzzy/vector search, and
 embeddings remain unimplemented. The roadmap's real-provider adapter remains deferred by the
 project decision until explicitly authorized.
@@ -331,23 +333,26 @@ V17 adds `attempt_history_version` to the dispatch. Existing dispatches are back
 `none`; no historical attempt rows are invented. Every newly prepared gateway dispatch uses
 `gateway-attempt-v1`, and each successful claim inserts one owner-scoped row keyed by run and fence.
 The application admits no more rows than the persisted `max_attempts` and keeps at most one
-`IN_FLIGHT` row for a run. A local `EXECUTOR_REJECTED` observation means execution did not start and
-the remote result is `UNKNOWN`; it is distinct from an observed gateway result whose typed outcome is
-`UNAVAILABLE`. Likewise timeout, caller interruption, unexpected local termination, and process loss
-do not claim a provider result. Late completion from an obsolete fence is retained as `FENCED_OUT`
-instead of overwriting the run, and revision change during the current attempt records
-`STALE_FINALIZE`.
+`IN_FLIGHT` row for a run. A returned gateway result always means execution `STARTED`; its typed
+`UNAVAILABLE` outcome is therefore an observed result. A local `EXECUTOR_REJECTED` observation is the
+definitive `NOT_STARTED` case for executor submission, and its remote result remains `UNKNOWN`.
+After submission, timeout, caller interruption, and unexpected local termination record `STARTED`
+when start was observed and otherwise `UNKNOWN`; they never convert an unobserved start into
+`NOT_STARTED`, and they do not claim a provider result. Process loss likewise claims no provider
+result. Late completion from an obsolete fence is retained as `FENCED_OUT` instead of overwriting the
+run, and revision change during the current attempt records `STALE_FINALIZE`.
 
 Observed attempts use a monotonic local clock for non-negative elapsed milliseconds. This measures
 only the current process's submit/wait interval. Timeout and interruption retain that local duration
 but keep remote result truth `UNKNOWN`; an unobserved process loss has unknown duration and null
 milliseconds, and its model-token/cost evidence is also `UNKNOWN`. While a row is in flight,
-model-token and cost evidence is `PENDING`. A locally observed no-model Fake and any execution that
-never starts finish as `NOT_APPLICABLE` with null numeric fields. A future
-real-model result is currently `NOT_REPORTED` with null numbers because the gateway result contract
-does not carry usage or price; a terminated real-model attempt whose remote completion is uncertain
-is `UNKNOWN`. The database validates a future `REPORTED` numeric shape, but no runtime path writes
-model-token or cost numbers in this checkpoint and zero is never substituted for missing evidence.
+model-token and cost evidence is `PENDING`. A local termination observation for the model-free
+`NO_NETWORK` Fake is `NOT_APPLICABLE` with null numeric fields regardless of execution-start
+uncertainty. A future real-model attempt is `NOT_APPLICABLE` only when execution is definitively
+`NOT_STARTED`; uncertain execution or remote completion is `UNKNOWN`. An observed real-model result is
+currently `NOT_REPORTED` with null numbers because the gateway result contract does not carry usage or
+price. The database validates a future `REPORTED` numeric shape, but no runtime path writes model-token
+or cost numbers in this checkpoint and zero is never substituted for missing evidence.
 
 If a caller is interrupted or a process stops after a claim, the committed row remains recoverable.
 A later request with the same idempotency key still binds the currently configured gateway, requires

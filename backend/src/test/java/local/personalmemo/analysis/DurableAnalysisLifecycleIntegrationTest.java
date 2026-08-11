@@ -17,12 +17,14 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import local.personalmemo.analysis.application.AnalysisService;
+import local.personalmemo.analysis.application.BoundedCloudGatewayInvoker;
 import local.personalmemo.analysis.domain.CloudAnalysisGateway;
 import local.personalmemo.analysis.domain.CloudAnalysisRequest;
 import local.personalmemo.analysis.domain.CloudAnalysisResult;
@@ -40,6 +42,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.node.ObjectNode;
@@ -65,6 +68,7 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
 
   @MockitoBean private CloudAnalysisGateway cloudGateway;
   @Autowired private AnalysisService analysisService;
+  @Autowired private BoundedCloudGatewayInvoker cloudInvoker;
   @Autowired private TagRetrievalContextCodec tagContextCodec;
 
   @BeforeEach
@@ -277,6 +281,82 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
     assertThat(attempt.costAmount()).isNull();
     assertThat(attempt.costCurrency()).isNull();
     assertThat(attemptCount(runId)).isEqualTo(1L);
+  }
+
+  @Test
+  void queuedCallerInterruptionPersistsUnknownModelEvidence() throws Exception {
+    ThreadPoolExecutor boundedExecutor =
+        (ThreadPoolExecutor) ReflectionTestUtils.getField(cloudInvoker, "executor");
+    assertThat(boundedExecutor).isNotNull();
+    assertThat(boundedExecutor.getQueue()).isEmpty();
+    assertThat(boundedExecutor.getActiveCount()).isZero();
+
+    AtomicInteger gatewayCalls = new AtomicInteger();
+    when(cloudGateway.bind())
+        .thenReturn(
+            new CloudGatewayBinding(
+                NO_NETWORK_MODEL_DESCRIPTOR,
+                request -> {
+                  gatewayCalls.incrementAndGet();
+                  return CloudAnalysisResult.success(request.validatedLocalProposal());
+                }));
+    UUID queuedMemoId = createAmbiguousMemo("attempt-queued-interrupt");
+    CountDownLatch workersEntered = new CountDownLatch(boundedExecutor.getMaximumPoolSize());
+    CountDownLatch releaseWorkers = new CountDownLatch(1);
+    AtomicReference<Thread> queuedCallerThread = new AtomicReference<>();
+    ExecutorService queuedCaller = Executors.newSingleThreadExecutor();
+    Future<MvcResult> queued = null;
+
+    try {
+      for (int worker = 0; worker < boundedExecutor.getMaximumPoolSize(); worker++) {
+        boundedExecutor.execute(
+            () -> {
+              workersEntered.countDown();
+              awaitRelease(releaseWorkers);
+            });
+      }
+      assertThat(workersEntered.await(5, TimeUnit.SECONDS)).isTrue();
+      queued =
+          queuedCaller.submit(
+              () -> {
+                queuedCallerThread.set(Thread.currentThread());
+                return startAnalysis(queuedMemoId, "attempt-queued-interrupt-start", 1);
+              });
+      awaitExecutorQueueSize(boundedExecutor, 1);
+      queuedCallerThread.get().interrupt();
+      MvcResult interrupted = queued.get(5, TimeUnit.SECONDS);
+
+      assertThat(interrupted.getResponse().getStatus()).isEqualTo(409);
+      assertThat(response(interrupted).path("code").asText()).isEqualTo("ANALYSIS_IN_PROGRESS");
+      UUID queuedRunId = runLifecycle(queuedMemoId).runId();
+      AttemptLifecycle queuedAttempt = attemptLifecycle(queuedRunId, 1L);
+      assertThat(queuedAttempt.attemptState()).isEqualTo("IN_FLIGHT");
+      assertThat(queuedAttempt.executionState()).isEqualTo("UNKNOWN");
+      assertThat(queuedAttempt.localTermination()).isEqualTo("CALLER_INTERRUPTED");
+      assertThat(queuedAttempt.resultState()).isEqualTo("UNKNOWN");
+      assertThat(queuedAttempt.gatewayOutcome()).isNull();
+      assertThat(queuedAttempt.disposition()).isEqualTo("RECOVERY_PENDING");
+      assertThat(queuedAttempt.durationStatus()).isEqualTo("MEASURED");
+      assertThat(queuedAttempt.durationMs()).isNotNull().isNotNegative();
+      assertThat(queuedAttempt.modelTokenStatus()).isEqualTo("UNKNOWN");
+      assertThat(queuedAttempt.modelInputTokens()).isNull();
+      assertThat(queuedAttempt.modelOutputTokens()).isNull();
+      assertThat(queuedAttempt.modelTotalTokens()).isNull();
+      assertThat(queuedAttempt.costStatus()).isEqualTo("UNKNOWN");
+      assertThat(queuedAttempt.costAmount()).isNull();
+      assertThat(queuedAttempt.costCurrency()).isNull();
+      assertThat(gatewayCalls).hasValue(0);
+    } finally {
+      releaseWorkers.countDown();
+      if (queued != null) {
+        queued.cancel(true);
+      }
+      queuedCaller.shutdownNow();
+      assertThat(queuedCaller.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+      awaitExecutorIdle(boundedExecutor);
+    }
+    assertThat(gatewayCalls).hasValue(0);
+    assertNoCanonicalAnalysisWrites();
   }
 
   @Test
@@ -1485,6 +1565,25 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
     } catch (InterruptedException exception) {
       Thread.currentThread().interrupt();
     }
+  }
+
+  private void awaitExecutorQueueSize(ThreadPoolExecutor executor, int expectedSize)
+      throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (executor.getQueue().size() != expectedSize && System.nanoTime() < deadline) {
+      TimeUnit.MILLISECONDS.sleep(1);
+    }
+    assertThat(executor.getQueue()).hasSize(expectedSize);
+  }
+
+  private void awaitExecutorIdle(ThreadPoolExecutor executor) throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while ((!executor.getQueue().isEmpty() || executor.getActiveCount() != 0)
+        && System.nanoTime() < deadline) {
+      TimeUnit.MILLISECONDS.sleep(1);
+    }
+    assertThat(executor.getQueue()).isEmpty();
+    assertThat(executor.getActiveCount()).isZero();
   }
 
   private RunLifecycle runLifecycle(UUID memoId) {

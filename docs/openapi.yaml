@@ -452,13 +452,19 @@ paths:
         leases are skipped. Recovery after restart therefore reuses the persisted binding, deadline,
         attempt count, lease/fence, exact V16 database context snapshot, bounded out-of-transaction
         Fake call, V17 fence observation, revision-rechecking finalization, and the same
-        provider-request token. Executor rejection is distinct from a gateway-returned UNAVAILABLE.
-        Timeout, caller interruption, and process loss leave remote result truth UNKNOWN. An
+        provider-request token. Any gateway result is STARTED. Executor rejection proves
+        NOT_STARTED and is distinct from a gateway-returned UNAVAILABLE. After submission, timeout,
+        caller interruption, or unexpected local termination is STARTED when start was observed and
+        otherwise UNKNOWN, never NOT_STARTED. Those terminations and process loss leave remote result
+        truth UNKNOWN. An
         obsolete-fence completion records only the result actually observed and cannot overwrite the
         run. Observed local elapsed uses a monotonic clock; process-loss duration is unknown.
-        Locally observed Fake model-token/cost evidence is NOT_APPLICABLE with null numbers, while
-        process-loss evidence is UNKNOWN. A future real-model result remains NOT_REPORTED until
-        usage/cost reporting is wired; missing evidence is never replaced by zero. Retrieval is not
+        A local termination observation for the no-model Fake keeps model-token/cost evidence
+        NOT_APPLICABLE with null numbers even when start is uncertain, while observation-free
+        process-loss evidence is UNKNOWN. A future real-model attempt is NOT_APPLICABLE only when
+        definitively NOT_STARTED, UNKNOWN when execution or remote completion is uncertain, and
+        NOT_REPORTED after an observed result until usage/cost reporting is wired; missing evidence is
+        never replaced by zero. Retrieval is not
         rerun, so the same token cannot be retried with different context. This is an
         at-least-once transport boundary, not exactly-once, so a real provider must honor that token
         idempotently. Internal authorization/grant evidence, raw recovery key, provider token,

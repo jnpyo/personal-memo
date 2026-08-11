@@ -109,12 +109,17 @@ operational approval. Resolved decisions are not implementation prompts.
   service-worker caches.
 - V17 versions new dispatches as `gateway-attempt-v1` and records at most `max_attempts` owner-scoped
   fence rows. Historical dispatches remain `attempt_history_version=none` with no backfilled rows.
-  Executor rejection is distinct from a gateway-returned `UNAVAILABLE`; timeout, caller interruption,
-  and process loss keep remote result truth `UNKNOWN`. An obsolete-fence observation preserves only
-  actually observed truth and cannot overwrite the run. Observed local elapsed uses a
-  monotonic clock, while process-loss duration and usage/cost remain unknown. Locally observed Fake
-  model-token/cost is `NOT_APPLICABLE`/null, and a future real-model result remains `NOT_REPORTED`/null
-  until the gateway contract reports usage and price. The ledger is absent from public
+  A gateway result is `STARTED`; executor rejection proves `NOT_STARTED` and is distinct from a
+  gateway-returned `UNAVAILABLE`. After submission, timeout, caller interruption, or unexpected local
+  termination is `STARTED` when start was observed and otherwise `UNKNOWN`, never definitive
+  `NOT_STARTED`; these terminations and process loss keep remote result truth `UNKNOWN`. An
+  obsolete-fence observation preserves only actually observed truth and cannot overwrite the run.
+  Observed local elapsed uses a monotonic clock, while observation-free process-loss duration and
+  usage/cost remain unknown. A local termination observation for the model-free Fake remains
+  `NOT_APPLICABLE`/null even when execution start is uncertain. A future real-model attempt is
+  `NOT_APPLICABLE` only when definitively `NOT_STARTED`, `UNKNOWN` when execution or remote completion
+  is uncertain, and `NOT_REPORTED` after a result until the gateway contract reports usage and price.
+  The ledger is absent from public
   DTO/proposal/metadata/UI/eval
   report/log/browser/service-worker boundaries, stores no provider text/ID/token/raw/context, and has
   no independent TTL before an approved purge policy.

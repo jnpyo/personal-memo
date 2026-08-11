@@ -1273,7 +1273,7 @@ public class AnalysisService {
       CloudGatewayAttemptObservation observation,
       String disposition,
       Instant observedAt) {
-    String modelEvidenceStatus = modelEvidenceStatus(attempt, observation);
+    String modelEvidenceStatus = modelEvidenceStatus(attempt.request().descriptor(), observation);
     String resultState = observation.gatewayResultObserved() ? "OBSERVED" : "UNKNOWN";
     String gatewayOutcome =
         observation.gatewayResultObserved()
@@ -1316,7 +1316,7 @@ public class AnalysisService {
                and attempt_state in ('IN_FLIGHT', 'SUPERSEDED')
                 """)
             .param("attemptState", attemptState)
-            .param("executionState", observation.executionStarted() ? "STARTED" : "NOT_STARTED")
+            .param("executionState", observation.executionState().name())
             .param("localTermination", localTermination)
             .param("resultState", resultState)
             .param("gatewayOutcome", gatewayOutcome)
@@ -1374,14 +1374,17 @@ public class AnalysisService {
     }
   }
 
-  private String modelEvidenceStatus(
-      StartDispatch attempt, CloudGatewayAttemptObservation observation) {
-    if (!observation.executionStarted()
-        || (attempt.request().descriptor().transferMode() == CloudTransferMode.NO_NETWORK
-            && "none".equals(attempt.request().descriptor().modelVersion()))) {
+  static String modelEvidenceStatus(
+      CloudGatewayDescriptor descriptor, CloudGatewayAttemptObservation observation) {
+    if (descriptor.transferMode() == CloudTransferMode.NO_NETWORK
+        && "none".equals(descriptor.modelVersion())) {
       return "NOT_APPLICABLE";
     }
-    return observation.gatewayResultObserved() ? "NOT_REPORTED" : "UNKNOWN";
+    return switch (observation.executionState()) {
+      case NOT_STARTED -> "NOT_APPLICABLE";
+      case UNKNOWN -> "UNKNOWN";
+      case STARTED -> observation.gatewayResultObserved() ? "NOT_REPORTED" : "UNKNOWN";
+    };
   }
 
   private CloudAnalysisOutcome gatewayOutcome(CloudAnalysisResult result) {

@@ -219,18 +219,21 @@ V17 versions new dispatches as `gateway-attempt-v1` and inserts one owner-scoped
 `analysis_run_dispatch_attempts` row for every claimed fence, bounded by the dispatch's
 `max_attempts`. Existing dispatches remain `attempt_history_version=none` and receive no invented
 history. The ledger separates local termination from remote result truth: executor rejection is
-`NOT_STARTED` / `EXECUTOR_REJECTED` with an unknown gateway result, while a gateway-returned typed
-`UNAVAILABLE` is an observed result. Timeout, caller interruption, unexpected local termination, and
-process loss do not assert an unobserved provider result. Obsolete-fence completion and stale
-finalization remain evidence without authority to overwrite the final run.
+definitively `NOT_STARTED` / `EXECUTOR_REJECTED` with an unknown gateway result, while any returned
+gateway result is `STARTED`; a typed `UNAVAILABLE` is therefore an observed result. After submission,
+timeout, caller interruption, and unexpected local termination are `STARTED` when start was observed
+and otherwise `UNKNOWN`, never definitive `NOT_STARTED`. Those terminations and process loss do not
+assert an unobserved provider result. Obsolete-fence completion and stale finalization remain evidence
+without authority to overwrite the final run.
 
 For an observed termination, elapsed milliseconds come from a monotonic local clock around executor
 submission and waiting; this is not wall-clock or end-to-end user latency. Timeout and interruption
 may have measured local duration while remote result truth remains unknown. Process loss has unknown
-duration and unknown model-token/cost evidence. A locally observed model-free Fake and execution that
-never starts use `NOT_APPLICABLE` plus null model-token/cost numbers. The runtime does not yet receive
-numeric usage or price from a real-model
-gateway: an observed result would be `NOT_REPORTED`, and uncertain termination would be `UNKNOWN`.
+duration and unknown model-token/cost evidence. Every local termination observation for the
+`NO_NETWORK`, model-version `none` Fake is `NOT_APPLICABLE` with null model-token/cost numbers even when
+execution start is uncertain; an observation-free process loss remains `UNKNOWN`. For a future
+real-model gateway, definitive `NOT_STARTED` is `NOT_APPLICABLE`, an observed result is `NOT_REPORTED`,
+and uncertain execution or remote completion is `UNKNOWN`.
 The schema validates a future `REPORTED` numeric shape but no current path writes those numbers or
 substitutes zero for missing evidence.
 

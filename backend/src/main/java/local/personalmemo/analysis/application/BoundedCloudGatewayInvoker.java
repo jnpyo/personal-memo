@@ -85,7 +85,7 @@ public final class BoundedCloudGatewayInvoker implements AutoCloseable {
     } catch (RejectedExecutionException exception) {
       return observation(
           CloudGatewayAttemptTermination.EXECUTOR_REJECTED,
-          false,
+          CloudGatewayExecutionState.NOT_STARTED,
           startedAtNanos,
           CloudAnalysisFailureReason.UNAVAILABLE);
     }
@@ -94,14 +94,14 @@ public final class BoundedCloudGatewayInvoker implements AutoCloseable {
       CloudAnalysisResult result = future.get(attemptTimeoutNanos, TimeUnit.NANOSECONDS);
       return new CloudGatewayAttemptObservation(
           CloudGatewayAttemptTermination.GATEWAY_RESULT,
-          executionStarted.get(),
+          CloudGatewayExecutionState.STARTED,
           elapsedMillis(startedAtNanos, System.nanoTime()),
           result);
     } catch (TimeoutException exception) {
       future.cancel(true);
       return observation(
           CloudGatewayAttemptTermination.TIMEOUT,
-          executionStarted.get(),
+          observedExecutionState(executionStarted),
           startedAtNanos,
           CloudAnalysisFailureReason.TIMEOUT);
     } catch (InterruptedException exception) {
@@ -109,19 +109,19 @@ public final class BoundedCloudGatewayInvoker implements AutoCloseable {
       Thread.currentThread().interrupt();
       return observation(
           CloudGatewayAttemptTermination.CALLER_INTERRUPTED,
-          executionStarted.get(),
+          observedExecutionState(executionStarted),
           startedAtNanos,
           CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
     } catch (CancellationException exception) {
       return observation(
           CloudGatewayAttemptTermination.UNEXPECTED_EXCEPTION,
-          executionStarted.get(),
+          observedExecutionState(executionStarted),
           startedAtNanos,
           CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
     } catch (ExecutionException exception) {
       return observation(
           CloudGatewayAttemptTermination.UNEXPECTED_EXCEPTION,
-          executionStarted.get(),
+          observedExecutionState(executionStarted),
           startedAtNanos,
           CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
     }
@@ -129,14 +129,22 @@ public final class BoundedCloudGatewayInvoker implements AutoCloseable {
 
   private CloudGatewayAttemptObservation observation(
       CloudGatewayAttemptTermination termination,
-      boolean executionStarted,
+      CloudGatewayExecutionState executionState,
       long startedAtNanos,
       CloudAnalysisFailureReason effectiveFailureReason) {
     return new CloudGatewayAttemptObservation(
         termination,
-        executionStarted,
+        executionState,
         elapsedMillis(startedAtNanos, System.nanoTime()),
         CloudAnalysisResult.failure(effectiveFailureReason));
+  }
+
+  private CloudGatewayExecutionState observedExecutionState(AtomicBoolean executionStarted) {
+    // Cancellation can race with callable entry, so false after submission is not proof that the
+    // gateway execution never started.
+    return executionStarted.get()
+        ? CloudGatewayExecutionState.STARTED
+        : CloudGatewayExecutionState.UNKNOWN;
   }
 
   static long elapsedMillis(long startedAtNanos, long finishedAtNanos) {

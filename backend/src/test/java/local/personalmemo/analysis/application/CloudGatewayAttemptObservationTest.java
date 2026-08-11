@@ -17,7 +17,7 @@ class CloudGatewayAttemptObservationTest {
 
     assertThat(observation.termination())
         .isEqualTo(CloudGatewayAttemptTermination.UNEXPECTED_EXCEPTION);
-    assertThat(observation.executionStarted()).isFalse();
+    assertThat(observation.executionState()).isEqualTo(CloudGatewayExecutionState.NOT_STARTED);
     assertThat(observation.elapsedMillis()).isZero();
     assertThat(observation.gatewayResultObserved()).isFalse();
     assertThat(observation.effectiveResult())
@@ -30,7 +30,7 @@ class CloudGatewayAttemptObservationTest {
             () ->
                 new CloudGatewayAttemptObservation(
                     CloudGatewayAttemptTermination.GATEWAY_RESULT,
-                    false,
+                    CloudGatewayExecutionState.UNKNOWN,
                     0,
                     CloudAnalysisResult.failure(CloudAnalysisFailureReason.PROVIDER_ERROR)))
         .isInstanceOf(IllegalArgumentException.class)
@@ -39,7 +39,7 @@ class CloudGatewayAttemptObservationTest {
             () ->
                 new CloudGatewayAttemptObservation(
                     CloudGatewayAttemptTermination.TIMEOUT,
-                    true,
+                    CloudGatewayExecutionState.STARTED,
                     0,
                     CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNAVAILABLE)))
         .isInstanceOf(IllegalArgumentException.class)
@@ -48,7 +48,7 @@ class CloudGatewayAttemptObservationTest {
             () ->
                 new CloudGatewayAttemptObservation(
                     CloudGatewayAttemptTermination.EXECUTOR_REJECTED,
-                    true,
+                    CloudGatewayExecutionState.STARTED,
                     0,
                     CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNAVAILABLE)))
         .isInstanceOf(IllegalArgumentException.class)
@@ -57,10 +57,58 @@ class CloudGatewayAttemptObservationTest {
             () ->
                 new CloudGatewayAttemptObservation(
                     CloudGatewayAttemptTermination.UNEXPECTED_EXCEPTION,
-                    false,
+                    CloudGatewayExecutionState.UNKNOWN,
                     -1,
                     CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE)))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("elapsedMillis must not be negative.");
+  }
+
+  @Test
+  void preservesUnknownForSubmittedAttemptsWithoutAConfirmedStart() {
+    CloudGatewayAttemptObservation timeout =
+        new CloudGatewayAttemptObservation(
+            CloudGatewayAttemptTermination.TIMEOUT,
+            CloudGatewayExecutionState.UNKNOWN,
+            5,
+            CloudAnalysisResult.failure(CloudAnalysisFailureReason.TIMEOUT));
+    CloudGatewayAttemptObservation interrupted =
+        new CloudGatewayAttemptObservation(
+            CloudGatewayAttemptTermination.CALLER_INTERRUPTED,
+            CloudGatewayExecutionState.UNKNOWN,
+            6,
+            CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE));
+    CloudGatewayAttemptObservation unexpected =
+        new CloudGatewayAttemptObservation(
+            CloudGatewayAttemptTermination.UNEXPECTED_EXCEPTION,
+            CloudGatewayExecutionState.UNKNOWN,
+            7,
+            CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE));
+
+    assertThat(timeout.executionState()).isEqualTo(CloudGatewayExecutionState.UNKNOWN);
+    assertThat(interrupted.executionState()).isEqualTo(CloudGatewayExecutionState.UNKNOWN);
+    assertThat(unexpected.executionState()).isEqualTo(CloudGatewayExecutionState.UNKNOWN);
+  }
+
+  @Test
+  void rejectsDefiniteNotStartedForSubmittedTimeoutsAndInterruptions() {
+    assertThatThrownBy(
+            () ->
+                new CloudGatewayAttemptObservation(
+                    CloudGatewayAttemptTermination.TIMEOUT,
+                    CloudGatewayExecutionState.NOT_STARTED,
+                    0,
+                    CloudAnalysisResult.failure(CloudAnalysisFailureReason.TIMEOUT)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("A submitted execution without a confirmed start must remain unknown.");
+    assertThatThrownBy(
+            () ->
+                new CloudGatewayAttemptObservation(
+                    CloudGatewayAttemptTermination.CALLER_INTERRUPTED,
+                    CloudGatewayExecutionState.NOT_STARTED,
+                    0,
+                    CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("A submitted execution without a confirmed start must remain unknown.");
   }
 }

@@ -259,11 +259,13 @@ recovery가 같은 deadline과 `max_attempts` 안에서 lease를 재claim한다.
 at-least-once이고 실제 provider는 같은 `pmr1_...` token을 멱등하게 처리해야 한다. V16 recovery는
 retrieval을 다시 실행하지 않고 dispatch의 동일한 DB snapshot만 decode하므로 같은 token에 다른
 context input을 붙이지 않는다. V17은 새 `gateway-attempt-v1` dispatch의 claim fence마다 내부
-attempt row를 만들고, 종료가 로컬에서 관측된 경우 monotonic elapsed를 저장한다. timeout,
-interruption, process loss처럼 provider 결과를 확인하지 못한 경우 remote result는 `UNKNOWN`으로
-남긴다. 로컬에서 관측한 현재 Fake의 model-token/cost는 `NOT_APPLICABLE`/null이고 process loss는
-`UNKNOWN`/null이며, 실제 model usage/cost 숫자 수집,
-집계와 related-memo/fuzzy/vector/embedding context는 없다.
+attempt row를 만들고, 종료가 로컬에서 관측된 경우 monotonic elapsed를 저장한다. gateway result는
+`STARTED`, executor rejection은 확정적 `NOT_STARTED`다. submit 뒤 timeout·interruption·unexpected
+termination은 시작 관측이 있으면 `STARTED`, 없으면 `UNKNOWN`이며 `NOT_STARTED`로 단정하지 않는다.
+provider 결과를 확인하지 못한 termination과 process loss의 remote result는 `UNKNOWN`이다. local
+termination을 관측한 현재 model-free Fake의 model-token/cost는 execution uncertainty와 무관하게
+`NOT_APPLICABLE`/null이고, observation-free process loss는 `UNKNOWN`/null이다. 실제 model usage/cost
+숫자 수집·집계와 related-memo/fuzzy/vector/embedding context는 없다.
 
 Proposal schema v2는 `dateCandidates[].candidateId`와 nullable
 `itemCandidates[].dueDateCandidateId`를 기존 `proposal_json` JSONB 안에 저장하고, run의 기존
@@ -374,18 +376,21 @@ claim transaction은 fence row를 `IN_FLIGHT`/`PENDING`으로 만든다. applica
 lease를 잃은 process는 다음 claim에서 `PROCESS_LOST`/`SUPERSEDED`가 되며 remote result와 duration을
 `UNKNOWN`/null로 남긴다.
 
-`EXECUTOR_REJECTED`는 `NOT_STARTED`이고 provider 실행 결과가 아니므로 `result_state=UNKNOWN`,
-`gateway_outcome=null`이다. 반대로 gateway가 typed `UNAVAILABLE`을 반환하면 local termination은
-`RESULT`, result state는 `OBSERVED`, gateway outcome은 `UNAVAILABLE`이다. timeout·interrupt·unexpected
-local termination도 local control-flow evidence와 provider remote truth를 분리한다.
+`RESULT`는 execution `STARTED`, result state `OBSERVED`다. gateway가 typed `UNAVAILABLE`을 반환해도
+이 규칙을 따르며 gateway outcome만 `UNAVAILABLE`이다. `EXECUTOR_REJECTED`는 확정적 `NOT_STARTED`이고
+provider 실행 결과가 아니므로 `result_state=UNKNOWN`, `gateway_outcome=null`이다. submit 뒤
+timeout·interrupt·unexpected local termination은 start flag가 관측되면 `STARTED`, 관측되지 않으면
+`UNKNOWN`이며 후자를 `NOT_STARTED`로 기록하지 않는다. 이 local control-flow evidence와 provider
+remote truth는 분리된다.
 
 프로세스가 termination을 관측하면 `System.nanoTime` 기반 submit/wait elapsed를 non-negative
 millisecond로 저장한다. timeout/interruption은 measured local duration과 unknown remote result를
 함께 가질 수 있다. process loss는 model-token/cost도 `UNKNOWN`/null이다. locally observed current
-Fake는 model version `none`이므로 model-token/cost status가 `NOT_APPLICABLE`이고 모든 숫자 field는
-null이다. 미래 real-model의 observed result도 현재 gateway
-계약이 usage/cost를 보고하지 않으므로 `NOT_REPORTED`/null이고, remote completion이 불확실하면
-`UNKNOWN`/null이다. `REPORTED` branch는 각 token 값을 0–1,000,000,000으로 제한하고 total이
+Fake는 `NO_NETWORK`, model version `none`이므로 execution-start uncertainty와 무관하게
+model-token/cost status가 `NOT_APPLICABLE`이고 모든 숫자 field는 null이다. 미래 real-model은 확정적
+`NOT_STARTED`일 때만 `NOT_APPLICABLE`/null이고, execution 또는 remote completion이 불확실하면
+`UNKNOWN`/null이다. observed result도 현재 gateway 계약이 usage/cost를 보고하지 않으므로
+`NOT_REPORTED`/null이다. `REPORTED` branch는 각 token 값을 0–1,000,000,000으로 제한하고 total이
 input+output 이상인지 확인하며, finite non-negative amount와 uppercase 3-letter currency의 미래
 shape만 검증한다. 현재 runtime은 numeric usage/cost를 쓰지 않는다.
 

@@ -25,6 +25,7 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
   tag context to that request token and keeps only hash/version/count after finalization. The
   production scheduler reuses that same DB snapshot and lifecycle for a maximum of 25 eligible rows
   every 30 seconds. V17 adds a fence-scoped owner ledger with truthful local duration and explicit
+  `STARTED` result, definitive `NOT_STARTED` rejection, uncertain-start `UNKNOWN`, and corresponding
   unknown/not-applicable/not-reported usage/cost states; historical dispatches remain `none` with no
   backfilled attempts. None of the internal evidence, attempt rows, recovery key/context, dispatch
   proposal/binding, or token is exposed through public DTOs, proposal JSON or `providerMetadata`, UI,
@@ -209,9 +210,14 @@ validation. The transport boundary remains at-least-once after an uncertain cras
 approved provider must honor the durable token idempotently. Production background scheduling and
 restart recovery reuse that same lifecycle with a 25-row/30-second bound; they do not provide an
 exactly-once guarantee. V17 records at most one internal row per claimed fence, distinguishes
-executor rejection from gateway-returned `UNAVAILABLE`, uses monotonic local elapsed for observed
-termination, and leaves timeout/interruption/process-loss remote truth unknown. Locally observed Fake
-model-token/cost is `NOT_APPLICABLE`/null while process-loss evidence is `UNKNOWN`; real-model numeric
+definitive `NOT_STARTED` executor rejection from a `STARTED` gateway-returned `UNAVAILABLE`, and uses
+monotonic local elapsed for observed termination. A submitted timeout/interruption or unexpected local
+termination is `STARTED` when start was observed and otherwise `UNKNOWN`, never `NOT_STARTED`; these
+terminations and process loss leave remote truth unknown. A local termination observation for the
+model-free Fake keeps model-token/cost `NOT_APPLICABLE`/null even when start is uncertain, while
+observation-free process-loss evidence is `UNKNOWN`. A future real-model attempt is `NOT_APPLICABLE`
+only when definitively `NOT_STARTED`, `UNKNOWN` for uncertain execution or remote completion, and
+`NOT_REPORTED` for an observed result until reporting exists; real-model numeric
 reporting, aggregation, budget enforcement, an approved
 attempt-retention/purge policy, related-memo/fuzzy/vector/embedding context, and the remaining privacy,
 evaluation, provider/region/retention/budget decisions remain separate gates.

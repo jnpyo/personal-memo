@@ -8,25 +8,26 @@ import local.personalmemo.analysis.domain.CloudGatewayAttemptTermination;
 /** Sanitized local observation of one bounded cloud gateway attempt. */
 public record CloudGatewayAttemptObservation(
     CloudGatewayAttemptTermination termination,
-    boolean executionStarted,
+    CloudGatewayExecutionState executionState,
     long elapsedMillis,
     CloudAnalysisResult effectiveResult) {
 
   public static CloudGatewayAttemptObservation unexpectedNotStarted() {
     return new CloudGatewayAttemptObservation(
         CloudGatewayAttemptTermination.UNEXPECTED_EXCEPTION,
-        false,
+        CloudGatewayExecutionState.NOT_STARTED,
         0,
         CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE));
   }
 
   public CloudGatewayAttemptObservation {
     termination = Objects.requireNonNull(termination, "termination");
+    executionState = Objects.requireNonNull(executionState, "executionState");
     effectiveResult = Objects.requireNonNull(effectiveResult, "effectiveResult");
     if (elapsedMillis < 0) {
       throw new IllegalArgumentException("elapsedMillis must not be negative.");
     }
-    requireCoherentExecutionState(termination, executionStarted);
+    requireCoherentExecutionState(termination, executionState);
     requireCoherentEffectiveResult(termination, effectiveResult);
   }
 
@@ -35,12 +36,20 @@ public record CloudGatewayAttemptObservation(
   }
 
   private static void requireCoherentExecutionState(
-      CloudGatewayAttemptTermination termination, boolean executionStarted) {
-    if (termination == CloudGatewayAttemptTermination.GATEWAY_RESULT && !executionStarted) {
+      CloudGatewayAttemptTermination termination, CloudGatewayExecutionState executionState) {
+    if (termination == CloudGatewayAttemptTermination.GATEWAY_RESULT
+        && executionState != CloudGatewayExecutionState.STARTED) {
       throw new IllegalArgumentException("A gateway result requires a started execution.");
     }
-    if (termination == CloudGatewayAttemptTermination.EXECUTOR_REJECTED && executionStarted) {
+    if (termination == CloudGatewayAttemptTermination.EXECUTOR_REJECTED
+        && executionState != CloudGatewayExecutionState.NOT_STARTED) {
       throw new IllegalArgumentException("A rejected execution cannot have started.");
+    }
+    if ((termination == CloudGatewayAttemptTermination.TIMEOUT
+            || termination == CloudGatewayAttemptTermination.CALLER_INTERRUPTED)
+        && executionState == CloudGatewayExecutionState.NOT_STARTED) {
+      throw new IllegalArgumentException(
+          "A submitted execution without a confirmed start must remain unknown.");
     }
   }
 
@@ -66,8 +75,8 @@ public record CloudGatewayAttemptObservation(
   public String toString() {
     return "CloudGatewayAttemptObservation[termination="
         + termination
-        + ", executionStarted="
-        + executionStarted
+        + ", executionState="
+        + executionState
         + ", elapsedMillis="
         + elapsedMillis
         + ", gatewayResultObserved="
