@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -52,6 +53,13 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
           "durable-lifecycle-test-v1",
           "test-fake",
           "none",
+          "no-network-v1",
+          CloudTransferMode.NO_NETWORK);
+  private static final CloudGatewayDescriptor NO_NETWORK_MODEL_DESCRIPTOR =
+      new CloudGatewayDescriptor(
+          "durable-lifecycle-model-test-v1",
+          "test-model-provider",
+          "test-model-v1",
           "no-network-v1",
           CloudTransferMode.NO_NETWORK);
 
@@ -177,6 +185,244 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
       releaseGateway.countDown();
       caller.shutdownNow();
       assertThat(caller.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+    }
+  }
+
+  @Test
+  void successfulFakeAttemptPersistsMeasuredInternalHistoryWithoutInventedUsage() throws Exception {
+    UUID memoId = createAmbiguousMemo("attempt-success");
+
+    MvcResult completed = startAnalysis(memoId, "attempt-success-start", 1);
+
+    assertThat(completed.getResponse().getStatus()).isEqualTo(200);
+    UUID runId = UUID.fromString(response(completed).path("id").asText());
+    AttemptLifecycle attempt = attemptLifecycle(runId, 1L);
+    assertThat(attempt.attemptState()).isEqualTo("OBSERVED");
+    assertThat(attempt.executionState()).isEqualTo("STARTED");
+    assertThat(attempt.localTermination()).isEqualTo("RESULT");
+    assertThat(attempt.resultState()).isEqualTo("OBSERVED");
+    assertThat(attempt.gatewayOutcome()).isEqualTo("SUCCESS");
+    assertThat(attempt.disposition()).isEqualTo("APPLIED_TO_RUN");
+    assertThat(attempt.durationStatus()).isEqualTo("MEASURED");
+    assertThat(attempt.durationMs()).isNotNull().isNotNegative();
+    assertThat(attempt.modelTokenStatus()).isEqualTo("NOT_APPLICABLE");
+    assertThat(attempt.modelInputTokens()).isNull();
+    assertThat(attempt.modelOutputTokens()).isNull();
+    assertThat(attempt.modelTotalTokens()).isNull();
+    assertThat(attempt.costStatus()).isEqualTo("NOT_APPLICABLE");
+    assertThat(attempt.costAmount()).isNull();
+    assertThat(attempt.costCurrency()).isNull();
+    assertThat(attempt.claimedAt()).isNotNull();
+    assertThat(attempt.leaseExpiresAt()).isAfter(attempt.claimedAt());
+    assertThat(attempt.observedAt()).isNotNull();
+    assertThat(attemptCount(runId)).isEqualTo(1L);
+
+    UUID proposalId = UUID.fromString(response(completed).path("proposalId").asText());
+    MvcResult proposal =
+        mvc.perform(get("/api/v1/analysis-proposals/{id}", proposalId)).andReturn();
+    String runPayload = response(completed).toString();
+    String proposalPayload = response(proposal).toString();
+    for (String internalField :
+        List.of(
+            "attemptHistory",
+            "attempt_history",
+            "attemptState",
+            "executionState",
+            "localTermination",
+            "resultState",
+            "gatewayOutcome",
+            "disposition",
+            "durationStatus",
+            "durationMs",
+            "modelTokenStatus",
+            "modelInputTokens",
+            "modelOutputTokens",
+            "modelTotalTokens",
+            "costStatus",
+            "costAmount",
+            "costCurrency",
+            "fenceToken")) {
+      assertThat(runPayload).doesNotContain(internalField);
+      assertThat(proposalPayload).doesNotContain(internalField);
+    }
+    assertThat(runPayload)
+        .doesNotContain("APPLIED_TO_RUN", "MEASURED", "NOT_APPLICABLE", "OBSERVED", "STARTED");
+    assertThat(proposalPayload)
+        .doesNotContain("APPLIED_TO_RUN", "MEASURED", "NOT_APPLICABLE", "OBSERVED", "STARTED");
+  }
+
+  @Test
+  void successfulNoNetworkModelAttemptKeepsUnreportedUsageDistinctFromNotApplicable()
+      throws Exception {
+    when(cloudGateway.bind())
+        .thenReturn(
+            new CloudGatewayBinding(
+                NO_NETWORK_MODEL_DESCRIPTOR,
+                request -> CloudAnalysisResult.success(request.validatedLocalProposal())));
+    UUID memoId = createAmbiguousMemo("attempt-unreported-model");
+
+    MvcResult completed = startAnalysis(memoId, "attempt-unreported-model-start", 1);
+
+    assertThat(completed.getResponse().getStatus()).isEqualTo(200);
+    UUID runId = UUID.fromString(response(completed).path("id").asText());
+    AttemptLifecycle attempt = attemptLifecycle(runId, 1L);
+    assertThat(attempt.localTermination()).isEqualTo("RESULT");
+    assertThat(attempt.resultState()).isEqualTo("OBSERVED");
+    assertThat(attempt.gatewayOutcome()).isEqualTo("SUCCESS");
+    assertThat(attempt.modelTokenStatus()).isEqualTo("NOT_REPORTED");
+    assertThat(attempt.modelInputTokens()).isNull();
+    assertThat(attempt.modelOutputTokens()).isNull();
+    assertThat(attempt.modelTotalTokens()).isNull();
+    assertThat(attempt.costStatus()).isEqualTo("NOT_REPORTED");
+    assertThat(attempt.costAmount()).isNull();
+    assertThat(attempt.costCurrency()).isNull();
+    assertThat(attemptCount(runId)).isEqualTo(1L);
+  }
+
+  @Test
+  void interruptedCallerGetsARecoverableConflictAfterTheAttemptObservationCommits()
+      throws Exception {
+    CountDownLatch gatewayEntered = new CountDownLatch(1);
+    CountDownLatch gatewayInterrupted = new CountDownLatch(1);
+    AtomicReference<Thread> callerThread = new AtomicReference<>();
+    when(cloudGateway.bind())
+        .thenReturn(
+            binding(
+                request -> {
+                  gatewayEntered.countDown();
+                  try {
+                    new CountDownLatch(1).await();
+                  } catch (InterruptedException exception) {
+                    gatewayInterrupted.countDown();
+                    Thread.currentThread().interrupt();
+                  }
+                  return CloudAnalysisResult.success(request.validatedLocalProposal());
+                }));
+    UUID memoId = createAmbiguousMemo("attempt-caller-interrupt");
+
+    ExecutorService caller = Executors.newSingleThreadExecutor();
+    Future<MvcResult> started =
+        caller.submit(
+            () -> {
+              callerThread.set(Thread.currentThread());
+              return startAnalysis(memoId, "attempt-caller-interrupt-start", 1);
+            });
+    try {
+      assertThat(gatewayEntered.await(5, TimeUnit.SECONDS)).isTrue();
+      callerThread.get().interrupt();
+
+      MvcResult conflict = started.get(5, TimeUnit.SECONDS);
+      assertThat(conflict.getResponse().getStatus()).isEqualTo(409);
+      assertThat(response(conflict).path("code").asText()).isEqualTo("ANALYSIS_IN_PROGRESS");
+      assertThat(gatewayInterrupted.await(1, TimeUnit.SECONDS)).isTrue();
+
+      UUID runId = runLifecycle(memoId).runId();
+      AttemptLifecycle observation = attemptLifecycle(runId, 1L);
+      assertThat(observation.attemptState()).isEqualTo("IN_FLIGHT");
+      assertThat(observation.localTermination()).isEqualTo("CALLER_INTERRUPTED");
+      assertThat(observation.resultState()).isEqualTo("UNKNOWN");
+      assertThat(observation.disposition()).isEqualTo("RECOVERY_PENDING");
+      assertThat(observation.durationStatus()).isEqualTo("MEASURED");
+      assertThat(storedStartStatus("attempt-caller-interrupt-start")).isEqualTo("RUNNING");
+    } finally {
+      started.cancel(true);
+      caller.shutdownNow();
+      assertThat(caller.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+    }
+  }
+
+  @Test
+  void lateCallerInterruptionCannotReviveAnAttemptAfterRecoveryClaimsANewerFence()
+      throws Exception {
+    CountDownLatch firstGatewayEntered = new CountDownLatch(1);
+    CountDownLatch firstGatewayInterrupted = new CountDownLatch(1);
+    CountDownLatch recoveredGatewayEntered = new CountDownLatch(1);
+    CountDownLatch releaseRecoveredGateway = new CountDownLatch(1);
+    AtomicInteger gatewayCalls = new AtomicInteger();
+    AtomicReference<Thread> callerThread = new AtomicReference<>();
+    when(cloudGateway.bind())
+        .thenReturn(
+            binding(
+                request -> {
+                  int call = gatewayCalls.incrementAndGet();
+                  if (call == 1) {
+                    firstGatewayEntered.countDown();
+                    try {
+                      new CountDownLatch(1).await();
+                    } catch (InterruptedException exception) {
+                      firstGatewayInterrupted.countDown();
+                      Thread.currentThread().interrupt();
+                    }
+                  } else {
+                    recoveredGatewayEntered.countDown();
+                    awaitRelease(releaseRecoveredGateway);
+                  }
+                  return CloudAnalysisResult.success(request.validatedLocalProposal());
+                }));
+    UUID memoId = createAmbiguousMemo("attempt-interrupt-recovery-race");
+    String key = "attempt-interrupt-recovery-race-start";
+
+    ExecutorService actors = Executors.newFixedThreadPool(2);
+    Future<MvcResult> originalCaller =
+        actors.submit(
+            () -> {
+              callerThread.set(Thread.currentThread());
+              return startAnalysis(memoId, key, 1);
+            });
+    Future<Integer> recovery = null;
+    try {
+      assertThat(firstGatewayEntered.await(5, TimeUnit.SECONDS)).isTrue();
+      UUID runId = runLifecycle(memoId).runId();
+      expireLease(runId);
+
+      recovery = actors.submit(() -> analysisService.recoverPendingDispatches(10));
+      assertThat(recoveredGatewayEntered.await(5, TimeUnit.SECONDS)).isTrue();
+      assertThat(dispatchLifecycle(runId).fenceToken()).isEqualTo(2L);
+
+      callerThread.get().interrupt();
+      MvcResult conflict = originalCaller.get(5, TimeUnit.SECONDS);
+      assertThat(conflict.getResponse().getStatus()).isEqualTo(409);
+      assertThat(response(conflict).path("code").asText()).isEqualTo("ANALYSIS_IN_PROGRESS");
+      assertThat(firstGatewayInterrupted.await(1, TimeUnit.SECONDS)).isTrue();
+
+      AttemptLifecycle lateObservation = attemptLifecycle(runId, 1L);
+      assertThat(lateObservation.attemptState()).isEqualTo("SUPERSEDED");
+      assertThat(lateObservation.executionState()).isEqualTo("STARTED");
+      assertThat(lateObservation.localTermination()).isEqualTo("CALLER_INTERRUPTED");
+      assertThat(lateObservation.resultState()).isEqualTo("UNKNOWN");
+      assertThat(lateObservation.gatewayOutcome()).isNull();
+      assertThat(lateObservation.disposition()).isEqualTo("SUPERSEDED");
+      assertThat(lateObservation.durationStatus()).isEqualTo("MEASURED");
+      assertThat(lateObservation.durationMs()).isNotNull().isNotNegative();
+      assertThat(lateObservation.modelTokenStatus()).isEqualTo("NOT_APPLICABLE");
+      assertThat(lateObservation.costStatus()).isEqualTo("NOT_APPLICABLE");
+      assertThat(attemptLifecycle(runId, 2L).attemptState()).isEqualTo("IN_FLIGHT");
+
+      releaseRecoveredGateway.countDown();
+      assertThat(recovery.get(5, TimeUnit.SECONDS)).isEqualTo(1);
+
+      DispatchLifecycle finalized = dispatchLifecycle(runId);
+      assertThat(finalized.state()).isEqualTo("FINALIZED");
+      assertThat(finalized.fenceToken()).isEqualTo(2L);
+      assertThat(runLifecycle(memoId).status()).isEqualTo("REVIEW_REQUIRED");
+      AttemptLifecycle recoveredAttempt = attemptLifecycle(runId, 2L);
+      assertThat(recoveredAttempt.attemptState()).isEqualTo("OBSERVED");
+      assertThat(recoveredAttempt.localTermination()).isEqualTo("RESULT");
+      assertThat(recoveredAttempt.resultState()).isEqualTo("OBSERVED");
+      assertThat(recoveredAttempt.gatewayOutcome()).isEqualTo("SUCCESS");
+      assertThat(recoveredAttempt.disposition()).isEqualTo("APPLIED_TO_RUN");
+      assertThat(attemptCount(runId)).isEqualTo(2L);
+      assertThat(gatewayCalls).hasValue(2);
+      assertThat(proposalCount(runId)).isEqualTo(1L);
+      assertThat(storedStartStatus(key)).isEqualTo("REVIEW_REQUIRED");
+    } finally {
+      releaseRecoveredGateway.countDown();
+      originalCaller.cancel(true);
+      if (recovery != null) {
+        recovery.cancel(true);
+      }
+      actors.shutdownNow();
+      assertThat(actors.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
     }
   }
 
@@ -342,6 +588,22 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
     assertThat(dispatch.hasPreparedProposal()).isFalse();
     assertThat(proposalCloudOutcome(runId)).isEqualTo("TIMEOUT");
     assertThat(proposalCount(runId)).isEqualTo(1L);
+    AttemptLifecycle attempt = attemptLifecycle(runId, 1L);
+    assertThat(attempt.attemptState()).isEqualTo("OBSERVED");
+    assertThat(attempt.executionState()).isEqualTo("STARTED");
+    assertThat(attempt.localTermination()).isEqualTo("TIMEOUT");
+    assertThat(attempt.resultState()).isEqualTo("UNKNOWN");
+    assertThat(attempt.gatewayOutcome()).isNull();
+    assertThat(attempt.disposition()).isEqualTo("APPLIED_TO_RUN");
+    assertThat(attempt.durationStatus()).isEqualTo("MEASURED");
+    assertThat(attempt.durationMs()).isNotNull().isNotNegative();
+    assertThat(attempt.modelTokenStatus()).isEqualTo("NOT_APPLICABLE");
+    assertThat(attempt.modelInputTokens()).isNull();
+    assertThat(attempt.modelOutputTokens()).isNull();
+    assertThat(attempt.modelTotalTokens()).isNull();
+    assertThat(attempt.costStatus()).isEqualTo("NOT_APPLICABLE");
+    assertThat(attempt.costAmount()).isNull();
+    assertThat(attempt.costCurrency()).isNull();
     assertNoCanonicalAnalysisWrites();
   }
 
@@ -597,7 +859,8 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
   }
 
   @Test
-  void legacyNoneDispatchRecoveryDoesNotInventRetrievalContext() throws Exception {
+  void legacyNoneDispatchRecoveryInventsNeitherRetrievalContextNorAttemptHistory()
+      throws Exception {
     AtomicInteger gatewayCalls = new AtomicInteger();
     List<CloudAnalysisRequest> capturedRequests = new CopyOnWriteArrayList<>();
     AbandonedDispatch abandoned =
@@ -605,11 +868,21 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
             "retrieval-legacy-none", AMBIGUOUS_MEMO + " OS", gatewayCalls, capturedRequests);
     db.sql(
             """
+            delete from analysis_run_dispatch_attempts
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("runId", abandoned.runId())
+        .param("ownerId", OWNER_ID)
+        .update();
+    db.sql(
+            """
             update analysis_run_dispatches
                set retrieval_context = null,
                    retrieval_context_hash = null,
                    retrieval_context_version = 'none',
-                   retrieval_context_candidate_count = 0
+                   retrieval_context_candidate_count = 0,
+                   attempt_history_version = 'none'
              where analysis_run_id = :runId
                and owner_id = :ownerId
             """)
@@ -637,6 +910,8 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
         .isEqualTo(capturedRequests.get(0).providerRequestToken());
     assertThat(dispatchLifecycle(abandoned.runId()).state()).isEqualTo("FINALIZED");
     assertThat(proposalCount(abandoned.runId())).isEqualTo(1L);
+    assertThat(attemptHistoryVersion(abandoned.runId())).isEqualTo("none");
+    assertThat(attemptCount(abandoned.runId())).isZero();
   }
 
   @Test
@@ -688,6 +963,17 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
   void recoveryWithoutSecurityContextCompletesAnExpiredRunningDispatch() throws Exception {
     AtomicInteger gatewayCalls = new AtomicInteger();
     AbandonedDispatch abandoned = abandonRunningDispatch("recovery-expired", gatewayCalls);
+    AttemptLifecycle interrupted = attemptLifecycle(abandoned.runId(), 1L);
+    assertThat(interrupted.attemptState()).isEqualTo("IN_FLIGHT");
+    assertThat(interrupted.executionState()).isEqualTo("STARTED");
+    assertThat(interrupted.localTermination()).isEqualTo("CALLER_INTERRUPTED");
+    assertThat(interrupted.resultState()).isEqualTo("UNKNOWN");
+    assertThat(interrupted.gatewayOutcome()).isNull();
+    assertThat(interrupted.disposition()).isEqualTo("RECOVERY_PENDING");
+    assertThat(interrupted.durationStatus()).isEqualTo("MEASURED");
+    assertThat(interrupted.durationMs()).isNotNull().isNotNegative();
+    assertThat(interrupted.modelTokenStatus()).isEqualTo("NOT_APPLICABLE");
+    assertThat(interrupted.costStatus()).isEqualTo("NOT_APPLICABLE");
     expireLease(abandoned.runId());
     when(cloudGateway.bind())
         .thenReturn(
@@ -715,6 +1001,28 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
     assertThat(proposalCount(abandoned.runId())).isEqualTo(1L);
     assertThat(storedStartStatus(abandoned.key())).isEqualTo("REVIEW_REQUIRED");
     assertThat(gatewayCalls).hasValue(2);
+    AttemptLifecycle superseded = attemptLifecycle(abandoned.runId(), 1L);
+    assertThat(superseded.attemptState()).isEqualTo("SUPERSEDED");
+    assertThat(superseded.executionState()).isEqualTo("STARTED");
+    assertThat(superseded.localTermination()).isEqualTo("CALLER_INTERRUPTED");
+    assertThat(superseded.resultState()).isEqualTo("UNKNOWN");
+    assertThat(superseded.gatewayOutcome()).isNull();
+    assertThat(superseded.disposition()).isEqualTo("SUPERSEDED");
+    assertThat(superseded.durationStatus()).isEqualTo("MEASURED");
+    assertThat(superseded.durationMs()).isEqualTo(interrupted.durationMs());
+    assertThat(superseded.modelTokenStatus()).isEqualTo("NOT_APPLICABLE");
+    assertThat(superseded.costStatus()).isEqualTo("NOT_APPLICABLE");
+    AttemptLifecycle recoveredAttempt = attemptLifecycle(abandoned.runId(), 2L);
+    assertThat(recoveredAttempt.attemptState()).isEqualTo("OBSERVED");
+    assertThat(recoveredAttempt.executionState()).isEqualTo("STARTED");
+    assertThat(recoveredAttempt.localTermination()).isEqualTo("RESULT");
+    assertThat(recoveredAttempt.resultState()).isEqualTo("OBSERVED");
+    assertThat(recoveredAttempt.gatewayOutcome()).isEqualTo("SUCCESS");
+    assertThat(recoveredAttempt.disposition()).isEqualTo("APPLIED_TO_RUN");
+    assertThat(recoveredAttempt.durationStatus()).isEqualTo("MEASURED");
+    assertThat(recoveredAttempt.modelTokenStatus()).isEqualTo("NOT_APPLICABLE");
+    assertThat(recoveredAttempt.costStatus()).isEqualTo("NOT_APPLICABLE");
+    assertThat(attemptCount(abandoned.runId())).isEqualTo(2L);
     assertNoCanonicalAnalysisWrites();
   }
 
@@ -986,6 +1294,15 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
   private void resetToPrepared(UUID runId) {
     db.sql(
             """
+            delete from analysis_run_dispatch_attempts
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("runId", runId)
+        .param("ownerId", OWNER_ID)
+        .update();
+    db.sql(
+            """
             update analysis_run_dispatches
                set state = 'PREPARED',
                    fence_token = 0,
@@ -1239,6 +1556,93 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
         .single();
   }
 
+  private long attemptCount(UUID runId) {
+    return db.sql(
+            """
+            select count(*)
+              from analysis_run_dispatch_attempts
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("runId", runId)
+        .param("ownerId", OWNER_ID)
+        .query(Long.class)
+        .single();
+  }
+
+  private String attemptHistoryVersion(UUID runId) {
+    return db.sql(
+            """
+            select attempt_history_version
+              from analysis_run_dispatches
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("runId", runId)
+        .param("ownerId", OWNER_ID)
+        .query(String.class)
+        .single();
+  }
+
+  private AttemptLifecycle attemptLifecycle(UUID runId, long fenceToken) {
+    return db.sql(
+            """
+            select fence_token,
+                   effective_timeout_ms,
+                   attempt_state,
+                   execution_state,
+                   local_termination,
+                   result_state,
+                   gateway_outcome,
+                   disposition,
+                   duration_status,
+                   duration_ms,
+                   model_token_status,
+                   model_input_tokens,
+                   model_output_tokens,
+                   model_total_tokens,
+                   cost_status,
+                   cost_amount,
+                   cost_currency,
+                   claimed_at,
+                   lease_expires_at,
+                   observed_at
+              from analysis_run_dispatch_attempts
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+               and fence_token = :fenceToken
+            """)
+        .param("runId", runId)
+        .param("ownerId", OWNER_ID)
+        .param("fenceToken", fenceToken)
+        .query(
+            (resultSet, rowNumber) ->
+                new AttemptLifecycle(
+                    resultSet.getLong("fence_token"),
+                    resultSet.getInt("effective_timeout_ms"),
+                    resultSet.getString("attempt_state"),
+                    resultSet.getString("execution_state"),
+                    resultSet.getString("local_termination"),
+                    resultSet.getString("result_state"),
+                    resultSet.getString("gateway_outcome"),
+                    resultSet.getString("disposition"),
+                    resultSet.getString("duration_status"),
+                    resultSet.getObject("duration_ms", Long.class),
+                    resultSet.getString("model_token_status"),
+                    resultSet.getObject("model_input_tokens", Long.class),
+                    resultSet.getObject("model_output_tokens", Long.class),
+                    resultSet.getObject("model_total_tokens", Long.class),
+                    resultSet.getString("cost_status"),
+                    resultSet.getBigDecimal("cost_amount"),
+                    resultSet.getString("cost_currency"),
+                    resultSet.getTimestamp("claimed_at").toInstant(),
+                    resultSet.getTimestamp("lease_expires_at").toInstant(),
+                    resultSet.getTimestamp("observed_at") == null
+                        ? null
+                        : resultSet.getTimestamp("observed_at").toInstant()))
+        .single();
+  }
+
   private boolean pendingDispatchReferencesTag(UUID tagId) {
     return db.sql(
             """
@@ -1324,6 +1728,28 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
       int callTimeoutMs,
       Instant leaseExpiresAt,
       Instant finalizedAt) {}
+
+  private record AttemptLifecycle(
+      long fenceToken,
+      int effectiveTimeoutMs,
+      String attemptState,
+      String executionState,
+      String localTermination,
+      String resultState,
+      String gatewayOutcome,
+      String disposition,
+      String durationStatus,
+      Long durationMs,
+      String modelTokenStatus,
+      Long modelInputTokens,
+      Long modelOutputTokens,
+      Long modelTotalTokens,
+      String costStatus,
+      BigDecimal costAmount,
+      String costCurrency,
+      Instant claimedAt,
+      Instant leaseExpiresAt,
+      Instant observedAt) {}
 
   private record RetrievalContextEvidence(
       String rawContext, String contextHash, String version, int candidateCount) {}

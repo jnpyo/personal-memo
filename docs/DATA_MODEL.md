@@ -1,6 +1,6 @@
 # Data model — authenticated deterministic-analysis MVP
 
-이 문서는 현재 Flyway `V1`–`V16`이 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다. `V11`은 owner별 proposal의 최신 application을 bounded read로 찾는 review-outcome 조회 인덱스를 추가하고, `V12`는 최신 `APPLIED` selection과 활성 memo item을 사용하는 graph projection에 맞춘 partial lookup index만 추가한다. `V13`은 cloud consent를 정확한 policy와 승인 시각에 고정하고 run에 server-owned cloud evidence를 추가한다. `V14`는 새 run에 호출 권한 확인 시각·실제로 수락한 grant 시각·결정론적 provider-request token을 일관된 실행 snapshot으로 저장하고, 과거 row는 증거를 추정하지 않은 `legacy-v0`로 보존한다. `V15`는 gateway 호출 전에 `durable-v1` run과 1:1 dispatch preparation을 commit하고 immutable binding, validated-local payload/hash, reserved proposal, idempotency evidence, deadline·lease·fence를 보존한다. `V16`은 같은 dispatch에 bounded tag context raw/hash/version/count를 pre-call snapshot으로 추가하고 finalization에서 raw만 scrub한다. 기존 V15 dispatch에는 context가 있었다고 추정하지 않고 `none`/`0`/null raw/null hash를 보존한다. V14까지의 기존 row에는 호출 전 준비가 있었다고 추정해 dispatch를 backfill하지 않는다. 이 migration들은 일반 clickstream table을 만들지 않는다.
+이 문서는 현재 Flyway `V1`–`V17`이 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다. `V11`은 owner별 proposal의 최신 application을 bounded read로 찾는 review-outcome 조회 인덱스를 추가하고, `V12`는 최신 `APPLIED` selection과 활성 memo item을 사용하는 graph projection에 맞춘 partial lookup index만 추가한다. `V13`은 cloud consent를 정확한 policy와 승인 시각에 고정하고 run에 server-owned cloud evidence를 추가한다. `V14`는 새 run에 호출 권한 확인 시각·실제로 수락한 grant 시각·결정론적 provider-request token을 일관된 실행 snapshot으로 저장하고, 과거 row는 증거를 추정하지 않은 `legacy-v0`로 보존한다. `V15`는 gateway 호출 전에 `durable-v1` run과 1:1 dispatch preparation을 commit하고 immutable binding, validated-local payload/hash, reserved proposal, idempotency evidence, deadline·lease·fence를 보존한다. `V16`은 같은 dispatch에 bounded tag context raw/hash/version/count를 pre-call snapshot으로 추가하고 finalization에서 raw만 scrub한다. 기존 V15 dispatch에는 context가 있었다고 추정하지 않고 `none`/`0`/null raw/null hash를 보존한다. `V17`은 새 dispatch를 `gateway-attempt-v1`로 versioning하고 fence별 owner-scoped attempt ledger를 추가하되, 기존 dispatch는 `none`으로 두고 과거 attempt row를 backfill하지 않는다. V14까지의 기존 row에는 호출 전 준비가 있었다고 추정해 dispatch를 backfill하지 않는다. 이 migration들은 일반 clickstream table을 만들지 않는다.
 
 ## Invariants
 
@@ -28,6 +28,10 @@
   idempotency/request hash, immutable executor binding, deadline·lease·fence를 보존한다.
 - V16 retrieval context는 authenticated owner의 active tag/alias exact normalized equality 결과만
   사용한 bounded 내부 hint다. canonical owner/reference 유효성은 최종 validation이 다시 판정한다.
+- V17 attempt row는 같은 owner/version의 dispatch와
+  `(analysis_run_id, owner_id, attempt_history_version)` foreign key로 묶이고 claim fence마다
+  하나만 존재한다. local termination, remote result state, duration evidence, model-token
+  evidence, cost evidence를 서로 대체하거나 미확인 값을 0으로 추정하지 않는다.
 
 ## Identity and raw memo
 
@@ -254,8 +258,12 @@ recovery가 같은 deadline과 `max_attempts` 안에서 lease를 재claim한다.
 재시작 뒤에도 eligible row만 다음 주기에서 이어진다. transport는 exactly-once가 아니라
 at-least-once이고 실제 provider는 같은 `pmr1_...` token을 멱등하게 처리해야 한다. V16 recovery는
 retrieval을 다시 실행하지 않고 dispatch의 동일한 DB snapshot만 decode하므로 같은 token에 다른
-context input을 붙이지 않는다. 개별 attempt history, duration, model-token, cost,
-related-memo/fuzzy/vector/embedding context는 없다.
+context input을 붙이지 않는다. V17은 새 `gateway-attempt-v1` dispatch의 claim fence마다 내부
+attempt row를 만들고, 종료가 로컬에서 관측된 경우 monotonic elapsed를 저장한다. timeout,
+interruption, process loss처럼 provider 결과를 확인하지 못한 경우 remote result는 `UNKNOWN`으로
+남긴다. 로컬에서 관측한 현재 Fake의 model-token/cost는 `NOT_APPLICABLE`/null이고 process loss는
+`UNKNOWN`/null이며, 실제 model usage/cost 숫자 수집,
+집계와 related-memo/fuzzy/vector/embedding context는 없다.
 
 Proposal schema v2는 `dateCandidates[].candidateId`와 nullable
 `itemCandidates[].dueDateCandidateId`를 기존 `proposal_json` JSONB 안에 저장하고, run의 기존
@@ -292,6 +300,7 @@ executor_binding_id VARCHAR(69) NOT NULL
 call_timeout_ms INTEGER NOT NULL
 max_attempts INTEGER NOT NULL
 deadline_at TIMESTAMPTZ NOT NULL
+attempt_history_version none | gateway-attempt-v1
 state PREPARED | RUNNING | FINALIZED
 fence_token BIGINT NOT NULL
 last_attempt_started_at TIMESTAMPTZ NULL
@@ -300,6 +309,7 @@ prepared_at TIMESTAMPTZ NOT NULL
 finalized_at TIMESTAMPTZ NULL
 updated_at TIMESTAMPTZ NOT NULL
 UNIQUE (owner_id, idempotency_key_hash)
+UNIQUE (analysis_run_id, owner_id, attempt_history_version)
 FK (analysis_run_id, owner_id) -> analysis_runs(id, owner_id)
 ```
 
@@ -310,13 +320,77 @@ hash를 보존하며, `PREPARED`는 attempt/lease 없이 fence 0이다.
 lease가 필요하다. `FINALIZED`는 lease를 비우고 final 시각을 남기며 준비 payload text를 null로
 scrub하지만 hash와 reserved proposal ID는 보존한다. `updated_at`은 silent default 없이 각 write가
 명시한다. deadline과 최대 attempt는 caller 및 운영 scheduler recovery 모두의 상한이다. 이 row는
-개별 attempt history가 아니며, fence가 다른 늦은 attempt는 final 결과를 덮어쓸 수 없다.
+개별 attempt history가 아니며, fence가 다른 늦은 attempt는 final 결과를 덮어쓸 수 없다. 과거
+dispatch의 `attempt_history_version`은 `none`이고 attempt child row가 없다. 새 gateway dispatch는
+반드시 `gateway-attempt-v1`을 명시한다.
 
 V16 current context는 version `tag-alias-exact-k8-v1`, candidate count 0–8, lowercase SHA-256 hash를
 필수로 갖는다. `PREPARED`/`RUNNING`에서는 45–16,384 UTF-8 byte의 JSON object raw가 있어야 하고
 그 JSON의 version 및 candidate array length가 column과 일치해야 한다. application은 decode할 때
 hash와 strict codec shape도 검증한다. `FINALIZED`에서는 raw가 null이어야 하지만 hash/version/count는
 evidence로 남는다. 기존 V15 row의 legacy `none` version은 count 0과 null raw/hash만 허용한다.
+
+### `analysis_run_dispatch_attempts`
+
+V17이 추가한 내부 gateway-attempt ledger다. 공개 API, proposal metadata, UI, 평가 report의 source가
+아니며 provider 오류 text나 provider/model ID, provider-request token, raw memo, retrieval context를
+저장하지 않는다.
+
+```text
+analysis_run_id UUID NOT NULL
+owner_id UUID NOT NULL
+attempt_history_version gateway-attempt-v1
+fence_token BIGINT NOT NULL
+effective_timeout_ms INTEGER NOT NULL
+attempt_state IN_FLIGHT | OBSERVED | SUPERSEDED
+execution_state PENDING | NOT_STARTED | STARTED | UNKNOWN
+local_termination RESULT | EXECUTOR_REJECTED | TIMEOUT | CALLER_INTERRUPTED | UNEXPECTED_EXCEPTION | PROCESS_LOST | NULL
+result_state PENDING | OBSERVED | UNKNOWN
+gateway_outcome SUCCESS | UNAVAILABLE | TIMEOUT | RETRY_EXHAUSTED | PROVIDER_ERROR | UNEXPECTED_FAILURE | NULL
+disposition PENDING | APPLIED_TO_RUN | STALE_FINALIZE | FENCED_OUT | RECOVERY_PENDING | SUPERSEDED
+duration_status UNKNOWN | MEASURED
+duration_ms BIGINT NULL
+model_token_status PENDING | UNKNOWN | NOT_APPLICABLE | NOT_REPORTED | REPORTED
+model_input_tokens BIGINT NULL
+model_output_tokens BIGINT NULL
+model_total_tokens BIGINT NULL
+cost_status PENDING | UNKNOWN | NOT_APPLICABLE | NOT_REPORTED | REPORTED
+cost_amount NUMERIC(20, 8) NULL
+cost_currency VARCHAR(3) NULL
+claimed_at TIMESTAMPTZ NOT NULL
+lease_expires_at TIMESTAMPTZ NOT NULL
+observed_at TIMESTAMPTZ NULL
+updated_at TIMESTAMPTZ NOT NULL
+PRIMARY KEY (analysis_run_id, fence_token)
+FK (analysis_run_id, owner_id, attempt_history_version)
+  -> analysis_run_dispatches(analysis_run_id, owner_id, attempt_history_version)
+```
+
+claim transaction은 fence row를 `IN_FLIGHT`/`PENDING`으로 만든다. application은 persisted
+`max_attempts`보다 많은 row를 만들지 않으며 partial unique index가 run마다 `IN_FLIGHT` row를 최대
+하나로 제한한다. 현재 fence의 observed result는 `APPLIED_TO_RUN` 또는 `STALE_FINALIZE`이고, 이미
+권한을 잃은 fence의 늦은 observation은 `FENCED_OUT`이다. caller interruption은 local observation을
+`RECOVERY_PENDING`으로 남기고, 다음 claim이 그 row를 `SUPERSEDED`로 바꾼다. observation 없이
+lease를 잃은 process는 다음 claim에서 `PROCESS_LOST`/`SUPERSEDED`가 되며 remote result와 duration을
+`UNKNOWN`/null로 남긴다.
+
+`EXECUTOR_REJECTED`는 `NOT_STARTED`이고 provider 실행 결과가 아니므로 `result_state=UNKNOWN`,
+`gateway_outcome=null`이다. 반대로 gateway가 typed `UNAVAILABLE`을 반환하면 local termination은
+`RESULT`, result state는 `OBSERVED`, gateway outcome은 `UNAVAILABLE`이다. timeout·interrupt·unexpected
+local termination도 local control-flow evidence와 provider remote truth를 분리한다.
+
+프로세스가 termination을 관측하면 `System.nanoTime` 기반 submit/wait elapsed를 non-negative
+millisecond로 저장한다. timeout/interruption은 measured local duration과 unknown remote result를
+함께 가질 수 있다. process loss는 model-token/cost도 `UNKNOWN`/null이다. locally observed current
+Fake는 model version `none`이므로 model-token/cost status가 `NOT_APPLICABLE`이고 모든 숫자 field는
+null이다. 미래 real-model의 observed result도 현재 gateway
+계약이 usage/cost를 보고하지 않으므로 `NOT_REPORTED`/null이고, remote completion이 불확실하면
+`UNKNOWN`/null이다. `REPORTED` branch는 각 token 값을 0–1,000,000,000으로 제한하고 total이
+input+output 이상인지 확인하며, finite non-negative amount와 uppercase 3-letter currency의 미래
+shape만 검증한다. 현재 runtime은 numeric usage/cost를 쓰지 않는다.
+
+ledger row는 승인된 별도 purge 정책이 생기기 전까지 현재 run/dispatch data의 retention을 따른다.
+V17은 임의 TTL, 공개 조회 API, 숫자 집계 또는 budget enforcement를 추가하지 않는다.
 
 ### `analysis_proposals`
 
@@ -541,6 +615,7 @@ memos + analysis_applications + memo_items + task_details
 - `memos(owner_id, status, updated_at DESC)`
 - `analysis_runs(memo_id, memo_revision, status)`
 - partial `analysis_run_dispatches(state, lease_expires_at, deadline_at, prepared_at, analysis_run_id)` for `PREPARED`/`RUNNING` recovery
+- partial unique `analysis_run_dispatch_attempts(analysis_run_id) WHERE attempt_state = 'IN_FLIGHT'`
 - `memo_items(owner_id, created_at DESC)`
 - `task_details(status, due_at_utc)`
 - `task_details(status, due_local_date)`
@@ -567,7 +642,7 @@ memos + analysis_applications + memo_items + task_details
 - local email verification and password-reset token/delivery state
 - login abuse/rate-limit audit state if the selected policy requires additional persistence
 - MFA/passkey authenticators and account recovery codes
-- per-attempt analysis history and duration/model-token/cost state
+- real-model numeric usage/cost ingestion, aggregation, budget enforcement, and approved attempt-purge state
 - related-memo, fuzzy/vector, and embedding retrieval context
 
 필요한 vertical slice가 시작될 때 파괴적 변경 없이 새 Flyway migration으로 추가한다.

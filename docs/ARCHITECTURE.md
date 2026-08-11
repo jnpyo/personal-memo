@@ -6,8 +6,9 @@ Use a modular monolith for the backend and a mobile-first PWA for the client.
 
 Do not introduce Neo4j, Kafka, Redis, a separate AI microservice, or a second search service in the
 MVP. PostgreSQL and clear module boundaries are sufficient now. V15 uses a bounded in-process
-invocation pool to keep gateway work outside database transactions, and V16 stores its bounded tag
-context snapshot in the same dispatch row. In the production profile, a small scheduled worker
+invocation pool to keep gateway work outside database transactions, V16 stores its bounded tag
+context snapshot in the same dispatch row, and V17 stores fence-scoped attempt evidence in a child
+ledger. In the production profile, a small scheduled worker
 reuses that PostgreSQL-backed state to recover a bounded batch; it does not add a queue service or a
 second source of truth.
 
@@ -214,6 +215,25 @@ the same provider-request token cannot be retried with different context. Finali
 serialized context but retains hash/version/count evidence. Existing V15 dispatches remain
 `none`/`0`/null raw/null hash and historical runs are not assigned invented dispatch rows.
 
+V17 versions new dispatches as `gateway-attempt-v1` and inserts one owner-scoped
+`analysis_run_dispatch_attempts` row for every claimed fence, bounded by the dispatch's
+`max_attempts`. Existing dispatches remain `attempt_history_version=none` and receive no invented
+history. The ledger separates local termination from remote result truth: executor rejection is
+`NOT_STARTED` / `EXECUTOR_REJECTED` with an unknown gateway result, while a gateway-returned typed
+`UNAVAILABLE` is an observed result. Timeout, caller interruption, unexpected local termination, and
+process loss do not assert an unobserved provider result. Obsolete-fence completion and stale
+finalization remain evidence without authority to overwrite the final run.
+
+For an observed termination, elapsed milliseconds come from a monotonic local clock around executor
+submission and waiting; this is not wall-clock or end-to-end user latency. Timeout and interruption
+may have measured local duration while remote result truth remains unknown. Process loss has unknown
+duration and unknown model-token/cost evidence. A locally observed model-free Fake and execution that
+never starts use `NOT_APPLICABLE` plus null model-token/cost numbers. The runtime does not yet receive
+numeric usage or price from a real-model
+gateway: an observed result would be `NOT_REPORTED`, and uncertain termination would be `UNKNOWN`.
+The schema validates a future `REPORTED` numeric shape but no current path writes those numbers or
+substitutes zero for missing evidence.
+
 The HTTP request remains synchronous and normally returns only after the run reaches
 `REVIEW_REQUIRED`; an intervening edit or trash operation commits the final run as `STALE` before
 returning `409 STALE_MEMO_REVISION`. If a same-key live lease or invocation outlasts the coordination
@@ -224,14 +244,14 @@ The production profile additionally enables a scheduler with a 30-second initial
 25-row batch bound. Its database query selects only `PREPARED` or `RUNNING` rows whose lease has
 expired, with owner and the existing raw idempotency key supplied by owner-consistent joins. Each
 candidate then enters the existing owner + operation + raw-key advisory transaction lock and the
-same V15/V16 claim path. Live leases are skipped, including a lease made live between selection and
+same V15/V16/V17 claim path. Live leases are skipped, including a lease made live between selection and
 claim. A process restart therefore resumes remaining eligible rows on a later bounded cycle. Any
 re-execution stays within the persisted attempt/deadline limits and reuses the same provider-request
 token and database context snapshot. This is bounded at-least-once execution, so an eventual external
 provider must deduplicate by that token. Raw recovery keys, dispatch payload/context,
-context hash/version/count, tokens, bindings, fences, leases, and queued/running state remain internal
-and are not added to public DTOs, proposal JSON or `providerMetadata`, recovery responses, ordinary
-logs, browser storage, or service-worker caches.
+context hash/version/count, attempt ledger, tokens, bindings, fences, leases, and queued/running state
+remain internal and are not added to public DTOs, proposal JSON or `providerMetadata`, UI, evaluation
+reports, recovery responses, ordinary logs, browser storage, or service-worker caches.
 
 A stale revision detected before execution records `CANCELLED_STALE`. A revision that becomes stale
 while a claimed call is in flight preserves that attempt's bounded outcome when finalization marks
@@ -262,8 +282,9 @@ it does not depend on an HTTP security context. The existing idempotency advisor
 check, lease/fence/deadline bounds, out-of-transaction Fake invocation, and revision-rechecking
 finalize are reused rather than duplicated. A process-local guard also prevents overlapping cycles
 within one application instance. This is recovery of already prepared work, not a general-purpose
-queue, and caller-driven same-key recovery remains supported. Per-attempt history and
-duration/model-token/cost observability do not exist.
+queue, and caller-driven same-key recovery remains supported. V17's attempt ledger follows the same
+claim/fence state machine; real-model numeric usage/cost collection and budget enforcement do not
+exist.
 
 Other autonomous-processing work remains future design. If it is approved, use PostgreSQL-backed
 bounded Spring workers rather than a new infrastructure service; concurrent consumers need a safe
@@ -345,15 +366,22 @@ The current database records route/proposal status, analyzer provenance, V13 clo
 transfer/gateway/provider/model/policy/outcome evidence, V14 internal execution-contract,
 authorization/grant snapshot and request-token evidence, and V15 dispatch state, fence count, latest
 attempt start, lease, deadline, and finalization time. V16 adds bounded retrieval-context hash,
-version, and candidate-count evidence and retains serialized context only until finalization. These
-internal values are deliberately absent from public DTOs and proposal metadata. The owner-scoped
-review summary exposes only bounded aggregate selection evidence. The dispatch row is not per-attempt
-history and does not record analysis duration, model token usage, cost, or provider error text.
+version, and candidate-count evidence and retains serialized context only until finalization. V17
+adds owner-scoped fence history, local execution/termination, remote-result state, disposition,
+monotonic local duration status, and explicit model-token/cost evidence status. Existing dispatches
+stay `none` with no history backfill. These internal values are deliberately absent from public DTOs,
+proposal metadata, UI, and evaluation reports. The owner-scoped review summary exposes only bounded
+aggregate selection evidence.
+
+Attempt rows contain no provider error text, provider/model identifier, provider-request token, raw
+memo, or retrieval context. They remain with the current run data until an approved purge policy is
+defined; V17 adds no independent TTL. Public/logging boundaries also remain unchanged, and ordinary
+logs do not receive the ledger.
 
 Future observability may record the following without recording sensitive text:
 
 - capture latency and error rate
-- analysis duration and route
+- end-to-end analysis duration and route
 - local/cloud resolution rate
 - schema validation failure
 - cloud tool count/tokens/cost
@@ -362,8 +390,9 @@ Future observability may record the following without recording sensitive text:
 - graph query size and latency
 - push delivery/retry/duplicate prevention
 
-Current analysis rows include memo id/revision, schema and analyzer provenance, cloud evidence, and
-the retained V16 context hash/version/count, but there is no separate tracing/correlation subsystem.
+Current analysis rows include memo id/revision, schema and analyzer provenance, cloud evidence, the
+retained V16 context hash/version/count, and V17 internal attempt evidence, but there is no separate
+tracing/correlation subsystem or numeric real-model usage/cost integration.
 Ordinary logs must not include the memo body, retrieval context, provider errors, credentials, or
 tokens.
 

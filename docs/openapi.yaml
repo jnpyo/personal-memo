@@ -429,7 +429,10 @@ paths:
         hashes, exact validated local proposal and hash, immutable executor binding identity, timeout,
         maximum attempts, and deadline. V16 adds the serialized context, SHA-256 hash, version, and
         candidate count to that pre-call snapshot. Existing V15 dispatches remain none/0/null
-        raw/null hash rather than receiving invented context. A short claim transaction compares the
+        raw/null hash rather than receiving invented context. V17 marks new dispatches
+        gateway-attempt-v1 and records one internal owner-scoped row per claimed fence, up to the
+        persisted maximum attempts. Historical dispatches remain attempt_history_version=none and
+        receive no backfilled rows. A short claim transaction compares the
         current binding identity and exact
         descriptor, rechecks authorization, and acquires a deadline-clipped lease with a new fence.
         The bounded gateway invocation then runs outside every database transaction. Finalization
@@ -448,16 +451,26 @@ paths:
         rows; each candidate reuses the owner+operation+raw-key advisory transaction lock and live
         leases are skipped. Recovery after restart therefore reuses the persisted binding, deadline,
         attempt count, lease/fence, exact V16 database context snapshot, bounded out-of-transaction
-        Fake call, revision-rechecking finalization, and the same provider-request token. Retrieval is
-        not rerun, so the same token cannot be retried with different context. This is an
+        Fake call, V17 fence observation, revision-rechecking finalization, and the same
+        provider-request token. Executor rejection is distinct from a gateway-returned UNAVAILABLE.
+        Timeout, caller interruption, and process loss leave remote result truth UNKNOWN. An
+        obsolete-fence completion records only the result actually observed and cannot overwrite the
+        run. Observed local elapsed uses a monotonic clock; process-loss duration is unknown.
+        Locally observed Fake model-token/cost evidence is NOT_APPLICABLE with null numbers, while
+        process-loss evidence is UNKNOWN. A future real-model result remains NOT_REPORTED until
+        usage/cost reporting is wired; missing evidence is never replaced by zero. Retrieval is not
+        rerun, so the same token cannot be retried with different context. This is an
         at-least-once transport boundary, not exactly-once, so a real provider must honor that token
         idempotently. Internal authorization/grant evidence, raw recovery key, provider token,
-        prepared payload/context, context hash/version/count, dispatch binding, queued/running state,
-        lease, and fence are never returned in RunView, proposal JSON, providerMetadata, recovery
-        responses, ordinary logs, browser storage, or service-worker caches. The public POST remains
-        synchronous. Per-attempt history, duration/model-token/cost metrics, related-memo retrieval,
-        fuzzy/vector search, embeddings, and a configured real provider or Ollama/LiquidAI adapter
-        remain absent.
+        prepared payload/context, context hash/version/count, attempt ledger, dispatch binding,
+        queued/running state, lease, and fence are never returned in RunView, proposal JSON,
+        providerMetadata, UI, evaluation reports, recovery responses, ordinary logs, browser storage,
+        or service-worker caches. Attempt rows store no provider text or identifier, request token,
+        raw memo, or retrieval context and follow current run-data retention until an approved purge
+        policy; V17 adds no arbitrary TTL. The public POST and every response schema remain unchanged
+        and synchronous. Numeric real-model usage/cost reporting and aggregation, related-memo
+        retrieval, fuzzy/vector search, embeddings, and a configured real provider or Ollama/LiquidAI
+        adapter remain absent.
       parameters:
         - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"

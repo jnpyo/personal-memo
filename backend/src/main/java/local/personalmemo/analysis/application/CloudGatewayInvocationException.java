@@ -29,4 +29,9 @@ public final class CloudGatewayInvocationException extends RuntimeException {
   public Reason reason() {
     return reason;
   }
+
+  @Override
+  public String toString() {
+    return "CloudGatewayInvocationException[reason=" + reason + ", detail=redacted]";
+  }
 }

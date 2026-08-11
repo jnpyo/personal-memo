@@ -312,6 +312,8 @@ class BoundedTagRetrievalContextMigrationIntegrationTest extends PostgresIntegra
             : "";
     String retrievalValues =
         v16ColumnsExist ? ",:context,:contextHash,:contextVersion,:candidateCount" : "";
+    String attemptHistoryColumn = v16ColumnsExist ? ",attempt_history_version" : "";
+    String attemptHistoryValue = v16ColumnsExist ? ",'none'" : "";
     var statement =
         isolated
             .sql(
@@ -322,10 +324,12 @@ class BoundedTagRetrievalContextMigrationIntegrationTest extends PostgresIntegra
                     + "executor_binding_id,call_timeout_ms,max_attempts,deadline_at,state,fence_token,"
                     + "last_attempt_started_at,lease_expires_at,prepared_at,finalized_at,updated_at"
                     + retrievalColumns
+                    + attemptHistoryColumn
                     + ") values(:runId,:owner,:proposalId,:keyHash,:requestHash,:proposal,:proposalHash,"
                     + ":bindingId,1000,3,:deadline,:state,:fence,:attemptAt,:leaseAt,:preparedAt,"
                     + ":finalizedAt,:updatedAt"
                     + retrievalValues
+                    + attemptHistoryValue
                     + ")")
             .param("runId", runId)
             .param("owner", OWNER_ID)

@@ -11,9 +11,11 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import local.personalmemo.analysis.domain.CloudAnalysisFailureReason;
 import local.personalmemo.analysis.domain.CloudAnalysisRequest;
 import local.personalmemo.analysis.domain.CloudAnalysisResult;
+import local.personalmemo.analysis.domain.CloudGatewayAttemptTermination;
 import local.personalmemo.analysis.domain.CloudGatewayBinding;
 import org.springframework.scheduling.concurrent.CustomizableThreadFactory;
 import org.springframework.stereotype.Component;
@@ -50,36 +52,96 @@ public final class BoundedCloudGatewayInvoker implements AutoCloseable {
 
   public CloudAnalysisResult invoke(
       CloudGatewayBinding binding, CloudAnalysisRequest request, Duration attemptTimeout) {
+    CloudGatewayAttemptObservation observation = observe(binding, request, attemptTimeout);
+    return switch (observation.termination()) {
+      case CALLER_INTERRUPTED -> throw CloudGatewayInvocationException.callerInterrupted();
+      case UNEXPECTED_EXCEPTION -> throw CloudGatewayInvocationException.unexpectedFailure();
+      case GATEWAY_RESULT, EXECUTOR_REJECTED, TIMEOUT -> observation.effectiveResult();
+    };
+  }
+
+  public CloudGatewayAttemptObservation observe(
+      CloudGatewayBinding binding, CloudAnalysisRequest request) {
+    return observe(binding, request, configuredTimeout);
+  }
+
+  public CloudGatewayAttemptObservation observe(
+      CloudGatewayBinding binding, CloudAnalysisRequest request, Duration attemptTimeout) {
     Objects.requireNonNull(binding, "binding");
     Objects.requireNonNull(request, "request");
     long attemptTimeoutNanos = requireAttemptTimeout(attemptTimeout).toNanos();
     requireNoTransaction();
+    long startedAtNanos = System.nanoTime();
+    AtomicBoolean executionStarted = new AtomicBoolean();
 
     Future<CloudAnalysisResult> future;
     try {
-      future = executor.submit(() -> binding.execute(request));
+      future =
+          executor.submit(
+              () -> {
+                executionStarted.set(true);
+                return binding.execute(request);
+              });
     } catch (RejectedExecutionException exception) {
-      return CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNAVAILABLE);
+      return observation(
+          CloudGatewayAttemptTermination.EXECUTOR_REJECTED,
+          false,
+          startedAtNanos,
+          CloudAnalysisFailureReason.UNAVAILABLE);
     }
 
     try {
-      return future.get(attemptTimeoutNanos, TimeUnit.NANOSECONDS);
+      CloudAnalysisResult result = future.get(attemptTimeoutNanos, TimeUnit.NANOSECONDS);
+      return new CloudGatewayAttemptObservation(
+          CloudGatewayAttemptTermination.GATEWAY_RESULT,
+          executionStarted.get(),
+          elapsedMillis(startedAtNanos, System.nanoTime()),
+          result);
     } catch (TimeoutException exception) {
       future.cancel(true);
-      return CloudAnalysisResult.failure(CloudAnalysisFailureReason.TIMEOUT);
+      return observation(
+          CloudGatewayAttemptTermination.TIMEOUT,
+          executionStarted.get(),
+          startedAtNanos,
+          CloudAnalysisFailureReason.TIMEOUT);
     } catch (InterruptedException exception) {
       future.cancel(true);
       Thread.currentThread().interrupt();
-      throw CloudGatewayInvocationException.callerInterrupted();
+      return observation(
+          CloudGatewayAttemptTermination.CALLER_INTERRUPTED,
+          executionStarted.get(),
+          startedAtNanos,
+          CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
     } catch (CancellationException exception) {
-      throw CloudGatewayInvocationException.unexpectedFailure();
+      return observation(
+          CloudGatewayAttemptTermination.UNEXPECTED_EXCEPTION,
+          executionStarted.get(),
+          startedAtNanos,
+          CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
     } catch (ExecutionException exception) {
-      Throwable cause = exception.getCause();
-      if (cause instanceof Error error) {
-        throw error;
-      }
-      throw CloudGatewayInvocationException.unexpectedFailure();
+      return observation(
+          CloudGatewayAttemptTermination.UNEXPECTED_EXCEPTION,
+          executionStarted.get(),
+          startedAtNanos,
+          CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
     }
+  }
+
+  private CloudGatewayAttemptObservation observation(
+      CloudGatewayAttemptTermination termination,
+      boolean executionStarted,
+      long startedAtNanos,
+      CloudAnalysisFailureReason effectiveFailureReason) {
+    return new CloudGatewayAttemptObservation(
+        termination,
+        executionStarted,
+        elapsedMillis(startedAtNanos, System.nanoTime()),
+        CloudAnalysisResult.failure(effectiveFailureReason));
+  }
+
+  static long elapsedMillis(long startedAtNanos, long finishedAtNanos) {
+    long elapsedNanos = finishedAtNanos - startedAtNanos;
+    return elapsedNanos <= 0 ? 0 : TimeUnit.NANOSECONDS.toMillis(elapsedNanos);
   }
 
   private void requireNoTransaction() {

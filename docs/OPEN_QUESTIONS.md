@@ -83,8 +83,8 @@ operational approval. Resolved decisions are not implementation prompts.
 - Every new LOCAL, cloud-success, and fallback proposal rebuilds `providerMetadata` from one bounded
   server allow-list, so a provider cannot retain arbitrary metadata fields.
 - No consent grant/revoke HTTP API, actual external provider, or Ollama/LiquidAI adapter is
-  configured. Related-memo retrieval, fuzzy/vector search, embeddings, per-attempt history, duration,
-  model-token, and cost tracking remain open work.
+  configured. Related-memo retrieval, fuzzy/vector search, embeddings, real-model numeric
+  usage/cost reporting and budget enforcement remain open work.
 - V14 stores an internal final-run authorization/grant snapshot and deterministic provider-request
   token for gateway calls, while legacy rows remain explicitly unsnapshotted. V15 now commits a
   provider-call-only dispatch before execution, binds descriptor and executor identity, claims work
@@ -107,6 +107,17 @@ operational approval. Resolved decisions are not implementation prompts.
   binding, fence, lease, and queued/running states remain absent from public synchronous HTTP and
   recovery DTOs, proposal JSON or `providerMetadata`, ordinary logs, browser storage, and
   service-worker caches.
+- V17 versions new dispatches as `gateway-attempt-v1` and records at most `max_attempts` owner-scoped
+  fence rows. Historical dispatches remain `attempt_history_version=none` with no backfilled rows.
+  Executor rejection is distinct from a gateway-returned `UNAVAILABLE`; timeout, caller interruption,
+  and process loss keep remote result truth `UNKNOWN`. An obsolete-fence observation preserves only
+  actually observed truth and cannot overwrite the run. Observed local elapsed uses a
+  monotonic clock, while process-loss duration and usage/cost remain unknown. Locally observed Fake
+  model-token/cost is `NOT_APPLICABLE`/null, and a future real-model result remains `NOT_REPORTED`/null
+  until the gateway contract reports usage and price. The ledger is absent from public
+  DTO/proposal/metadata/UI/eval
+  report/log/browser/service-worker boundaries, stores no provider text/ID/token/raw/context, and has
+  no independent TTL before an approved purge policy.
 - No real local model or cloud provider is selected or connected without a separate product,
   privacy, evaluation, and cost decision.
 - Public regression and `VISIBLE_CHALLENGE` fixtures are diagnostic synthetic data, never blind
@@ -140,6 +151,7 @@ operational approval. Resolved decisions are not implementation prompts.
 - which approved provider/region and transfer/retention/deletion policy may use the existing exact
   consent pin, and what audited user-facing grant/revoke API and wording will manage it;
 - monthly budget and per-request context/token limits;
+- numeric usage/cost source of truth, aggregation rules, and attempt-ledger retention/purge policy;
 - maximum accepted latency, retry behavior, and outage policy.
 - who independently curates and adjudicates the blind release, and which metric thresholds are
   frozen before any candidate output is inspected.

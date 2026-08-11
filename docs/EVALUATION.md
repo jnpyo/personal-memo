@@ -47,6 +47,11 @@ or owner ID. The test fails if any fixture content appears in the report. After 
 run, CI uploads this generated report for 14 days so a checkpoint can be inspected without
 publishing raw evaluation text.
 
+V17's internal gateway-attempt ledger does not change this report contract. The deterministic and
+blind reports contain no attempt rows, duration, execution state, token/cost status, provider/model
+identifier, or provider-request token; operational evidence is not silently promoted to an accuracy
+metric.
+
 ## Metrics
 
 Metrics are reported separately for regression, `VISIBLE_CHALLENGE`, and the combined set, keyed by
@@ -279,12 +284,15 @@ A real provider remains blocked until all of the following are true:
    transfer/gateway/provider/model/policy/outcome evidence are retained, and an approved provider,
    region, retention/deletion policy, consent grant UX/API, per-request context/tool/token/time
    limits, monthly budget, and outage behavior are explicitly decided and enforced fail-closed. The
-   V14 final-run authorization/grant/token evidence, V15's durable descriptor/executor binding, and
-   V16's bounded context hash/version/count evidence must be retained. V15/V16 commit authority and
-   the exact context snapshot before execution, then reuse the original token and database snapshot
-   during caller-driven or bounded production recovery for Fake/test gateways. Any approved external
-   provider must honor the same token as its deduplication identity and preserve the fail-closed
-   consent and finalization checks.
+   V14 final-run authorization/grant/token evidence, V15's durable descriptor/executor binding,
+   V16's bounded context hash/version/count evidence, and V17's truthful attempt-state semantics must
+   be retained. V15/V16 commit authority and the exact context snapshot before execution, then reuse
+   the original token and database snapshot during caller-driven or bounded production recovery for
+   Fake/test gateways. V17 records only local observations and leaves unobserved remote result,
+   duration, usage, and cost unknown rather than inventing values. Any approved external provider
+   must honor the same token as its deduplication identity and preserve the fail-closed consent and
+   finalization checks. Attempt retention/purge and real usage/cost reporting still require explicit
+   approval.
 4. A Shadow mode can persist validated proposals and metrics without applying them; only explicit
    user approval may continue to create tags, tasks, or relations.
 5. Fake failure tests cover timeout, retry exhaustion, invalid structured output, stale revision,
@@ -292,14 +300,15 @@ A real provider remains blocked until all of the following are true:
 
 ## Known Milestone 2 blockers
 
-This list distinguishes remaining blockers from the execution mechanics V15/V16 now supply:
+This list distinguishes remaining blockers from the execution mechanics V15/V16/V17 now supply:
 
 - Runtime `AnalysisRoute` currently implements only `LOCAL_REVIEW` and `CLOUD_ENRICH`.
   `USER_INPUT_NEEDED` and `PENDING_OFFLINE` in the pipeline document are conceptual states, not
   executable routes yet.
 - Analysis remains synchronous at the HTTP boundary. Clear local runs are finalized directly as
-  `REVIEW_REQUIRED`; a cloud-bound run is first committed as `QUEUED` / `PENDING` with a V15/V16
-  `PREPARED` dispatch, including its bounded retrieval-context snapshot, then claimed as `RUNNING`,
+  `REVIEW_REQUIRED`; a cloud-bound run is first committed as `QUEUED` / `PENDING` with a V15/V16/V17
+  `PREPARED` dispatch, including its bounded retrieval-context and attempt-history version, then
+  claimed as `RUNNING`,
   executed with a persisted timeout outside the database transaction, and finalized as
   `REVIEW_REQUIRED` or `STALE` after a locked revision and fence recheck. Typed cloud failure,
   binding/execution exception, and invalid enriched output persist the revalidated local proposal
@@ -312,8 +321,10 @@ This list distinguishes remaining blockers from the execution mechanics V15/V16 
   the exact V16 database context snapshot, bounded out-of-transaction Fake call,
   revision-rechecking finalize, and deterministic provider token. Retrieval is not rerun on recovery,
   so the same token is never paired with different context. This supports recovery after a process
-  restart but remains bounded at-least-once execution, not exactly-once delivery. Duration,
-  per-attempt history, model-token, and cost metrics remain unimplemented.
+  restart but remains bounded at-least-once execution, not exactly-once delivery. V17 now records one
+  internal owner-scoped row per claimed fence, up to `max_attempts`, with monotonic local duration
+  when termination is observed and `UNKNOWN` for unobserved remote truth. This is operational
+  evidence, not provider-selection accuracy evidence.
 - V13 enforces an owner-scoped exact consent pin: boolean true, the descriptor's exact policy
   version, and a non-null grant timestamp no later than the authorization-check instant. It revokes
   legacy boolean-only grants and rejects future-dated grants. `NO_NETWORK` Fake needs no consent;
@@ -325,10 +336,15 @@ This list distinguishes remaining blockers from the execution mechanics V15/V16 
 - Every new run carries server-owned transfer mode, gateway/provider/model/consent-policy versions,
   and outcome; provider-call runs additionally pin an immutable gateway binding. V15 stores internal
   dispatch/fence/lease evidence. V16 adds context raw/hash/version/count before the call and scrubs raw
-  at finalization while retaining hash/version/count. None of the payload/context evidence, token,
-  binding, fence, or lease is exposed through public DTOs, proposal JSON or `providerMetadata`, logs,
-  browser storage, or service-worker caches. Model-token/cost usage and complete operational
-  attempt/duration metrics are not implemented.
+  at finalization while retaining hash/version/count. V17 distinguishes executor rejection from an
+  observed gateway `UNAVAILABLE`, records timeout/interruption/process-loss remote truth as unknown,
+  keeps locally observed Fake model-token/cost `NOT_APPLICABLE` with null numeric values, and leaves
+  process-loss usage/cost `UNKNOWN`. None of the
+  payload/context evidence, attempt ledger, token, binding, fence, or lease is exposed through public
+  DTOs, proposal JSON or `providerMetadata`, UI, evaluation reports, logs, browser storage, or
+  service-worker caches. Attempt rows contain no provider text/ID/token/raw/context and receive no
+  arbitrary TTL; real-model numeric usage/cost reporting, aggregation, budget enforcement, and an
+  approved retention/purge policy remain unimplemented.
 - Every new LOCAL, cloud-success, and fallback proposal canonicalizes `providerMetadata` through one
   bounded server allow-list; this is metadata hygiene, not provider authorization.
 - A narrow owner-active exact tag/alias context is implemented: at most 10 proposal candidates and

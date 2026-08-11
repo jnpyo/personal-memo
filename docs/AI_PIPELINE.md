@@ -29,6 +29,10 @@ The repository now implements the model-free portion of Milestone 2:
   canonical-name/alias terms; an owner-scoped query matches only active tags by exact normalized
   equality, the complete match set is used for unique-tag resolution, and a deterministic maximum of
   8 candidates is supplied as an internal gateway hint;
+- V17 bounded attempt evidence: each claimed fence for a new `gateway-attempt-v1` dispatch gets one
+  owner-scoped internal ledger row, with at most the dispatch's `max_attempts` rows; executor
+  rejection, gateway-returned failure, timeout, interruption, process loss, stale finalization, and
+  fenced-out completion keep separate local/remote truth;
 - production-profile bounded recovery: every 30 seconds, a scheduler selects at most 25
   `PREPARED` or expired-lease `RUNNING` dispatches, obtains owner and the existing idempotency key
   only from owner-consistent database rows, and reuses the same claim/invoke/finalize lifecycle;
@@ -58,10 +62,14 @@ grant/revoke HTTP API or external provider configuration. The analysis HTTP oper
 synchronous: its caller waits for final review or stale-revision handling even though the gateway
 attempt runs in a bounded in-process executor outside database transactions. The production profile
 also enables a bounded periodic recovery worker, so a committed dispatch can resume after a caller
-interruption or process restart without changing the public contract. Per-attempt history, duration,
-model-token usage, cost tracking, related-memo retrieval, fuzzy/vector search, and embeddings remain
-unimplemented. The roadmap's real-provider adapter remains deferred by the project decision until
-explicitly authorized.
+interruption or process restart without changing the public contract. V17 persists internal
+per-attempt lifecycle and monotonic local elapsed evidence, but does not expose it through the public
+POST, DTOs, proposal, `providerMetadata`, UI, or evaluation report. The current Fake has no model, so
+locally observed model-token and cost status is `NOT_APPLICABLE` with null numbers; an unobserved
+process loss remains `UNKNOWN`. Real-model numeric usage/cost
+reporting, aggregation, budget enforcement, related-memo retrieval, fuzzy/vector search, and
+embeddings remain unimplemented. The roadmap's real-provider adapter remains deferred by the
+project decision until explicitly authorized.
 
 ## Pipeline boundaries
 
@@ -76,8 +84,9 @@ Raw memo
           → bounded owner-active exact tag/alias retrieval and deterministic K=8 context
           → durable run/dispatch prepare commit
           → claim with descriptor/binding comparison, fence, lease, and deadline
+          → create one V17 internal ledger row for the claimed fence
           → bounded gateway execution outside a database transaction
-          → revision/fence-rechecking finalize
+          → record local observation and revision/fence-rechecking finalize
               → typed enrichment result or validated local fallback, or
               → committed STALE result
   → final proposal validation and cloud-run evidence, when reviewable
@@ -113,9 +122,11 @@ may include:
 - canonical tag candidates and aliases
 - tag centroid/version metadata
 
-Current Fake output includes the structured proposal candidates and bounded provenance described
-below. Embedding similarities, related-memo top-k, elapsed time, token use, and cost are not produced
-or persisted. The V16 exact tag/alias context is a server-derived gateway hint, not analyzer output.
+Current Fake analyzer output includes the structured proposal candidates and bounded provenance
+described below. Embedding similarities, related-memo top-k, token use, and cost are not analyzer
+output. V17 separately persists gateway-attempt local elapsed time; this is monotonic process-local
+execution evidence, not model output or end-to-end product latency. The V16 exact tag/alias context is
+a server-derived gateway hint, not analyzer output.
 The broader target output may include:
 
 - type score distribution
@@ -316,6 +327,28 @@ its hash. It also scrubs the serialized context while retaining its hash, versio
 integrity evidence. Existing V15 dispatches remain truthful legacy rows with version `none`, count
 `0`, and null context/hash rather than receiving invented context.
 
+V17 adds `attempt_history_version` to the dispatch. Existing dispatches are backfilled only with
+`none`; no historical attempt rows are invented. Every newly prepared gateway dispatch uses
+`gateway-attempt-v1`, and each successful claim inserts one owner-scoped row keyed by run and fence.
+The application admits no more rows than the persisted `max_attempts` and keeps at most one
+`IN_FLIGHT` row for a run. A local `EXECUTOR_REJECTED` observation means execution did not start and
+the remote result is `UNKNOWN`; it is distinct from an observed gateway result whose typed outcome is
+`UNAVAILABLE`. Likewise timeout, caller interruption, unexpected local termination, and process loss
+do not claim a provider result. Late completion from an obsolete fence is retained as `FENCED_OUT`
+instead of overwriting the run, and revision change during the current attempt records
+`STALE_FINALIZE`.
+
+Observed attempts use a monotonic local clock for non-negative elapsed milliseconds. This measures
+only the current process's submit/wait interval. Timeout and interruption retain that local duration
+but keep remote result truth `UNKNOWN`; an unobserved process loss has unknown duration and null
+milliseconds, and its model-token/cost evidence is also `UNKNOWN`. While a row is in flight,
+model-token and cost evidence is `PENDING`. A locally observed no-model Fake and any execution that
+never starts finish as `NOT_APPLICABLE` with null numeric fields. A future
+real-model result is currently `NOT_REPORTED` with null numbers because the gateway result contract
+does not carry usage or price; a terminated real-model attempt whose remote completion is uncertain
+is `UNKNOWN`. The database validates a future `REPORTED` numeric shape, but no runtime path writes
+model-token or cost numbers in this checkpoint and zero is never substituted for missing evidence.
+
 If a caller is interrupted or a process stops after a claim, the committed row remains recoverable.
 A later request with the same idempotency key still binds the currently configured gateway, requires
 the persisted descriptor/binding identity to match, and may reclaim an expired lease within the
@@ -333,14 +366,17 @@ fence, lease, deadline, and the exact V16 context snapshot already stored in the
 does not rerun tag retrieval, so one provider-request token cannot be retried with different context.
 This is bounded at-least-once execution, not an exactly-once promise; a future external provider must
 honor the token as its deduplication identity. The raw idempotency key, prepared payload, provider
-token, binding ID, fence, lease, retrieval-context raw/hash/version/count, and internal queued/running
-state remain internal database/application values; they are not added to `RunView`, proposal JSON or
-`providerMetadata`, recovery responses, ordinary logs, browser storage, or service-worker caches. The
-public POST remains synchronous, and if a same-key live lease
+token, binding ID, fence, lease, retrieval-context raw/hash/version/count, attempt ledger, and internal
+queued/running state remain internal database/application values; they are not added to `RunView`,
+proposal JSON or `providerMetadata`, UI, evaluation reports, recovery responses, ordinary logs,
+browser storage, or service-worker caches. Attempt rows contain no provider error text, provider/model
+identifier, request token, raw memo, or retrieval context. They follow the current run-data retention
+boundary until an approved purge policy exists; V17 introduces no arbitrary TTL. The public POST
+remains synchronous, and if a same-key live lease
 or invocation outlasts its coordination window the caller receives `409 ANALYSIS_IN_PROGRESS` and
 may retry the identical key/body. A stale finalization commits before a caller request returns
-`409 STALE_MEMO_REVISION`. Per-attempt history, duration, model-token usage, cost, related-memo
-retrieval, fuzzy/vector search, and embeddings are still not recorded or supplied.
+`409 STALE_MEMO_REVISION`. Real-model numeric usage/cost reporting and aggregation, related-memo
+retrieval, fuzzy/vector search, and embeddings are still not supplied.
 
 ## Future Agent tools before confirmation — not implemented
 
@@ -525,16 +561,17 @@ analyzer/prompt/local-model/embedding-model/routing-policy provenance and are se
 `Cache-Control: no-store`.
 
 This evidence makes personal review behavior observable, but it does not open the real-LLM gate.
-V15/V16 plus the bounded production recovery worker supply durable pre-call, descriptor-bound,
-context-snapshotted, out-of-transaction Fake/test execution and restart recovery; they do not
-authorize a real provider or expose the internal dispatch contract over HTTP. Completed independent
+V15/V16/V17 plus the bounded production recovery worker supply durable pre-call, descriptor-bound,
+context-snapshotted, attempt-observed, out-of-transaction Fake/test execution and restart recovery;
+they do not authorize a real provider or expose the internal dispatch contract over HTTP. Completed independent
 adjudication of the
 version-2 date/item gold, an approved and independently reviewed version-3 binding label
 policy/dataset, a separately held blind release
 with a pre-registered gate, approved provider/region/retention/cost limits, a consent grant/revoke UX
 and API, provider-side token deduplication, and the remaining criteria in
-[EVALUATION.md](EVALUATION.md) are still required. Per-attempt operational metrics, related-memo
-retrieval, fuzzy/vector search, and embedding context also remain separate work.
+[EVALUATION.md](EVALUATION.md) are still required. Real-provider usage/cost collection and budget
+enforcement, an approved attempt-retention/purge policy, related-memo retrieval, fuzzy/vector search,
+and embedding context also remain separate work.
 
 ## Personalization without fine-tuning
 

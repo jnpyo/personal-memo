@@ -25,6 +25,7 @@ import local.personalmemo.analysis.domain.CloudAnalysisGateway;
 import local.personalmemo.analysis.domain.CloudAnalysisOutcome;
 import local.personalmemo.analysis.domain.CloudAnalysisRequest;
 import local.personalmemo.analysis.domain.CloudAnalysisResult;
+import local.personalmemo.analysis.domain.CloudGatewayAttemptTermination;
 import local.personalmemo.analysis.domain.CloudGatewayBinding;
 import local.personalmemo.analysis.domain.CloudGatewayBindingId;
 import local.personalmemo.analysis.domain.CloudGatewayDescriptor;
@@ -59,6 +60,7 @@ public class AnalysisService {
   private static final String LEGACY_PROPOSAL_SCHEMA_VERSION = "1";
   private static final String CURRENT_PROPOSAL_SCHEMA_VERSION = "2";
   private static final String DURABLE_EXECUTION_CONTRACT_VERSION = "durable-v1";
+  private static final String CURRENT_ATTEMPT_HISTORY_VERSION = "gateway-attempt-v1";
   private static final int MAX_GATEWAY_ATTEMPTS = 2;
   private static final Duration DISPATCH_WINDOW = Duration.ofMinutes(5);
   private static final Duration LEASE_GRACE = Duration.ofSeconds(1);
@@ -204,11 +206,11 @@ public class AnalysisService {
         continue;
       }
       if (decision instanceof StartDispatch dispatch) {
-        CloudAnalysisResult result = invokeForCaller(dispatch);
-        CloudAnalysisResult completedResult = result;
+        CloudGatewayAttemptObservation observation = invokeForCaller(ownerId, dispatch);
+        CloudGatewayAttemptObservation completedObservation = observation;
         decision =
             inTransaction(
-                () -> finalizeStart(ownerId, dispatch, completedResult, key, requestHash));
+                () -> finalizeStart(ownerId, dispatch, completedObservation, key, requestHash));
         continue;
       }
       throw new IllegalStateException("Unknown analysis start decision.");
@@ -318,18 +320,19 @@ public class AnalysisService {
         continue;
       }
       if (decision instanceof StartDispatch dispatch) {
-        CloudAnalysisResult result = invokeForRecovery(dispatch);
-        if (result == null) {
+        CloudGatewayAttemptObservation observation =
+            invokeForRecovery(candidate.ownerId(), dispatch);
+        if (observation == null) {
           return false;
         }
-        CloudAnalysisResult completedResult = result;
+        CloudGatewayAttemptObservation completedObservation = observation;
         decision =
             inTransaction(
                 () ->
                     finalizeStart(
                         candidate.ownerId(),
                         dispatch,
-                        completedResult,
+                        completedObservation,
                         candidate.key(),
                         candidate.requestHash()));
         continue;
@@ -339,30 +342,32 @@ public class AnalysisService {
     return false;
   }
 
-  private CloudAnalysisResult invokeForCaller(StartDispatch dispatch) {
+  private CloudGatewayAttemptObservation invokeForCaller(UUID ownerId, StartDispatch dispatch) {
     try {
-      return cloudInvoker.invoke(dispatch.binding(), dispatch.request(), dispatch.callTimeout());
-    } catch (CloudGatewayInvocationException exception) {
-      if (exception.reason() == CloudGatewayInvocationException.Reason.CALLER_INTERRUPTED) {
+      CloudGatewayAttemptObservation observation =
+          cloudInvoker.observe(dispatch.binding(), dispatch.request(), dispatch.callTimeout());
+      if (observation.termination() == CloudGatewayAttemptTermination.CALLER_INTERRUPTED) {
+        recordInterruptedAttempt(ownerId, dispatch, observation);
         throw DomainException.conflict(
             "ANALYSIS_IN_PROGRESS", "The analysis remains recoverable. Retry with the same key.");
       }
-      return CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
+      return observation;
     } catch (IllegalArgumentException exception) {
-      return CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
+      return CloudGatewayAttemptObservation.unexpectedNotStarted();
     }
   }
 
-  private CloudAnalysisResult invokeForRecovery(StartDispatch dispatch) {
+  private CloudGatewayAttemptObservation invokeForRecovery(UUID ownerId, StartDispatch dispatch) {
     try {
-      return cloudInvoker.invoke(dispatch.binding(), dispatch.request(), dispatch.callTimeout());
-    } catch (CloudGatewayInvocationException exception) {
-      if (exception.reason() == CloudGatewayInvocationException.Reason.CALLER_INTERRUPTED) {
+      CloudGatewayAttemptObservation observation =
+          cloudInvoker.observe(dispatch.binding(), dispatch.request(), dispatch.callTimeout());
+      if (observation.termination() == CloudGatewayAttemptTermination.CALLER_INTERRUPTED) {
+        recordInterruptedAttempt(ownerId, dispatch, observation);
         return null;
       }
-      return CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
+      return observation;
     } catch (IllegalArgumentException exception) {
-      return CloudAnalysisResult.failure(CloudAnalysisFailureReason.UNEXPECTED_FAILURE);
+      return CloudGatewayAttemptObservation.unexpectedNotStarted();
     }
   }
 
@@ -671,14 +676,16 @@ public class AnalysisService {
               request_hash, validated_local_proposal, validated_local_proposal_hash,
               retrieval_context, retrieval_context_hash, retrieval_context_version,
               retrieval_context_candidate_count,
-              executor_binding_id, call_timeout_ms, max_attempts, deadline_at, state,
+              executor_binding_id, call_timeout_ms, max_attempts, deadline_at,
+              attempt_history_version, state,
               fence_token, prepared_at, updated_at
             ) values (
               :runId, :ownerId, :proposalId, :idempotencyKeyHash,
               :requestHash, :localProposal, :localProposalHash,
               :retrievalContext, :retrievalContextHash, :retrievalContextVersion,
               :retrievalContextCandidateCount,
-              :bindingId, :callTimeoutMs, :maxAttempts, :deadlineAt, 'PREPARED',
+              :bindingId, :callTimeoutMs, :maxAttempts, :deadlineAt,
+              :attemptHistoryVersion, 'PREPARED',
               0, :preparedAt, :preparedAt
             )
             """)
@@ -697,6 +704,7 @@ public class AnalysisService {
         .param("callTimeoutMs", timeoutMillis)
         .param("maxAttempts", MAX_GATEWAY_ATTEMPTS)
         .param("deadlineAt", Timestamp.from(preparedAt.plus(DISPATCH_WINDOW)))
+        .param("attemptHistoryVersion", CURRENT_ATTEMPT_HISTORY_VERSION)
         .param("preparedAt", Timestamp.from(preparedAt))
         .update();
   }
@@ -721,9 +729,11 @@ public class AnalysisService {
     if (dispatch.finalizedAt() != null || "FINALIZED".equals(dispatch.dispatchState())) {
       return decisionFromFinalResponse(requireStartReplay(ownerId, key, requestHash));
     }
+    Instant now = Instant.now();
     if ("STALE".equals(dispatch.status())
         || !memo.isActive()
         || memo.currentRevision() != dispatch.memoRevision()) {
+      supersedeUnobservedAttemptIfTracked(ownerId, dispatch, now);
       return completeDurableDispatch(
           ownerId,
           dispatch,
@@ -736,10 +746,9 @@ public class AnalysisService {
           "STALE",
           key,
           requestHash,
-          Instant.now());
+          now);
     }
 
-    Instant now = Instant.now();
     if ("RUNNING".equals(dispatch.dispatchState())
         && dispatch.leaseExpiresAt() != null
         && dispatch.leaseExpiresAt().isAfter(now)) {
@@ -748,6 +757,7 @@ public class AnalysisService {
     Duration remainingDispatchWindow = Duration.between(now, dispatch.deadlineAt());
     if (remainingDispatchWindow.compareTo(Duration.ofMillis(1)) < 0
         || dispatch.fenceToken() >= dispatch.maxAttempts()) {
+      supersedeUnobservedAttemptIfTracked(ownerId, dispatch, now);
       return completeFallbackBeforeCall(
           ownerId,
           dispatch,
@@ -758,6 +768,7 @@ public class AnalysisService {
           now);
     }
     if (!matchesBinding(dispatch, binding)) {
+      supersedeUnobservedAttemptIfTracked(ownerId, dispatch, now);
       return completeFallbackBeforeCall(
           ownerId,
           dispatch,
@@ -777,6 +788,7 @@ public class AnalysisService {
       if (currentGrant.isEmpty()
           || dispatch.acceptedConsentGrantedAt() == null
           || !currentGrant.get().equals(dispatch.acceptedConsentGrantedAt())) {
+        supersedeUnobservedAttemptIfTracked(ownerId, dispatch, checkedAt);
         return completeFallbackBeforeCall(
             ownerId,
             dispatch,
@@ -800,6 +812,9 @@ public class AnalysisService {
         proposedLeaseExpiry.isAfter(dispatch.deadlineAt())
             ? dispatch.deadlineAt()
             : proposedLeaseExpiry;
+    if (CURRENT_ATTEMPT_HISTORY_VERSION.equals(dispatch.attemptHistoryVersion())) {
+      supersedeUnobservedAttempt(ownerId, runId, now);
+    }
     db.sql(
             """
             update analysis_run_dispatches
@@ -817,6 +832,15 @@ public class AnalysisService {
         .param("runId", runId)
         .param("ownerId", ownerId)
         .update();
+    if (CURRENT_ATTEMPT_HISTORY_VERSION.equals(dispatch.attemptHistoryVersion())) {
+      insertAttempt(
+          ownerId,
+          runId,
+          nextFence,
+          Math.toIntExact(attemptTimeout.toMillis()),
+          now,
+          leaseExpiresAt);
+    }
     updateRunForAttempt(ownerId, runId, attemptEvidence);
 
     CloudAnalysisRequest request =
@@ -829,17 +853,26 @@ public class AnalysisService {
             Optional.ofNullable(attemptEvidence.acceptedConsentGrantedAt()),
             attemptEvidence.providerRequestToken(),
             dispatch.tagRetrievalContext());
-    return new StartDispatch(runId, proposalId, nextFence, binding, request, attemptTimeout);
+    return new StartDispatch(
+        runId,
+        proposalId,
+        nextFence,
+        dispatch.attemptHistoryVersion(),
+        binding,
+        request,
+        attemptTimeout);
   }
 
   private StartDecision finalizeStart(
       UUID ownerId,
       StartDispatch attempt,
-      CloudAnalysisResult result,
+      CloudGatewayAttemptObservation observation,
       String key,
       String requestHash) {
+    Instant observedAt = Instant.now();
     RunView replay = requireStartReplay(ownerId, key, requestHash);
     if (!"RUNNING".equals(replay.status())) {
+      recordAttemptObservation(ownerId, attempt, observation, "FENCED_OUT", observedAt);
       return decisionFromFinalResponse(replay);
     }
 
@@ -849,17 +882,21 @@ public class AnalysisService {
     DispatchSnapshot dispatch = findDispatch(ownerId, attempt.runId(), attempt.proposalId(), true);
     requireSameDispatchIdentity(observed, dispatch);
     if (dispatch.finalizedAt() != null || "FINALIZED".equals(dispatch.dispatchState())) {
+      recordAttemptObservation(ownerId, attempt, observation, "FENCED_OUT", observedAt);
       return decisionFromFinalResponse(requireStartReplay(ownerId, key, requestHash));
     }
     if (dispatch.fenceToken() != attempt.fenceToken()) {
+      recordAttemptObservation(ownerId, attempt, observation, "FENCED_OUT", observedAt);
       return new StartWaiting(attempt.runId(), attempt.proposalId(), attempt.binding());
     }
 
-    Instant completedAt = Instant.now();
+    CloudAnalysisResult result = observation.effectiveResult();
+    Instant completedAt = observedAt;
     CloudRunEvidence resultEvidence = evidenceForResult(attempt.request(), result);
     if ("STALE".equals(dispatch.status())
         || !memo.isActive()
         || memo.currentRevision() != dispatch.memoRevision()) {
+      recordAttemptObservation(ownerId, attempt, observation, "STALE_FINALIZE", observedAt);
       return completeDurableDispatch(
           ownerId,
           dispatch,
@@ -885,6 +922,7 @@ public class AnalysisService {
             dispatch.schemaVersion(),
             dispatch.provenance(),
             dispatch.routingPolicyVersion());
+    recordAttemptObservation(ownerId, attempt, observation, "APPLIED_TO_RUN", observedAt);
     return completeDurableDispatch(
         ownerId,
         dispatch,
@@ -935,8 +973,9 @@ public class AnalysisService {
       String key,
       String requestHash,
       Instant completedAt) {
-    db.sql(
-            """
+    int updated =
+        db.sql(
+                """
             update analysis_runs
                set status = :status,
                    cloud_transfer_mode = :cloudTransferMode,
@@ -953,26 +992,31 @@ public class AnalysisService {
              where id = :runId
                and owner_id = :ownerId
             """)
-        .param("status", status)
-        .param("cloudTransferMode", evidence.transferMode())
-        .param("cloudGatewayVersion", evidence.gatewayVersion())
-        .param("cloudProviderId", evidence.providerId())
-        .param("cloudModelVersion", evidence.modelVersion())
-        .param("cloudConsentPolicyVersion", evidence.consentPolicyVersion())
-        .param("cloudOutcome", evidence.outcome().name())
-        .param("cloudExecutionContractVersion", evidence.executionContractVersion())
-        .param("cloudAuthorizationCheckedAt", timestampOrNull(evidence.authorizationCheckedAt()))
-        .param(
-            "cloudAcceptedConsentGrantedAt", timestampOrNull(evidence.acceptedConsentGrantedAt()))
-        .param(
-            "cloudProviderRequestToken",
-            evidence.providerRequestToken() == null
-                ? null
-                : evidence.providerRequestToken().value())
-        .param("completedAt", Timestamp.from(completedAt))
-        .param("runId", dispatch.runId())
-        .param("ownerId", ownerId)
-        .update();
+            .param("status", status)
+            .param("cloudTransferMode", evidence.transferMode())
+            .param("cloudGatewayVersion", evidence.gatewayVersion())
+            .param("cloudProviderId", evidence.providerId())
+            .param("cloudModelVersion", evidence.modelVersion())
+            .param("cloudConsentPolicyVersion", evidence.consentPolicyVersion())
+            .param("cloudOutcome", evidence.outcome().name())
+            .param("cloudExecutionContractVersion", evidence.executionContractVersion())
+            .param(
+                "cloudAuthorizationCheckedAt", timestampOrNull(evidence.authorizationCheckedAt()))
+            .param(
+                "cloudAcceptedConsentGrantedAt",
+                timestampOrNull(evidence.acceptedConsentGrantedAt()))
+            .param(
+                "cloudProviderRequestToken",
+                evidence.providerRequestToken() == null
+                    ? null
+                    : evidence.providerRequestToken().value())
+            .param("completedAt", Timestamp.from(completedAt))
+            .param("runId", dispatch.runId())
+            .param("ownerId", ownerId)
+            .update();
+    if (updated != 1) {
+      throw new IllegalStateException("The durable analysis run is missing during finalization.");
+    }
     insertProposal(ownerId, dispatch.proposalId(), dispatch.runId(), proposal, completedAt);
     db.sql(
             """
@@ -1119,6 +1163,237 @@ public class AnalysisService {
         .update();
   }
 
+  private void supersedeUnobservedAttempt(UUID ownerId, UUID runId, Instant supersededAt) {
+    db.sql(
+            """
+            update analysis_run_dispatch_attempts
+               set attempt_state = 'SUPERSEDED',
+                   execution_state = case
+                     when local_termination is null then 'UNKNOWN'
+                     else execution_state
+                   end,
+                   local_termination = coalesce(local_termination, 'PROCESS_LOST'),
+                   result_state = 'UNKNOWN',
+                   gateway_outcome = null,
+                   disposition = 'SUPERSEDED',
+                   duration_status = case
+                     when local_termination is null then 'UNKNOWN'
+                     else duration_status
+                   end,
+                   duration_ms = case
+                     when local_termination is null then null
+                     else duration_ms
+                   end,
+                   model_token_status = case
+                     when local_termination is null then 'UNKNOWN'
+                     else model_token_status
+                   end,
+                   model_input_tokens = case
+                     when local_termination is null then null
+                     else model_input_tokens
+                   end,
+                   model_output_tokens = case
+                     when local_termination is null then null
+                     else model_output_tokens
+                   end,
+                   model_total_tokens = case
+                     when local_termination is null then null
+                     else model_total_tokens
+                   end,
+                   cost_status = case
+                     when local_termination is null then 'UNKNOWN'
+                     else cost_status
+                   end,
+                   cost_amount = case
+                     when local_termination is null then null
+                     else cost_amount
+                   end,
+                   cost_currency = case
+                     when local_termination is null then null
+                     else cost_currency
+                   end,
+                   updated_at = :supersededAt
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+               and attempt_state = 'IN_FLIGHT'
+            """)
+        .param("supersededAt", Timestamp.from(supersededAt))
+        .param("runId", runId)
+        .param("ownerId", ownerId)
+        .update();
+  }
+
+  private void supersedeUnobservedAttemptIfTracked(
+      UUID ownerId, DispatchSnapshot dispatch, Instant supersededAt) {
+    if (CURRENT_ATTEMPT_HISTORY_VERSION.equals(dispatch.attemptHistoryVersion())) {
+      supersedeUnobservedAttempt(ownerId, dispatch.runId(), supersededAt);
+    }
+  }
+
+  private void insertAttempt(
+      UUID ownerId,
+      UUID runId,
+      long fenceToken,
+      int effectiveTimeoutMs,
+      Instant claimedAt,
+      Instant leaseExpiresAt) {
+    db.sql(
+            """
+            insert into analysis_run_dispatch_attempts(
+              analysis_run_id, owner_id, attempt_history_version,
+              fence_token, effective_timeout_ms,
+              attempt_state, execution_state, local_termination, result_state,
+              gateway_outcome, disposition, duration_status, duration_ms,
+              model_token_status, model_input_tokens, model_output_tokens, model_total_tokens,
+              cost_status, cost_amount, cost_currency,
+              claimed_at, lease_expires_at, observed_at, updated_at
+            ) values (
+              :runId, :ownerId, :attemptHistoryVersion,
+              :fenceToken, :effectiveTimeoutMs,
+              'IN_FLIGHT', 'PENDING', null, 'PENDING',
+              null, 'PENDING', 'UNKNOWN', null,
+              'PENDING', null, null, null,
+              'PENDING', null, null,
+              :claimedAt, :leaseExpiresAt, null, :claimedAt
+            )
+            """)
+        .param("runId", runId)
+        .param("ownerId", ownerId)
+        .param("attemptHistoryVersion", CURRENT_ATTEMPT_HISTORY_VERSION)
+        .param("fenceToken", fenceToken)
+        .param("effectiveTimeoutMs", effectiveTimeoutMs)
+        .param("claimedAt", Timestamp.from(claimedAt))
+        .param("leaseExpiresAt", Timestamp.from(leaseExpiresAt))
+        .update();
+  }
+
+  private void recordAttemptObservation(
+      UUID ownerId,
+      StartDispatch attempt,
+      CloudGatewayAttemptObservation observation,
+      String disposition,
+      Instant observedAt) {
+    String modelEvidenceStatus = modelEvidenceStatus(attempt, observation);
+    String resultState = observation.gatewayResultObserved() ? "OBSERVED" : "UNKNOWN";
+    String gatewayOutcome =
+        observation.gatewayResultObserved()
+            ? gatewayOutcome(observation.effectiveResult()).name()
+            : null;
+    String localTermination =
+        observation.termination() == CloudGatewayAttemptTermination.GATEWAY_RESULT
+            ? "RESULT"
+            : observation.termination().name();
+    String attemptState =
+        switch (disposition) {
+          case "RECOVERY_PENDING" -> "IN_FLIGHT";
+          case "FENCED_OUT", "SUPERSEDED" -> "SUPERSEDED";
+          default -> "OBSERVED";
+        };
+    int updated =
+        db.sql(
+                """
+                update analysis_run_dispatch_attempts
+               set attempt_state = :attemptState,
+                   execution_state = :executionState,
+                   local_termination = :localTermination,
+                   result_state = :resultState,
+                   gateway_outcome = :gatewayOutcome,
+                   disposition = :disposition,
+                   duration_status = 'MEASURED',
+                   duration_ms = :durationMs,
+                   model_token_status = :modelTokenStatus,
+                   model_input_tokens = null,
+                   model_output_tokens = null,
+                   model_total_tokens = null,
+                   cost_status = :costStatus,
+                   cost_amount = null,
+                   cost_currency = null,
+                   observed_at = :observedAt,
+                   updated_at = :observedAt
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+               and fence_token = :fenceToken
+               and attempt_state in ('IN_FLIGHT', 'SUPERSEDED')
+                """)
+            .param("attemptState", attemptState)
+            .param("executionState", observation.executionStarted() ? "STARTED" : "NOT_STARTED")
+            .param("localTermination", localTermination)
+            .param("resultState", resultState)
+            .param("gatewayOutcome", gatewayOutcome)
+            .param("disposition", disposition)
+            .param("durationMs", observation.elapsedMillis())
+            .param("modelTokenStatus", modelEvidenceStatus)
+            .param("costStatus", modelEvidenceStatus)
+            .param("observedAt", Timestamp.from(observedAt))
+            .param("runId", attempt.runId())
+            .param("ownerId", ownerId)
+            .param("fenceToken", attempt.fenceToken())
+            .update();
+    if (CURRENT_ATTEMPT_HISTORY_VERSION.equals(attempt.attemptHistoryVersion()) && updated != 1) {
+      throw new IllegalStateException("The durable attempt observation row is missing.");
+    }
+    if ("none".equals(attempt.attemptHistoryVersion()) && updated != 0) {
+      throw new IllegalStateException("A legacy dispatch cannot contain attempt observations.");
+    }
+  }
+
+  private void recordInterruptedAttempt(
+      UUID ownerId, StartDispatch attempt, CloudGatewayAttemptObservation observation) {
+    boolean interrupted = Thread.interrupted();
+    try {
+      inTransaction(
+          () -> {
+            boolean currentAttempt =
+                db.sql(
+                        """
+                        select fence_token = :fenceToken and state <> 'FINALIZED'
+                          from analysis_run_dispatches
+                         where analysis_run_id = :runId
+                           and owner_id = :ownerId
+                           and reserved_proposal_id = :proposalId
+                           for update
+                        """)
+                    .param("fenceToken", attempt.fenceToken())
+                    .param("runId", attempt.runId())
+                    .param("ownerId", ownerId)
+                    .param("proposalId", attempt.proposalId())
+                    .query(Boolean.class)
+                    .single();
+            recordAttemptObservation(
+                ownerId,
+                attempt,
+                observation,
+                currentAttempt ? "RECOVERY_PENDING" : "SUPERSEDED",
+                Instant.now());
+            return Boolean.TRUE;
+          });
+    } finally {
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
+    }
+  }
+
+  private String modelEvidenceStatus(
+      StartDispatch attempt, CloudGatewayAttemptObservation observation) {
+    if (!observation.executionStarted()
+        || (attempt.request().descriptor().transferMode() == CloudTransferMode.NO_NETWORK
+            && "none".equals(attempt.request().descriptor().modelVersion()))) {
+      return "NOT_APPLICABLE";
+    }
+    return observation.gatewayResultObserved() ? "NOT_REPORTED" : "UNKNOWN";
+  }
+
+  private CloudAnalysisOutcome gatewayOutcome(CloudAnalysisResult result) {
+    if (result instanceof CloudAnalysisResult.Success) {
+      return CloudAnalysisOutcome.SUCCESS;
+    }
+    if (result instanceof CloudAnalysisResult.Failure failure) {
+      return outcomeFor(failure.reason());
+    }
+    return CloudAnalysisOutcome.UNEXPECTED_FAILURE;
+  }
+
   private RunView requireStartReplay(UUID ownerId, String key, String requestHash) {
     return idempotency
         .find(ownerId, START_OPERATION, key, requestHash)
@@ -1203,6 +1478,7 @@ public class AnalysisService {
                    d.call_timeout_ms,
                    d.max_attempts,
                    d.deadline_at,
+                   d.attempt_history_version,
                    d.state as dispatch_state,
                    d.fence_token,
                    d.lease_expires_at,
@@ -1245,6 +1521,11 @@ public class AnalysisService {
     }
     Optional<TagRetrievalContext> tagRetrievalContext =
         mapTagRetrievalContext(resultSet, dispatchState);
+    String attemptHistoryVersion = resultSet.getString("attempt_history_version");
+    if (!"none".equals(attemptHistoryVersion)
+        && !CURRENT_ATTEMPT_HISTORY_VERSION.equals(attemptHistoryVersion)) {
+      throw new IllegalStateException("The durable attempt history version is unsupported.");
+    }
     CloudGatewayDescriptor descriptor =
         new CloudGatewayDescriptor(
             resultSet.getString("cloud_gateway_version"),
@@ -1289,6 +1570,7 @@ public class AnalysisService {
         resultSet.getInt("call_timeout_ms"),
         resultSet.getInt("max_attempts"),
         resultSet.getTimestamp("deadline_at").toInstant(),
+        attemptHistoryVersion,
         dispatchState,
         resultSet.getLong("fence_token"),
         instantOrNull(resultSet, "lease_expires_at"),
@@ -1956,6 +2238,7 @@ public class AnalysisService {
       UUID runId,
       UUID proposalId,
       long fenceToken,
+      String attemptHistoryVersion,
       CloudGatewayBinding binding,
       CloudAnalysisRequest request,
       Duration callTimeout)
@@ -1994,6 +2277,7 @@ public class AnalysisService {
       int callTimeoutMs,
       int maxAttempts,
       Instant deadlineAt,
+      String attemptHistoryVersion,
       String dispatchState,
       long fenceToken,
       Instant leaseExpiresAt,
