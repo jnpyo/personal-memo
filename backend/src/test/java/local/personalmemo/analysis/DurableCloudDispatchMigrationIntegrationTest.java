@@ -392,7 +392,7 @@ class DurableCloudDispatchMigrationIntegrationTest extends PostgresIntegrationTe
         .sql(
             "insert into "
                 + table("analysis_run_dispatches")
-                + "(analysis_run_id,owner_id,reserved_proposal_id,idempotency_key_hash,request_hash,validated_local_proposal,validated_local_proposal_hash,executor_binding_id,call_timeout_ms,max_attempts,deadline_at,state,fence_token,last_attempt_started_at,lease_expires_at,prepared_at,finalized_at,updated_at) values(:runId,:ownerId,:proposalId,:keyHash,:requestHash,:proposal,:proposalHash,:bindingId,1000,3,:deadline,'PREPARED',0,null,null,:preparedAt,null,:preparedAt)")
+                + "(analysis_run_id,owner_id,reserved_proposal_id,idempotency_key_hash,request_hash,validated_local_proposal,validated_local_proposal_hash,retrieval_context,retrieval_context_hash,retrieval_context_version,retrieval_context_candidate_count,executor_binding_id,call_timeout_ms,max_attempts,deadline_at,state,fence_token,last_attempt_started_at,lease_expires_at,prepared_at,finalized_at,updated_at) values(:runId,:ownerId,:proposalId,:keyHash,:requestHash,:proposal,:proposalHash,null,null,'none',0,:bindingId,1000,3,:deadline,'PREPARED',0,null,null,:preparedAt,null,:preparedAt)")
         .param("runId", runId)
         .param("ownerId", ownerId)
         .param("proposalId", proposalId)

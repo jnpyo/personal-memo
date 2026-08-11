@@ -279,9 +279,10 @@ A real provider remains blocked until all of the following are true:
    transfer/gateway/provider/model/policy/outcome evidence are retained, and an approved provider,
    region, retention/deletion policy, consent grant UX/API, per-request context/tool/token/time
    limits, monthly budget, and outage behavior are explicitly decided and enforced fail-closed. The
-   V14 final-run authorization/grant/token evidence and V15's durable descriptor/executor binding
-   must be retained. V15 commits that authority before execution and reuses the original token during
-   caller-driven or bounded production recovery for Fake/test gateways. Any approved external
+   V14 final-run authorization/grant/token evidence, V15's durable descriptor/executor binding, and
+   V16's bounded context hash/version/count evidence must be retained. V15/V16 commit authority and
+   the exact context snapshot before execution, then reuse the original token and database snapshot
+   during caller-driven or bounded production recovery for Fake/test gateways. Any approved external
    provider must honor the same token as its deduplication identity and preserve the fail-closed
    consent and finalization checks.
 4. A Shadow mode can persist validated proposals and metrics without applying them; only explicit
@@ -291,26 +292,28 @@ A real provider remains blocked until all of the following are true:
 
 ## Known Milestone 2 blockers
 
-This list distinguishes remaining blockers from the execution mechanics V15 now supplies:
+This list distinguishes remaining blockers from the execution mechanics V15/V16 now supply:
 
 - Runtime `AnalysisRoute` currently implements only `LOCAL_REVIEW` and `CLOUD_ENRICH`.
   `USER_INPUT_NEEDED` and `PENDING_OFFLINE` in the pipeline document are conceptual states, not
   executable routes yet.
 - Analysis remains synchronous at the HTTP boundary. Clear local runs are finalized directly as
-  `REVIEW_REQUIRED`; a cloud-bound run is first committed as `QUEUED` / `PENDING` with a V15
-  `PREPARED` dispatch, claimed as `RUNNING`, executed with a persisted timeout outside the database
-  transaction, and finalized as `REVIEW_REQUIRED` or `STALE` after a locked revision and fence
-  recheck. Typed cloud failure, binding/execution exception, and invalid enriched output persist the
-  revalidated local proposal with a bounded outcome. Raw and canonical data remain unchanged, and
-  provider error text is not stored or returned.
+  `REVIEW_REQUIRED`; a cloud-bound run is first committed as `QUEUED` / `PENDING` with a V15/V16
+  `PREPARED` dispatch, including its bounded retrieval-context snapshot, then claimed as `RUNNING`,
+  executed with a persisted timeout outside the database transaction, and finalized as
+  `REVIEW_REQUIRED` or `STALE` after a locked revision and fence recheck. Typed cloud failure,
+  binding/execution exception, and invalid enriched output persist the revalidated local proposal
+  with a bounded outcome. Raw and canonical data remain unchanged, and provider error text is not
+  stored or returned.
 - Same-key caller recovery remains available. In the production profile, a scheduler also scans at a
   30-second fixed delay and selects at most 25 `PREPARED` or expired-lease `RUNNING` dispatches from
   owner-consistent database rows. It uses the selected owner and existing raw key under the same
-  owner+operation+key advisory lock, skips live leases, and reuses the V15 binding, fence, deadline,
-  bounded out-of-transaction Fake call, revision-rechecking finalize, and deterministic provider
-  token. This supports recovery after a process restart but remains bounded at-least-once execution,
-  not exactly-once delivery. Duration, per-attempt history, model-token, and cost metrics remain
-  unimplemented.
+  owner+operation+key advisory lock, skips live leases, and reuses the V15 binding/fence/deadline,
+  the exact V16 database context snapshot, bounded out-of-transaction Fake call,
+  revision-rechecking finalize, and deterministic provider token. Retrieval is not rerun on recovery,
+  so the same token is never paired with different context. This supports recovery after a process
+  restart but remains bounded at-least-once execution, not exactly-once delivery. Duration,
+  per-attempt history, model-token, and cost metrics remain unimplemented.
 - V13 enforces an owner-scoped exact consent pin: boolean true, the descriptor's exact policy
   version, and a non-null grant timestamp no later than the authorization-check instant. It revokes
   legacy boolean-only grants and rejects future-dated grants. `NO_NETWORK` Fake needs no consent;
@@ -318,14 +321,20 @@ This list distinguishes remaining blockers from the execution mechanics V15 now 
   authorization/grant/token snapshot in each new final run and passes it with the descriptor to the
   current gateway request. V15 adds a durable pre-call dispatch and immutable descriptor/executor
   binding for Fake/test execution, but there is still no grant/revoke API or configured external
-  provider.
+  provider. V16's exact tag/alias retrieval is still exercised only at this Fake/test boundary.
 - Every new run carries server-owned transfer mode, gateway/provider/model/consent-policy versions,
   and outcome; provider-call runs additionally pin an immutable gateway binding. V15 stores internal
-  dispatch/fence/lease evidence and scrubs the prepared payload at finalization. None of the payload,
-  token, binding, fence, or lease is exposed through the public analysis contract. Model-token/cost
-  usage and complete operational attempt/duration metrics are not implemented.
+  dispatch/fence/lease evidence. V16 adds context raw/hash/version/count before the call and scrubs raw
+  at finalization while retaining hash/version/count. None of the payload/context evidence, token,
+  binding, fence, or lease is exposed through public DTOs, proposal JSON or `providerMetadata`, logs,
+  browser storage, or service-worker caches. Model-token/cost usage and complete operational
+  attempt/duration metrics are not implemented.
 - Every new LOCAL, cloud-success, and fallback proposal canonicalizes `providerMetadata` through one
   bounded server allow-list; this is metadata hygiene, not provider authorization.
-- Top-k owner-scoped retrieval context is not implemented.
+- A narrow owner-active exact tag/alias context is implemented: at most 10 proposal candidates and
+  20 normalized terms are resolved against the complete equality result before deterministic K=8
+  selection. It is a hint subject to final owner/reference validation, not accuracy evidence. Raw or
+  related-memo retrieval, fuzzy/vector search, embeddings, Ollama/LiquidAI, and a real provider remain
+  absent.
 
 Do not connect a real LLM merely to make these roadmap bullets appear complete.

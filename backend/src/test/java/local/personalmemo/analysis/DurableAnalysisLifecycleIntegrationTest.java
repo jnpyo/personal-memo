@@ -3,6 +3,7 @@ package local.personalmemo.analysis;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -10,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -18,12 +20,17 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import local.personalmemo.analysis.application.AnalysisService;
 import local.personalmemo.analysis.domain.CloudAnalysisGateway;
+import local.personalmemo.analysis.domain.CloudAnalysisRequest;
 import local.personalmemo.analysis.domain.CloudAnalysisResult;
 import local.personalmemo.analysis.domain.CloudGatewayBinding;
 import local.personalmemo.analysis.domain.CloudGatewayDescriptor;
 import local.personalmemo.analysis.domain.CloudTransferMode;
+import local.personalmemo.analysis.domain.TagRetrievalContext;
+import local.personalmemo.analysis.infrastructure.TagRetrievalContextCodec;
+import local.personalmemo.common.security.Hashing;
 import local.personalmemo.support.PostgresIntegration;
 import local.personalmemo.support.PostgresIntegrationTestSupport;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,6 +41,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import tools.jackson.databind.node.ObjectNode;
 
 @PostgresIntegration
 @TestPropertySource(properties = "app.analysis.cloud-execution.timeout=2s")
@@ -49,6 +57,7 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
 
   @MockitoBean private CloudAnalysisGateway cloudGateway;
   @Autowired private AnalysisService analysisService;
+  @Autowired private TagRetrievalContextCodec tagContextCodec;
 
   @BeforeEach
   void useSuccessfulBoundGatewayByDefault() {
@@ -433,6 +442,249 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
   }
 
   @Test
+  void preparedRequestUsesOwnerScopedStoredContextAndFinalizationScrubsInternalEvidence()
+      throws Exception {
+    UUID collisionTagId = insertOwnerOsCollision();
+    UUID otherOwnerId = UUID.randomUUID();
+    String otherOwnerSecret = "other-owner-context-secret";
+    insertOtherOwnerOsAlias(otherOwnerId, UUID.randomUUID(), otherOwnerSecret);
+    CountDownLatch gatewayEntered = new CountDownLatch(1);
+    CountDownLatch releaseGateway = new CountDownLatch(1);
+    AtomicReference<CloudAnalysisRequest> capturedRequest = new AtomicReference<>();
+    when(cloudGateway.bind())
+        .thenReturn(
+            binding(
+                request -> {
+                  capturedRequest.set(request);
+                  gatewayEntered.countDown();
+                  awaitRelease(releaseGateway);
+                  ObjectNode enriched = request.validatedLocalProposal();
+                  ((ObjectNode) enriched.path("providerMetadata"))
+                      .put("tagRetrievalContext", "ＯＳ")
+                      .put("retrievalContext", "ＯＳ")
+                      .put("retrievalContextHash", "spoofed-context-hash")
+                      .put("retrievalContextVersion", "spoofed-context-version")
+                      .put("retrievalContextCandidateCount", 99)
+                      .put("retrieval_context", "ＯＳ");
+                  return CloudAnalysisResult.success(enriched);
+                }));
+    UUID memoId = createMemoWithContent("retrieval-owner-scope", AMBIGUOUS_MEMO + " OS");
+
+    ExecutorService caller = Executors.newSingleThreadExecutor();
+    Future<MvcResult> started =
+        caller.submit(() -> startAnalysis(memoId, "retrieval-owner-scope-start", 1));
+    RetrievalContextEvidence preparedEvidence;
+    TagRetrievalContext requestContext;
+    UUID runId;
+    try {
+      assertThat(gatewayEntered.await(5, TimeUnit.SECONDS)).isTrue();
+      runId = runLifecycle(memoId).runId();
+      preparedEvidence = retrievalContextEvidence(runId);
+      requestContext = capturedRequest.get().tagRetrievalContext().orElseThrow();
+      releaseGateway.countDown();
+
+      MvcResult completed = started.get(5, TimeUnit.SECONDS);
+      assertThat(completed.getResponse().getStatus()).isEqualTo(200);
+      assertThat(response(completed).path("status").asText()).isEqualTo("REVIEW_REQUIRED");
+
+      assertThat(preparedEvidence.rawContext())
+          .isEqualTo(tagContextCodec.serialize(requestContext));
+      assertThat(preparedEvidence.contextHash())
+          .isEqualTo(Hashing.sha256(preparedEvidence.rawContext()));
+      assertThat(preparedEvidence.version()).isEqualTo(TagRetrievalContext.CURRENT_VERSION);
+      assertThat(preparedEvidence.candidateCount()).isEqualTo(2);
+      assertThat(requestContext.candidates())
+          .extracting(TagRetrievalContext.Candidate::existingTagId)
+          .containsExactly(OPERATING_SYSTEMS_TAG_ID, collisionTagId);
+      assertThat(preparedEvidence.rawContext())
+          .contains("ＯＳ")
+          .doesNotContain(otherOwnerSecret, otherOwnerId.toString());
+
+      RetrievalContextEvidence finalizedEvidence = retrievalContextEvidence(runId);
+      assertThat(dispatchLifecycle(runId).state()).isEqualTo("FINALIZED");
+      assertThat(finalizedEvidence.rawContext()).isNull();
+      assertThat(finalizedEvidence.contextHash()).isEqualTo(preparedEvidence.contextHash());
+      assertThat(finalizedEvidence.version()).isEqualTo(preparedEvidence.version());
+      assertThat(finalizedEvidence.candidateCount()).isEqualTo(preparedEvidence.candidateCount());
+
+      UUID proposalId = UUID.fromString(response(completed).path("proposalId").asText());
+      MvcResult proposalResult =
+          mvc.perform(get("/api/v1/analysis-proposals/{id}", proposalId)).andReturn();
+      String runPayload = response(completed).toString();
+      String proposalPayload = response(proposalResult).toString();
+      for (String internalField :
+          List.of(
+              "tagRetrievalContext",
+              "retrievalContext",
+              "retrievalContextHash",
+              "retrievalContextVersion",
+              "retrievalContextCandidateCount",
+              "retrieval_context")) {
+        assertThat(runPayload).doesNotContain(internalField);
+        assertThat(proposalPayload).doesNotContain(internalField);
+      }
+      assertThat(runPayload)
+          .doesNotContain(
+              preparedEvidence.rawContext(),
+              preparedEvidence.contextHash(),
+              preparedEvidence.version(),
+              "ＯＳ",
+              otherOwnerSecret);
+      assertThat(proposalPayload)
+          .doesNotContain(
+              preparedEvidence.rawContext(),
+              preparedEvidence.contextHash(),
+              preparedEvidence.version(),
+              "ＯＳ",
+              otherOwnerSecret);
+    } finally {
+      releaseGateway.countDown();
+      caller.shutdownNow();
+      assertThat(caller.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+    }
+  }
+
+  @Test
+  void taxonomyChangeAfterPrepareRecoveryReusesStoredContextAndProviderToken() throws Exception {
+    UUID collisionTagId = insertOwnerOsCollision();
+    AtomicInteger gatewayCalls = new AtomicInteger();
+    List<CloudAnalysisRequest> capturedRequests = new CopyOnWriteArrayList<>();
+    AbandonedDispatch abandoned =
+        abandonRunningDispatch(
+            "retrieval-recovery", AMBIGUOUS_MEMO + " OS", gatewayCalls, capturedRequests);
+    RetrievalContextEvidence preparedEvidence = retrievalContextEvidence(abandoned.runId());
+    String storedProviderToken = storedProviderRequestToken(abandoned.runId());
+    retireTag(collisionTagId);
+    expireLease(abandoned.runId());
+    when(cloudGateway.bind())
+        .thenReturn(
+            binding(
+                request -> {
+                  gatewayCalls.incrementAndGet();
+                  capturedRequests.add(request);
+                  return CloudAnalysisResult.success(request.validatedLocalProposal());
+                }));
+
+    SecurityContextHolder.clearContext();
+    int recovered = analysisService.recoverPendingDispatches(10);
+
+    assertThat(recovered).isEqualTo(1);
+    assertThat(gatewayCalls).hasValue(2);
+    assertThat(capturedRequests).hasSize(2);
+    CloudAnalysisRequest preparedRequest = capturedRequests.get(0);
+    CloudAnalysisRequest recoveryRequest = capturedRequests.get(1);
+    TagRetrievalContext preparedContext = preparedRequest.tagRetrievalContext().orElseThrow();
+    TagRetrievalContext recoveryContext = recoveryRequest.tagRetrievalContext().orElseThrow();
+    assertThat(recoveryContext).isEqualTo(preparedContext);
+    assertThat(tagContextCodec.serialize(recoveryContext)).isEqualTo(preparedEvidence.rawContext());
+    assertThat(recoveryContext.candidates())
+        .extracting(TagRetrievalContext.Candidate::existingTagId)
+        .containsExactly(OPERATING_SYSTEMS_TAG_ID, collisionTagId);
+    assertThat(recoveryRequest.providerRequestToken())
+        .isEqualTo(preparedRequest.providerRequestToken());
+    assertThat(recoveryRequest.providerRequestToken().value()).isEqualTo(storedProviderToken);
+
+    String storedProposal = storedProposalJson(abandoned.runId());
+    assertThat(json.readTree(storedProposal).at("/tagCandidates/0/existingTagId").isNull())
+        .isTrue();
+    assertThat(json.readTree(storedProposal).at("/tagCandidates/0/isNewProposal").asBoolean())
+        .isTrue();
+    assertThat(json.readTree(storedProposal).at("/tagCandidates/0/matchedAlias").asText())
+        .isEqualTo("OS");
+    assertThat(dispatchLifecycle(abandoned.runId()).state()).isEqualTo("FINALIZED");
+    assertThat(runLifecycle(abandoned.memoId()).status()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(proposalCount(abandoned.runId())).isEqualTo(1L);
+  }
+
+  @Test
+  void legacyNoneDispatchRecoveryDoesNotInventRetrievalContext() throws Exception {
+    AtomicInteger gatewayCalls = new AtomicInteger();
+    List<CloudAnalysisRequest> capturedRequests = new CopyOnWriteArrayList<>();
+    AbandonedDispatch abandoned =
+        abandonRunningDispatch(
+            "retrieval-legacy-none", AMBIGUOUS_MEMO + " OS", gatewayCalls, capturedRequests);
+    db.sql(
+            """
+            update analysis_run_dispatches
+               set retrieval_context = null,
+                   retrieval_context_hash = null,
+                   retrieval_context_version = 'none',
+                   retrieval_context_candidate_count = 0
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("runId", abandoned.runId())
+        .param("ownerId", OWNER_ID)
+        .update();
+    expireLease(abandoned.runId());
+    when(cloudGateway.bind())
+        .thenReturn(
+            binding(
+                request -> {
+                  gatewayCalls.incrementAndGet();
+                  capturedRequests.add(request);
+                  return CloudAnalysisResult.success(request.validatedLocalProposal());
+                }));
+
+    SecurityContextHolder.clearContext();
+    int recovered = analysisService.recoverPendingDispatches(10);
+
+    assertThat(recovered).isEqualTo(1);
+    assertThat(gatewayCalls).hasValue(2);
+    assertThat(capturedRequests).hasSize(2);
+    assertThat(capturedRequests.get(1).tagRetrievalContext()).isEmpty();
+    assertThat(capturedRequests.get(1).providerRequestToken())
+        .isEqualTo(capturedRequests.get(0).providerRequestToken());
+    assertThat(dispatchLifecycle(abandoned.runId()).state()).isEqualTo("FINALIZED");
+    assertThat(proposalCount(abandoned.runId())).isEqualTo(1L);
+  }
+
+  @Test
+  void tamperedRetrievalContextHashFailsClosedWithoutBlockingTheNextCandidate() throws Exception {
+    AtomicInteger malformedGatewayCalls = new AtomicInteger();
+    AbandonedDispatch malformed =
+        abandonRunningDispatch("retrieval-tampered", malformedGatewayCalls);
+    expireLease(malformed.runId());
+    db.sql(
+            """
+            update analysis_run_dispatches
+               set retrieval_context_hash = :wrongHash
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("wrongHash", "0".repeat(64))
+        .param("runId", malformed.runId())
+        .param("ownerId", OWNER_ID)
+        .update();
+
+    AtomicInteger validGatewayCalls = new AtomicInteger();
+    AbandonedDispatch valid = abandonRunningDispatch("retrieval-valid", validGatewayCalls);
+    expireLease(valid.runId());
+    AtomicInteger recoveryGatewayCalls = new AtomicInteger();
+    when(cloudGateway.bind())
+        .thenReturn(
+            binding(
+                request -> {
+                  recoveryGatewayCalls.incrementAndGet();
+                  return CloudAnalysisResult.success(request.validatedLocalProposal());
+                }));
+
+    SecurityContextHolder.clearContext();
+    int recovered = analysisService.recoverPendingDispatches(10);
+
+    assertThat(recovered).isEqualTo(1);
+    assertThat(malformedGatewayCalls).hasValue(1);
+    assertThat(dispatchLifecycle(malformed.runId()).state()).isEqualTo("RUNNING");
+    assertThat(dispatchLifecycle(malformed.runId()).fenceToken()).isEqualTo(1L);
+    assertThat(proposalCount(malformed.runId())).isZero();
+    assertThat(validGatewayCalls).hasValue(1);
+    assertThat(dispatchLifecycle(valid.runId()).state()).isEqualTo("FINALIZED");
+    assertThat(runLifecycle(valid.memoId()).status()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(proposalCount(valid.runId())).isEqualTo(1L);
+    assertThat(recoveryGatewayCalls).hasValue(1);
+  }
+
+  @Test
   void recoveryWithoutSecurityContextCompletesAnExpiredRunningDispatch() throws Exception {
     AtomicInteger gatewayCalls = new AtomicInteger();
     AbandonedDispatch abandoned = abandonRunningDispatch("recovery-expired", gatewayCalls);
@@ -670,6 +922,15 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
 
   private AbandonedDispatch abandonRunningDispatch(String keyPrefix, AtomicInteger gatewayCalls)
       throws Exception {
+    return abandonRunningDispatch(keyPrefix, AMBIGUOUS_MEMO, gatewayCalls, null);
+  }
+
+  private AbandonedDispatch abandonRunningDispatch(
+      String keyPrefix,
+      String memoContent,
+      AtomicInteger gatewayCalls,
+      List<CloudAnalysisRequest> capturedRequests)
+      throws Exception {
     CountDownLatch gatewayEntered = new CountDownLatch(1);
     CountDownLatch gatewayInterrupted = new CountDownLatch(1);
     when(cloudGateway.bind())
@@ -677,6 +938,9 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
             binding(
                 request -> {
                   gatewayCalls.incrementAndGet();
+                  if (capturedRequests != null) {
+                    capturedRequests.add(request);
+                  }
                   gatewayEntered.countDown();
                   try {
                     new CountDownLatch(1).await();
@@ -686,7 +950,7 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
                   }
                   return CloudAnalysisResult.success(request.validatedLocalProposal());
                 }));
-    UUID memoId = createAmbiguousMemo(keyPrefix);
+    UUID memoId = createMemoWithContent(keyPrefix, memoContent);
     String key = keyPrefix + "-start";
     ExecutorService caller = Executors.newSingleThreadExecutor();
     Future<MvcResult> start = caller.submit(() -> startAnalysis(memoId, key, 1));
@@ -761,10 +1025,136 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
   }
 
   private UUID createAmbiguousMemo(String keyPrefix) throws Exception {
+    return createMemoWithContent(keyPrefix, AMBIGUOUS_MEMO);
+  }
+
+  private UUID createMemoWithContent(String keyPrefix, String content) throws Exception {
     UUID memoId = UUID.randomUUID();
-    MvcResult created = createMemo(memoId, keyPrefix + "-create", AMBIGUOUS_MEMO);
+    MvcResult created = createMemo(memoId, keyPrefix + "-create", content);
     assertThat(created.getResponse().getStatus()).isEqualTo(201);
     return memoId;
+  }
+
+  private UUID insertOwnerOsCollision() {
+    db.sql(
+            """
+            update tag_aliases
+               set alias = 'ＯＳ'
+             where owner_id = :ownerId
+               and tag_id = :tagId
+               and normalized_alias = 'os'
+            """)
+        .param("ownerId", OWNER_ID)
+        .param("tagId", OPERATING_SYSTEMS_TAG_ID)
+        .update();
+    UUID collisionTagId = UUID.randomUUID();
+    db.sql(
+            """
+            insert into tags(
+              id, owner_id, canonical_name, normalized_name, state, created_at, updated_at
+            ) values (
+              :tagId, :ownerId, 'OS', 'os', 'ACTIVE', now(), now()
+            )
+            """)
+        .param("tagId", collisionTagId)
+        .param("ownerId", OWNER_ID)
+        .update();
+    return collisionTagId;
+  }
+
+  private void insertOtherOwnerOsAlias(UUID ownerId, UUID tagId, String canonicalName) {
+    db.sql("insert into users(id,created_at,updated_at) values(:id,now(),now())")
+        .param("id", ownerId)
+        .update();
+    db.sql(
+            """
+            insert into tags(
+              id, owner_id, canonical_name, normalized_name, state, created_at, updated_at
+            ) values (
+              :tagId, :ownerId, :canonicalName, :canonicalName, 'ACTIVE', now(), now()
+            )
+            """)
+        .param("tagId", tagId)
+        .param("ownerId", ownerId)
+        .param("canonicalName", canonicalName)
+        .update();
+    db.sql(
+            """
+            insert into tag_aliases(
+              id, owner_id, tag_id, alias, normalized_alias, source, created_at
+            ) values (
+              :aliasId, :ownerId, :tagId, 'OS', 'os', 'USER', now()
+            )
+            """)
+        .param("aliasId", UUID.randomUUID())
+        .param("ownerId", ownerId)
+        .param("tagId", tagId)
+        .update();
+  }
+
+  private void retireTag(UUID tagId) {
+    db.sql(
+            """
+            update tags
+               set state = 'RETIRED',
+                   updated_at = now()
+             where id = :tagId
+               and owner_id = :ownerId
+            """)
+        .param("tagId", tagId)
+        .param("ownerId", OWNER_ID)
+        .update();
+  }
+
+  private RetrievalContextEvidence retrievalContextEvidence(UUID runId) {
+    return db.sql(
+            """
+            select retrieval_context,
+                   retrieval_context_hash,
+                   retrieval_context_version,
+                   retrieval_context_candidate_count
+              from analysis_run_dispatches
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("runId", runId)
+        .param("ownerId", OWNER_ID)
+        .query(
+            (resultSet, rowNumber) ->
+                new RetrievalContextEvidence(
+                    resultSet.getString("retrieval_context"),
+                    resultSet.getString("retrieval_context_hash"),
+                    resultSet.getString("retrieval_context_version"),
+                    resultSet.getInt("retrieval_context_candidate_count")))
+        .single();
+  }
+
+  private String storedProviderRequestToken(UUID runId) {
+    return db.sql(
+            """
+            select cloud_provider_request_token
+              from analysis_runs
+             where id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("runId", runId)
+        .param("ownerId", OWNER_ID)
+        .query(String.class)
+        .single();
+  }
+
+  private String storedProposalJson(UUID runId) {
+    return db.sql(
+            """
+            select proposal_json::text
+              from analysis_proposals
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("runId", runId)
+        .param("ownerId", OWNER_ID)
+        .query(String.class)
+        .single();
   }
 
   private CloudGatewayBinding binding(
@@ -934,6 +1324,9 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
       int callTimeoutMs,
       Instant leaseExpiresAt,
       Instant finalizedAt) {}
+
+  private record RetrievalContextEvidence(
+      String rawContext, String contextHash, String version, int candidateCount) {}
 
   private record AbandonedDispatch(UUID memoId, UUID runId, String key) {}
 }

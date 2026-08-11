@@ -33,6 +33,27 @@ class TagNormalizerTest {
     assertThat(normalized.normalizedName()).hasSize(100);
   }
 
+  @Test
+  void acceptsExactlyOneHundredSupplementaryCodePoints() {
+    String name = "😀".repeat(100);
+
+    var normalized = normalizer.normalize(name);
+
+    assertThat(normalized.canonicalName().codePointCount(0, normalized.canonicalName().length()))
+        .isEqualTo(100);
+    assertThat(normalized.normalizedName()).isEqualTo(name);
+  }
+
+  @Test
+  void rejectsOneHundredAndOneSupplementaryCodePoints() {
+    assertInvalid("😀".repeat(101));
+  }
+
+  @Test
+  void rejectsNamesWhoseRootLowercaseFormExceedsTheDatabaseLimit() {
+    assertInvalid("İ".repeat(100));
+  }
+
   private void assertInvalid(String value) {
     assertThatThrownBy(() -> normalizer.normalize(value))
         .isInstanceOfSatisfying(

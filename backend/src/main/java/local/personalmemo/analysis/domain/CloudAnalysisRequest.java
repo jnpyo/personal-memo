@@ -14,7 +14,27 @@ public record CloudAnalysisRequest(
     CloudGatewayDescriptor descriptor,
     Optional<Instant> authorizationCheckedAt,
     Optional<Instant> acceptedConsentGrantedAt,
-    CloudProviderRequestToken providerRequestToken) {
+    CloudProviderRequestToken providerRequestToken,
+    Optional<TagRetrievalContext> tagRetrievalContext) {
+
+  public CloudAnalysisRequest(
+      ObjectNode validatedLocalProposal,
+      List<AmbiguityReason> routingReasons,
+      String routingPolicyVersion,
+      CloudGatewayDescriptor descriptor,
+      Optional<Instant> authorizationCheckedAt,
+      Optional<Instant> acceptedConsentGrantedAt,
+      CloudProviderRequestToken providerRequestToken) {
+    this(
+        validatedLocalProposal,
+        routingReasons,
+        routingPolicyVersion,
+        descriptor,
+        authorizationCheckedAt,
+        acceptedConsentGrantedAt,
+        providerRequestToken,
+        Optional.empty());
+  }
 
   public CloudAnalysisRequest {
     Objects.requireNonNull(validatedLocalProposal, "validatedLocalProposal");
@@ -26,6 +46,7 @@ public record CloudAnalysisRequest(
     acceptedConsentGrantedAt =
         Objects.requireNonNull(acceptedConsentGrantedAt, "acceptedConsentGrantedAt");
     providerRequestToken = Objects.requireNonNull(providerRequestToken, "providerRequestToken");
+    tagRetrievalContext = Objects.requireNonNull(tagRetrievalContext, "tagRetrievalContext");
     if (routingPolicyVersion == null
         || routingPolicyVersion.isBlank()
         || routingPolicyVersion.codePointCount(0, routingPolicyVersion.length())
@@ -73,6 +94,12 @@ public record CloudAnalysisRequest(
         + authorizationCheckedAt.isPresent()
         + ", acceptedConsent="
         + acceptedConsentGrantedAt.isPresent()
-        + ", providerRequestToken=redacted]";
+        + ", providerRequestToken=redacted, tagRetrievalContext="
+        + tagRetrievalContext
+            .map(
+                context ->
+                    context.version() + "/" + context.candidateCount() + " candidates/redacted")
+            .orElse("absent")
+        + "]";
   }
 }

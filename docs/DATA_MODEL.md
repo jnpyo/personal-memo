@@ -1,6 +1,6 @@
 # Data model — authenticated deterministic-analysis MVP
 
-이 문서는 현재 Flyway `V1`–`V15`가 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다. `V11`은 owner별 proposal의 최신 application을 bounded read로 찾는 review-outcome 조회 인덱스를 추가하고, `V12`는 최신 `APPLIED` selection과 활성 memo item을 사용하는 graph projection에 맞춘 partial lookup index만 추가한다. `V13`은 cloud consent를 정확한 policy와 승인 시각에 고정하고 run에 server-owned cloud evidence를 추가한다. `V14`는 새 run에 호출 권한 확인 시각·실제로 수락한 grant 시각·결정론적 provider-request token을 일관된 실행 snapshot으로 저장하고, 과거 row는 증거를 추정하지 않은 `legacy-v0`로 보존한다. `V15`는 gateway 호출 전에 `durable-v1` run과 1:1 dispatch preparation을 commit하고 immutable binding, validated-local payload/hash, reserved proposal, idempotency evidence, deadline·lease·fence를 보존한다. V14까지의 기존 row에는 호출 전 준비가 있었다고 추정해 dispatch를 backfill하지 않는다. 이 migration들은 일반 clickstream table을 만들지 않는다.
+이 문서는 현재 Flyway `V1`–`V16`이 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다. `V11`은 owner별 proposal의 최신 application을 bounded read로 찾는 review-outcome 조회 인덱스를 추가하고, `V12`는 최신 `APPLIED` selection과 활성 memo item을 사용하는 graph projection에 맞춘 partial lookup index만 추가한다. `V13`은 cloud consent를 정확한 policy와 승인 시각에 고정하고 run에 server-owned cloud evidence를 추가한다. `V14`는 새 run에 호출 권한 확인 시각·실제로 수락한 grant 시각·결정론적 provider-request token을 일관된 실행 snapshot으로 저장하고, 과거 row는 증거를 추정하지 않은 `legacy-v0`로 보존한다. `V15`는 gateway 호출 전에 `durable-v1` run과 1:1 dispatch preparation을 commit하고 immutable binding, validated-local payload/hash, reserved proposal, idempotency evidence, deadline·lease·fence를 보존한다. `V16`은 같은 dispatch에 bounded tag context raw/hash/version/count를 pre-call snapshot으로 추가하고 finalization에서 raw만 scrub한다. 기존 V15 dispatch에는 context가 있었다고 추정하지 않고 `none`/`0`/null raw/null hash를 보존한다. V14까지의 기존 row에는 호출 전 준비가 있었다고 추정해 dispatch를 backfill하지 않는다. 이 migration들은 일반 clickstream table을 만들지 않는다.
 
 ## Invariants
 
@@ -26,6 +26,8 @@
   constraint가 호출 여부·transfer mode·outcome과의 nullability 및 token 유일성을 제한한다.
 - V15 dispatch는 run과 같은 owner의 1:1 row이며 caller가 선택할 수 없는 reserved proposal,
   idempotency/request hash, immutable executor binding, deadline·lease·fence를 보존한다.
+- V16 retrieval context는 authenticated owner의 active tag/alias exact normalized equality 결과만
+  사용한 bounded 내부 hint다. canonical owner/reference 유효성은 최종 validation이 다시 판정한다.
 
 ## Identity and raw memo
 
@@ -232,6 +234,12 @@ run/dispatch를 `RUNNING`으로 바꾼다. gateway는 고정된 bounded executor
 stale이면 gateway 0-call로 `CANCELLED_STALE`을 남기며, 호출 뒤 revision이 바뀌면 `STALE` status와
 실제 cloud outcome을 함께 보존한다.
 
+V16은 local proposal의 tag candidate를 최대 10개, canonical-name/alias normalized term을 최대
+20개까지만 사용한다. owner의 active tag/alias exact equality query가 돌려준 전체 결과에서 source별
+UUID가 하나인지 해소한 뒤 deterministic ordering과 UUID deduplication으로 최대 K=8의 내부 context를
+만든다. raw memo·related memo·fuzzy/vector/embedding retrieval은 사용하지 않는다. 이 context는
+gateway hint일 뿐이고 final owner/reference validation을 대체하지 않는다.
+
 `PENDING`은 `durable-v1`의 `QUEUED`/`RUNNING` 또는 아직 완료되지 않은 `STALE` run에만 허용되고
 `completed_at`은 null이다. `CANCELLED_STALE`은 완료된 `STALE` run에만 허용된다. 다른 final outcome은
 `QUEUED`/`RUNNING`과 함께 저장할 수 없고 `completed_at`이 필요하다. run과 dispatch 사이의 준비/완료
@@ -244,8 +252,10 @@ recovery가 같은 deadline과 `max_attempts` 안에서 lease를 재claim한다.
 25건의 `PREPARED` 또는 lease가 만료된 `RUNNING` row를 owner-consistent dispatch/run/idempotency join으로
 선택하고, 기존 owner+operation+raw-key advisory lock 아래 claim한다. live lease는 skip하므로 process
 재시작 뒤에도 eligible row만 다음 주기에서 이어진다. transport는 exactly-once가 아니라
-at-least-once이고 실제 provider는 같은 `pmr1_...` token을 멱등하게 처리해야 한다. 개별 attempt
-history, duration, model-token, cost와 top-k context는 없다.
+at-least-once이고 실제 provider는 같은 `pmr1_...` token을 멱등하게 처리해야 한다. V16 recovery는
+retrieval을 다시 실행하지 않고 dispatch의 동일한 DB snapshot만 decode하므로 같은 token에 다른
+context input을 붙이지 않는다. 개별 attempt history, duration, model-token, cost,
+related-memo/fuzzy/vector/embedding context는 없다.
 
 Proposal schema v2는 `dateCandidates[].candidateId`와 nullable
 `itemCandidates[].dueDateCandidateId`를 기존 `proposal_json` JSONB 안에 저장하고, run의 기존
@@ -274,6 +284,10 @@ idempotency_key_hash VARCHAR(64) NOT NULL
 request_hash VARCHAR(64) NOT NULL
 validated_local_proposal TEXT NULL
 validated_local_proposal_hash VARCHAR(64) NOT NULL
+retrieval_context TEXT NULL
+retrieval_context_hash VARCHAR(64) NULL
+retrieval_context_version none | tag-alias-exact-k8-v1
+retrieval_context_candidate_count INTEGER NOT NULL
 executor_binding_id VARCHAR(69) NOT NULL
 call_timeout_ms INTEGER NOT NULL
 max_attempts INTEGER NOT NULL
@@ -289,13 +303,20 @@ UNIQUE (owner_id, idempotency_key_hash)
 FK (analysis_run_id, owner_id) -> analysis_runs(id, owner_id)
 ```
 
-세 hash는 lowercase SHA-256이고 binding ID는 `cgb1_` + lowercase SHA-256 형식이다. 준비 시 정확히
-검증한 local proposal text와 hash를 보존하며, `PREPARED`는 attempt/lease 없이 fence 0이다.
+필수인 idempotency/request/validated-local hash와 present context hash는 lowercase SHA-256이고
+binding ID는 `cgb1_` + lowercase SHA-256 형식이다. 준비 시 정확히 검증한 local proposal text와
+hash를 보존하며, `PREPARED`는 attempt/lease 없이 fence 0이다.
 `RUNNING`은 양수 fence, deadline보다 이른 attempt 시작, attempt보다 늦고 deadline을 넘지 않는
 lease가 필요하다. `FINALIZED`는 lease를 비우고 final 시각을 남기며 준비 payload text를 null로
 scrub하지만 hash와 reserved proposal ID는 보존한다. `updated_at`은 silent default 없이 각 write가
 명시한다. deadline과 최대 attempt는 caller 및 운영 scheduler recovery 모두의 상한이다. 이 row는
 개별 attempt history가 아니며, fence가 다른 늦은 attempt는 final 결과를 덮어쓸 수 없다.
+
+V16 current context는 version `tag-alias-exact-k8-v1`, candidate count 0–8, lowercase SHA-256 hash를
+필수로 갖는다. `PREPARED`/`RUNNING`에서는 45–16,384 UTF-8 byte의 JSON object raw가 있어야 하고
+그 JSON의 version 및 candidate array length가 column과 일치해야 한다. application은 decode할 때
+hash와 strict codec shape도 검증한다. `FINALIZED`에서는 raw가 null이어야 하지만 hash/version/count는
+evidence로 남는다. 기존 V15 row의 legacy `none` version은 count 0과 null raw/hash만 허용한다.
 
 ### `analysis_proposals`
 
@@ -547,6 +568,6 @@ memos + analysis_applications + memo_items + task_details
 - login abuse/rate-limit audit state if the selected policy requires additional persistence
 - MFA/passkey authenticators and account recovery codes
 - per-attempt analysis history and duration/model-token/cost state
-- top-k retrieval context
+- related-memo, fuzzy/vector, and embedding retrieval context
 
 필요한 vertical slice가 시작될 때 파괴적 변경 없이 새 Flyway migration으로 추가한다.

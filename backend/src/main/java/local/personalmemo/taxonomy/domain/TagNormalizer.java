@@ -16,11 +16,20 @@ public class TagNormalizer {
 
     String canonicalName =
         Normalizer.normalize(rawName, Normalizer.Form.NFKC).strip().replaceAll("\\s+", " ");
-    if (canonicalName.isEmpty() || canonicalName.length() > MAX_TAG_LENGTH) {
+    if (!hasValidLength(canonicalName)) {
       throw invalidTag();
     }
 
-    return new NormalizedTag(canonicalName, canonicalName.toLowerCase(Locale.ROOT));
+    String normalizedName = canonicalName.toLowerCase(Locale.ROOT);
+    if (!hasValidLength(normalizedName)) {
+      throw invalidTag();
+    }
+    return new NormalizedTag(canonicalName, normalizedName);
+  }
+
+  private boolean hasValidLength(String value) {
+    int length = value.codePointCount(0, value.length());
+    return length >= 1 && length <= MAX_TAG_LENGTH;
   }
 
   private DomainException invalidTag() {

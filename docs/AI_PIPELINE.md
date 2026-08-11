@@ -25,6 +25,10 @@ The repository now implements the model-free portion of Milestone 2:
   hash, timeout, attempt ceiling, deadline, fence, and lease are committed before gateway execution;
   the bounded invocation runs outside the database transaction and finalization locks and rechecks
   the memo revision and fence before publishing one proposal;
+- V16 bounded tag context: at most 10 tag proposals yield at most 20 distinct normalized
+  canonical-name/alias terms; an owner-scoped query matches only active tags by exact normalized
+  equality, the complete match set is used for unique-tag resolution, and a deterministic maximum of
+  8 candidates is supplied as an internal gateway hint;
 - production-profile bounded recovery: every 30 seconds, a scheduler selects at most 25
   `PREPARED` or expired-lease `RUNNING` dispatches, obtains owner and the existing idempotency key
   only from owner-consistent database rows, and reuses the same claim/invoke/finalize lifecycle;
@@ -55,8 +59,9 @@ synchronous: its caller waits for final review or stale-revision handling even t
 attempt runs in a bounded in-process executor outside database transactions. The production profile
 also enables a bounded periodic recovery worker, so a committed dispatch can resume after a caller
 interruption or process restart without changing the public contract. Per-attempt history, duration,
-model-token usage, cost tracking, and top-k context remain unimplemented. The roadmap's real-provider
-adapter remains deferred by the project decision until explicitly authorized.
+model-token usage, cost tracking, related-memo retrieval, fuzzy/vector search, and embeddings remain
+unimplemented. The roadmap's real-provider adapter remains deferred by the project decision until
+explicitly authorized.
 
 ## Pipeline boundaries
 
@@ -68,6 +73,7 @@ Raw memo
   → deterministic field-level ambiguity assessment
       → local proposal, or
       → immutable gateway binding and consent gate
+          → bounded owner-active exact tag/alias retrieval and deterministic K=8 context
           → durable run/dispatch prepare commit
           → claim with descriptor/binding comparison, fence, lease, and deadline
           → bounded gateway execution outside a database transaction
@@ -93,9 +99,11 @@ interface LocalAnalyzer {
 }
 ```
 
-Current deterministic inputs include memo id/revision, raw content, the immutable revision's base
-time, and IANA time zone. User defaults, top-k tag/memo context, embeddings, and a browser worker are
-future inputs, not current behavior. The broader target contract may include:
+Current deterministic `LocalAnalyzer` inputs include memo id/revision, raw content, the immutable
+revision's base time, and IANA time zone. V16 tag/alias retrieval happens later at the internal cloud
+gateway boundary, so it is not a `LocalAnalyzer` input. User defaults, related-memo context,
+embeddings, and a browser worker are future inputs, not current behavior. The broader target contract
+may include:
 
 - memo id and revision
 - raw content
@@ -107,7 +115,8 @@ future inputs, not current behavior. The broader target contract may include:
 
 Current Fake output includes the structured proposal candidates and bounded provenance described
 below. Embedding similarities, related-memo top-k, elapsed time, token use, and cost are not produced
-or persisted. The broader target output may include:
+or persisted. The V16 exact tag/alias context is a server-derived gateway hint, not analyzer output.
+The broader target output may include:
 
 - type score distribution
 - detected date expressions and parse candidates
@@ -146,8 +155,9 @@ Do not silently convert `다음 주쯤` into a precise due time.
 ## Future embedding use — not implemented
 
 When implemented, embedding is used to retrieve candidates, not to fully understand or generate the
-final domain record. The current checkpoint has no embedding storage, top-k retrieval, or centroid
-update job.
+final domain record. The current checkpoint has no embedding storage, vector/semantic or related-memo
+retrieval, or centroid update job. V16's bounded exact tag/alias lookup is lexical, internal, and not
+an embedding feature.
 
 - Embed the new memo once.
 - Compare first against canonical tag centroids and aliases.
@@ -216,9 +226,10 @@ truncation so the overflow never silently takes the local route.
 `analysis_runs.ambiguity_reasons` stores the immutable server assessment that caused routing.
 `analysis_proposals.proposal_json.ambiguityReasons` stores the final proposal reasons, which a
 future provider may resolve or refine. This separation preserves why a `HYBRID` run occurred.
-The provider-independent `CloudAnalysisRequest` also carries those authoritative reasons and the
-policy version alongside a defensive copy of the validated local proposal. It never grants a
-provider a canonical write tool or includes hidden raw memo text.
+The provider-independent `CloudAnalysisRequest` also carries those authoritative reasons, the policy
+version, a defensive copy of the validated local proposal, and the bounded V16 tag context. The
+context is a hint only; it never grants a provider a canonical write tool, includes hidden raw memo
+text, or replaces final owner/reference validation.
 
 ### Routing result
 
@@ -239,10 +250,11 @@ Thresholds are configuration, not hard-coded business truth. Calibrate them usin
 
 `CloudAnalysisRequest` carries a defensive copy of the already validated local proposal, the
 server-reconstructed routing reasons and routing-policy version, the descriptor used for this
-decision, the accepted authorization snapshot when external transfer is allowed, and an opaque
-server-issued provider-request token whose string/log representation is redacted. The request DTO,
-provider result, browser, and memo text
-cannot choose owner identity, this token, or canonical write authority.
+decision, the accepted authorization snapshot when external transfer is allowed, the bounded V16
+tag context, and an opaque server-issued provider-request token whose string/log representation is
+redacted. The request DTO, provider result, browser, and memo text cannot choose owner identity, this
+token, the retrieval context, or canonical write authority. Context candidates are hints only; final
+proposal validation remains authoritative for owner and reference integrity.
 
 Before a `CLOUD_ENRICH` call, the configured server adapter supplies one immutable
 `CloudGatewayBinding`: a `CloudGatewayDescriptor` plus the executor that may run that descriptor.
@@ -268,6 +280,11 @@ response cannot spoof them through proposal metadata.
   snapshot, while V15 call-ready rows use the same evidence under `durable-v1`.
 - V15 stores provider-call-only preparation in `analysis_run_dispatches`. Existing V14 and older
   runs receive no synthetic dispatch row because none was committed before its historical call.
+- V16 derives context only from the authenticated owner's active tags and aliases. It examines at
+  most 10 tag proposals and at most 20 distinct normalized terms, matches exact normalized equality
+  only, resolves uniqueness from the complete query result, and then deterministically keeps K=8.
+  It does not inspect raw memo text or related memos and performs no fuzzy, vector, embedding, Ollama,
+  or real-provider operation.
 
 `CloudAnalysisResult` is either a defensive success proposal or a typed failure reason
 (`UNAVAILABLE`, `TIMEOUT`, `RETRY_EXHAUSTED`, `PROVIDER_ERROR`, or `UNEXPECTED_FAILURE`). Binding or
@@ -287,13 +304,17 @@ the bounded outcome of that completed attempt. Neither stale branch creates cano
 V15 commits an `analysis_runs` row as `QUEUED` / `PENDING` and an
 `analysis_run_dispatches` row as `PREPARED` before gateway execution. The preparation reserves the
 proposal identity and same-key request, retains the validated local proposal plus its integrity
-hash, and pins the binding ID, timeout, maximum attempts, and deadline. A separate claim transaction
-rechecks the current revision, current external-transfer consent, and binding; it then changes the
+hash, and pins the binding ID, timeout, maximum attempts, and deadline. V16 additionally stores the
+bounded context's serialized raw value, SHA-256 hash, version, and candidate count before any gateway
+call. A separate claim transaction rechecks the current revision, current external-transfer consent,
+and binding; it then changes the
 run to `RUNNING`, increments a fence, and records a bounded lease. The bound executor runs through a
 fixed-capacity invocation pool outside the database transaction while the public HTTP caller still
 waits. A final transaction locks the run and dispatch, rejects an obsolete fence, rechecks the memo
 revision, writes exactly one final proposal, and clears the prepared proposal text while retaining
-its hash.
+its hash. It also scrubs the serialized context while retaining its hash, version, and count as
+integrity evidence. Existing V15 dispatches remain truthful legacy rows with version `none`, count
+`0`, and null context/hash rather than receiving invented context.
 
 If a caller is interrupted or a process stops after a claim, the committed row remains recoverable.
 A later request with the same idempotency key still binds the currently configured gateway, requires
@@ -307,17 +328,19 @@ selected, and a row made live by a race is skipped by the claim, so no second ca
 that lease. One malformed or concurrently changed candidate does not stop the rest of the bounded
 cycle.
 
-Both recovery paths reuse the same deterministic `pmr1_...` provider-request token and the V15
-binding, fence, lease, deadline, out-of-transaction bounded invocation, and revision-rechecking
-finalization. This is bounded at-least-once execution, not an exactly-once promise; a future external
-provider must honor the token as its deduplication identity. The raw idempotency key, prepared
-payload, provider token, binding ID, fence, lease, and internal queued/running state remain internal
-database/application values; they are not added to `RunView`, proposal metadata, recovery responses,
-ordinary logs, or browser storage. The public POST remains synchronous, and if a same-key live lease
+Both recovery paths reuse the same deterministic `pmr1_...` provider-request token, the V15 binding,
+fence, lease, deadline, and the exact V16 context snapshot already stored in the database. Recovery
+does not rerun tag retrieval, so one provider-request token cannot be retried with different context.
+This is bounded at-least-once execution, not an exactly-once promise; a future external provider must
+honor the token as its deduplication identity. The raw idempotency key, prepared payload, provider
+token, binding ID, fence, lease, retrieval-context raw/hash/version/count, and internal queued/running
+state remain internal database/application values; they are not added to `RunView`, proposal JSON or
+`providerMetadata`, recovery responses, ordinary logs, browser storage, or service-worker caches. The
+public POST remains synchronous, and if a same-key live lease
 or invocation outlasts its coordination window the caller receives `409 ANALYSIS_IN_PROGRESS` and
 may retry the identical key/body. A stale finalization commits before a caller request returns
-`409 STALE_MEMO_REVISION`. Per-attempt history, duration, model-token usage, cost, and top-k context
-are still not recorded or supplied.
+`409 STALE_MEMO_REVISION`. Per-attempt history, duration, model-token usage, cost, related-memo
+retrieval, fuzzy/vector search, and embeddings are still not recorded or supplied.
 
 ## Future Agent tools before confirmation — not implemented
 
@@ -327,9 +350,10 @@ are still not recorded or supplied.
 - `getUserDateDefaults()`
 - `resolveRelativeDate(expression, baseInstant, timeZone)`
 
-These are design allow-list candidates only. The current Fake gateway has zero tool calls, and no
-search/context tool endpoint is wired to it. Do not expose create, update, merge, delete, notify, or
-bulk-rewrite tools before user confirmation.
+These are design allow-list candidates only. V16 performs its bounded exact tag/alias lookup directly
+inside the application; it is not a callable Agent tool. The current Fake gateway has zero tool calls,
+and no search/context tool endpoint is wired to it. Do not expose create, update, merge, delete,
+notify, or bulk-rewrite tools before user confirmation.
 
 Any future real-provider orchestration layer must enforce:
 
@@ -501,15 +525,16 @@ analyzer/prompt/local-model/embedding-model/routing-policy provenance and are se
 `Cache-Control: no-store`.
 
 This evidence makes personal review behavior observable, but it does not open the real-LLM gate.
-V15 plus the bounded production recovery worker supply durable pre-call, descriptor-bound,
-out-of-transaction Fake/test execution and restart recovery; they do not authorize a real provider or
-expose the internal dispatch contract over HTTP. Completed independent adjudication of the
+V15/V16 plus the bounded production recovery worker supply durable pre-call, descriptor-bound,
+context-snapshotted, out-of-transaction Fake/test execution and restart recovery; they do not
+authorize a real provider or expose the internal dispatch contract over HTTP. Completed independent
+adjudication of the
 version-2 date/item gold, an approved and independently reviewed version-3 binding label
 policy/dataset, a separately held blind release
 with a pre-registered gate, approved provider/region/retention/cost limits, a consent grant/revoke UX
 and API, provider-side token deduplication, and the remaining criteria in
-[EVALUATION.md](EVALUATION.md) are still required. Per-attempt operational metrics and top-k context
-also remain separate work.
+[EVALUATION.md](EVALUATION.md) are still required. Per-attempt operational metrics, related-memo
+retrieval, fuzzy/vector search, and embedding context also remain separate work.
 
 ## Personalization without fine-tuning
 

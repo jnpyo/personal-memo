@@ -6,9 +6,10 @@ Use a modular monolith for the backend and a mobile-first PWA for the client.
 
 Do not introduce Neo4j, Kafka, Redis, a separate AI microservice, or a second search service in the
 MVP. PostgreSQL and clear module boundaries are sufficient now. V15 uses a bounded in-process
-invocation pool to keep gateway work outside database transactions. In the production profile, a
-small scheduled worker reuses the same PostgreSQL-backed dispatch state to recover a bounded batch;
-it does not add a queue service or a second source of truth.
+invocation pool to keep gateway work outside database transactions, and V16 stores its bounded tag
+context snapshot in the same dispatch row. In the production profile, a small scheduled worker
+reuses that PostgreSQL-backed state to recover a bounded batch; it does not add a queue service or a
+second source of truth.
 
 ```mermaid
 flowchart TD
@@ -179,6 +180,14 @@ time no later than the authorization-check instant. V13 revokes legacy boolean-o
 future-dated grant is also rejected. There is no consent grant/revoke API and no external provider
 configured in this checkpoint.
 
+Before the first gateway call, the V16 retrieval step examines at most 10 tag proposals and at most
+20 distinct normalized canonical-name/alias terms. One owner-scoped SQL query matches only the
+authenticated owner's active tags and aliases by exact normalized equality. Unique resolution uses
+the complete returned match set. Only then do deterministic ordering and UUID deduplication retain at
+most K=8 candidates. The resulting `CloudAnalysisRequest` context is a hint only; final owner/reference
+validation remains authoritative. This step does not read raw memo or related-memo content and uses
+no fuzzy search, vector search, embedding, Ollama/LiquidAI, or real provider.
+
 The gateway returns a defensive success proposal or a typed failure enum without provider error
 text. Missing consent, typed failure, descriptor/enrichment exception, or invalid enriched output
 uses the revalidated local proposal, persists a `HYBRID` / `REVIEW_REQUIRED` run with server-owned
@@ -199,7 +208,11 @@ binding ID, timeout, maximum attempts, and deadline. A claim transaction recheck
 consent, and binding, then marks the run and dispatch `RUNNING` with a new fence and lease. The
 bounded executor runs outside the database transaction, and a final transaction accepts only the
 current fence, rechecks the memo revision, persists one final proposal, and scrubs the prepared
-payload. Historical runs are not assigned invented dispatch rows.
+payload. V16 also commits the serialized context, its SHA-256 hash, version, and candidate count
+before the call. Claim and recovery decode only that database snapshot and never rerun retrieval, so
+the same provider-request token cannot be retried with different context. Finalization scrubs the
+serialized context but retains hash/version/count evidence. Existing V15 dispatches remain
+`none`/`0`/null raw/null hash and historical runs are not assigned invented dispatch rows.
 
 The HTTP request remains synchronous and normally returns only after the run reaches
 `REVIEW_REQUIRED`; an intervening edit or trash operation commits the final run as `STALE` before
@@ -211,23 +224,25 @@ The production profile additionally enables a scheduler with a 30-second initial
 25-row batch bound. Its database query selects only `PREPARED` or `RUNNING` rows whose lease has
 expired, with owner and the existing raw idempotency key supplied by owner-consistent joins. Each
 candidate then enters the existing owner + operation + raw-key advisory transaction lock and the
-same V15 claim path. Live leases are skipped, including a lease made live between selection and
+same V15/V16 claim path. Live leases are skipped, including a lease made live between selection and
 claim. A process restart therefore resumes remaining eligible rows on a later bounded cycle. Any
 re-execution stays within the persisted attempt/deadline limits and reuses the same provider-request
-token. This is bounded at-least-once execution, so an eventual external provider must deduplicate by
-that token. Raw recovery keys, dispatch payloads, tokens, bindings, fences, leases, and queued/running
-state remain internal and are not added to public DTOs, proposal metadata, recovery responses, or
-ordinary logs.
+token and database context snapshot. This is bounded at-least-once execution, so an eventual external
+provider must deduplicate by that token. Raw recovery keys, dispatch payload/context,
+context hash/version/count, tokens, bindings, fences, leases, and queued/running state remain internal
+and are not added to public DTOs, proposal JSON or `providerMetadata`, recovery responses, ordinary
+logs, browser storage, or service-worker caches.
 
 A stale revision detected before execution records `CANCELLED_STALE`. A revision that becomes stale
 while a claimed call is in flight preserves that attempt's bounded outcome when finalization marks
 the run `STALE`; neither branch applies canonical data.
 
-The following retrieval/tool flow is a future design and is not implemented:
+The narrow automatic exact tag/alias lookup above is implemented inside the application and is not a
+callable Agent tool. The broader retrieval/tool flow remains future work:
 
 ```text
-backend keyword/tag retrieval
-→ top-k candidate context
+related-memo or fuzzy/vector/embedding retrieval
+→ additional bounded candidate context
 → one structured model call
 → optional 1–2 read-only tool calls for unresolved references
 → JSON Schema validation
@@ -318,7 +333,9 @@ The home query is bounded and ranks nodes using recency, pin, unfinished status,
   read-only before confirmation.
 - Model output undergoes JSON Schema and domain validation.
 - Logs omit raw memo bodies by default.
-- Future cloud context must be top-k and purpose-limited; top-k retrieval is not implemented.
+- Current exact tag/alias context is owner-scoped, purpose-limited, and bounded to K=8. It is an
+  internal hint, while final owner/reference validation remains authoritative; broader
+  related-memo/fuzzy/vector/embedding context is not implemented.
 
 The current authentication slice is not yet a public-account hardening release. Same-account failures receive a bounded lock, but local email verification, password-reset delivery, IP/edge rate limiting and abuse protection, MFA/passkeys, and complete account deletion remain follow-up work.
 
@@ -327,10 +344,11 @@ The current authentication slice is not yet a public-account hardening release. 
 The current database records route/proposal status, analyzer provenance, V13 cloud
 transfer/gateway/provider/model/policy/outcome evidence, V14 internal execution-contract,
 authorization/grant snapshot and request-token evidence, and V15 dispatch state, fence count, latest
-attempt start, lease, deadline, and finalization time. These internal values are deliberately absent
-from public DTOs and proposal metadata. The owner-scoped review summary exposes only bounded
-aggregate selection evidence. The dispatch row is not per-attempt history and does not record
-analysis duration, model token usage, cost, or provider error text.
+attempt start, lease, deadline, and finalization time. V16 adds bounded retrieval-context hash,
+version, and candidate-count evidence and retains serialized context only until finalization. These
+internal values are deliberately absent from public DTOs and proposal metadata. The owner-scoped
+review summary exposes only bounded aggregate selection evidence. The dispatch row is not per-attempt
+history and does not record analysis duration, model token usage, cost, or provider error text.
 
 Future observability may record the following without recording sensitive text:
 
@@ -344,9 +362,10 @@ Future observability may record the following without recording sensitive text:
 - graph query size and latency
 - push delivery/retry/duplicate prevention
 
-Current analysis rows include memo id/revision, schema and analyzer provenance, and cloud evidence,
-but there is no separate tracing/correlation subsystem. Ordinary logs must not include the memo body,
-provider errors, credentials, or tokens.
+Current analysis rows include memo id/revision, schema and analyzer provenance, cloud evidence, and
+the retained V16 context hash/version/count, but there is no separate tracing/correlation subsystem.
+Ordinary logs must not include the memo body, retrieval context, provider errors, credentials, or
+tokens.
 
 ## Deployment topology
 

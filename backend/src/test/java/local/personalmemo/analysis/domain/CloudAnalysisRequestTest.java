@@ -161,4 +161,31 @@ class CloudAnalysisRequestTest {
         .doesNotContain(TOKEN.value())
         .contains("proposal=redacted", "providerRequestToken=redacted");
   }
+
+  @Test
+  void carriesAnInternalTagContextWithoutExposingItsNamesOrIdentifiers() {
+    UUID tagId = UUID.fromString("00000000-0000-0000-0000-000000000016");
+    TagRetrievalContext context =
+        new TagRetrievalContext(
+            TagRetrievalContext.CURRENT_VERSION,
+            List.of(
+                new TagRetrievalContext.Candidate(
+                    1, tagId, "비공개 프로젝트", "업무", TagRetrievalContext.MatchKind.ALIAS, 0)));
+
+    CloudAnalysisRequest request =
+        new CloudAnalysisRequest(
+            json.createObjectNode(),
+            List.of(),
+            "field-policy-v1",
+            NO_NETWORK,
+            Optional.empty(),
+            Optional.empty(),
+            TOKEN,
+            Optional.of(context));
+
+    assertThat(request.tagRetrievalContext()).contains(context);
+    assertThat(request.toString())
+        .contains(TagRetrievalContext.CURRENT_VERSION, "1 candidates/redacted")
+        .doesNotContain(tagId.toString(), "비공개 프로젝트", "업무");
+  }
 }

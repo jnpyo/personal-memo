@@ -418,16 +418,25 @@ paths:
         providerMetadata from the same bounded server allow-list, including server-matching
         analyzer, prompt, local-model, embedding-model, and routing-policy versions (1–64 characters
         each) plus a required tool-call count from 0 through 100. Compact proposal JSON is limited
-        to 65,536 UTF-8 bytes and providerMetadata to 8,192 UTF-8 bytes. V15 commits a durable-v1
-        QUEUED/PENDING run and its PREPARED dispatch before an authorized gateway call. The dispatch
-        reserves the proposal identity and stores the idempotency/request hashes, exact validated
-        local proposal and hash, immutable executor binding identity, timeout, maximum attempts, and
-        deadline. A short claim transaction compares the current binding identity and exact
+        to 65,536 UTF-8 bytes and providerMetadata to 8,192 UTF-8 bytes. Before a gateway call, V16
+        examines at most 10 proposal tag candidates and 20 distinct normalized canonical-name/alias
+        terms. It queries only the authenticated owner's ACTIVE tags and aliases by exact normalized
+        equality, resolves uniqueness from the complete result, and deterministically retains at most
+        K=8 candidates as an internal hint. Final owner/reference validation remains authoritative.
+        This retrieval reads no raw or related memo and uses no fuzzy/vector search or embedding.
+        V15 commits a durable-v1 QUEUED/PENDING run and its PREPARED dispatch before an authorized
+        gateway call. The dispatch reserves the proposal identity and stores the idempotency/request
+        hashes, exact validated local proposal and hash, immutable executor binding identity, timeout,
+        maximum attempts, and deadline. V16 adds the serialized context, SHA-256 hash, version, and
+        candidate count to that pre-call snapshot. Existing V15 dispatches remain none/0/null
+        raw/null hash rather than receiving invented context. A short claim transaction compares the
+        current binding identity and exact
         descriptor, rechecks authorization, and acquires a deadline-clipped lease with a new fence.
         The bounded gateway invocation then runs outside every database transaction. Finalization
         locks and rechecks memo ownership, active state, revision, and dispatch fence, then
         atomically stores the proposal, final run evidence, finalized dispatch, and idempotency
-        response. A revision change is committed as STALE before this operation returns 409
+        response. It scrubs the serialized context while retaining its hash, version, and candidate
+        count. A revision change is committed as STALE before this operation returns 409
         STALE_MEMO_REVISION; stale detected before a provider attempt uses the internal
         CANCELLED_STALE outcome and makes zero gateway calls. The endpoint remains synchronous and
         never returns its internal QUEUED, RUNNING, or PENDING states. A same-key live lease or call
@@ -438,14 +447,17 @@ paths:
         cycle. Owner and the existing raw idempotency key come only from owner-consistent database
         rows; each candidate reuses the owner+operation+raw-key advisory transaction lock and live
         leases are skipped. Recovery after restart therefore reuses the persisted binding, deadline,
-        attempt count, lease/fence, bounded out-of-transaction Fake call, revision-rechecking
-        finalization, and the same provider-request token. This is an at-least-once transport
-        boundary, not exactly-once, so a real provider must honor that token idempotently. Internal
-        authorization/grant evidence, raw recovery key, provider token, prepared context, dispatch
-        binding, queued/running state, lease, and fence are never returned in RunView, proposal JSON,
-        providerMetadata, or recovery responses. The public POST remains synchronous. Per-attempt
-        history, duration/model-token/cost metrics, top-k context, and a configured real provider or
-        Ollama/LiquidAI adapter remain absent.
+        attempt count, lease/fence, exact V16 database context snapshot, bounded out-of-transaction
+        Fake call, revision-rechecking finalization, and the same provider-request token. Retrieval is
+        not rerun, so the same token cannot be retried with different context. This is an
+        at-least-once transport boundary, not exactly-once, so a real provider must honor that token
+        idempotently. Internal authorization/grant evidence, raw recovery key, provider token,
+        prepared payload/context, context hash/version/count, dispatch binding, queued/running state,
+        lease, and fence are never returned in RunView, proposal JSON, providerMetadata, recovery
+        responses, ordinary logs, browser storage, or service-worker caches. The public POST remains
+        synchronous. Per-attempt history, duration/model-token/cost metrics, related-memo retrieval,
+        fuzzy/vector search, embeddings, and a configured real provider or Ollama/LiquidAI adapter
+        remain absent.
       parameters:
         - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"

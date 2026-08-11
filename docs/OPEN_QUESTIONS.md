@@ -83,21 +83,30 @@ operational approval. Resolved decisions are not implementation prompts.
 - Every new LOCAL, cloud-success, and fallback proposal rebuilds `providerMetadata` from one bounded
   server allow-list, so a provider cannot retain arbitrary metadata fields.
 - No consent grant/revoke HTTP API, actual external provider, or Ollama/LiquidAI adapter is
-  configured. Top-k context, per-attempt history, duration, model-token, and cost tracking remain
-  open work.
+  configured. Related-memo retrieval, fuzzy/vector search, embeddings, per-attempt history, duration,
+  model-token, and cost tracking remain open work.
 - V14 stores an internal final-run authorization/grant snapshot and deterministic provider-request
   token for gateway calls, while legacy rows remain explicitly unsnapshotted. V15 now commits a
   provider-call-only dispatch before execution, binds descriptor and executor identity, claims work
   with a fence and lease, runs each claimed attempt outside the database transaction, and finalizes
   only after rechecking the memo revision and fence. Historical rows receive no invented dispatch.
+- V16 resolves at most 10 proposal tag candidates and 20 distinct normalized terms against only the
+  authenticated owner's active tag names/aliases using exact normalized equality. It resolves
+  uniqueness from the complete result before deterministic K=8 selection. The result is an internal
+  hint; final owner/reference validation remains authoritative. It reads no raw or related memo and
+  uses no fuzzy/vector/embedding retrieval.
 - V15 same-key caller recovery remains available. The production profile also enables a bounded
   scheduler that every 30 seconds selects at most 25 `PREPARED` or expired-lease `RUNNING` rows using
   only DB-selected owner/idempotency evidence. It uses the existing owner+operation+raw-key advisory
-  lock, skips live leases, and reuses the same binding/fence/deadline, out-of-transaction Fake call,
-  revision-rechecking finalize, and provider token after process restart. This is bounded
-  at-least-once execution, so an eventual provider must deduplicate by that token. The internal raw
-  key, prepared context, token, binding, fence, lease, and queued/running states do not change the
-  public synchronous HTTP, proposal, or recovery contracts.
+  lock, skips live leases, and reuses the same binding/fence/deadline, V16 DB context snapshot,
+  out-of-transaction Fake call, revision-rechecking finalize, and provider token after process
+  restart. Retrieval is never rerun for recovery, so the same token cannot receive different context.
+  V16 scrubs context raw at `FINALIZED` but retains hash/version/count; existing V15 rows remain
+  `none`/`0`/null raw/null hash. This is bounded at-least-once execution, so an eventual provider must
+  deduplicate by that token. The internal raw key, prepared payload/context and its evidence, token,
+  binding, fence, lease, and queued/running states remain absent from public synchronous HTTP and
+  recovery DTOs, proposal JSON or `providerMetadata`, ordinary logs, browser storage, and
+  service-worker caches.
 - No real local model or cloud provider is selected or connected without a separate product,
   privacy, evaluation, and cost decision.
 - Public regression and `VISIBLE_CHALLENGE` fixtures are diagnostic synthetic data, never blind

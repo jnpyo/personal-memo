@@ -5,7 +5,6 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -33,13 +32,14 @@ import local.personalmemo.analysis.domain.CloudProviderRequestToken;
 import local.personalmemo.analysis.domain.CloudTransferMode;
 import local.personalmemo.analysis.domain.DeterministicAmbiguityGate;
 import local.personalmemo.analysis.domain.LocalAnalyzer;
+import local.personalmemo.analysis.domain.TagRetrievalContext;
+import local.personalmemo.analysis.infrastructure.TagRetrievalContextCodec;
 import local.personalmemo.common.auth.CurrentIdentity;
 import local.personalmemo.common.error.DomainException;
 import local.personalmemo.common.idempotency.IdempotencyService;
 import local.personalmemo.common.security.Hashing;
 import local.personalmemo.memo.application.MemoService;
 import local.personalmemo.memo.domain.MemoSnapshot;
-import local.personalmemo.taxonomy.domain.TagNormalizer;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -78,6 +78,11 @@ public class AnalysisService {
           "cloudAuthorizationCheckedAt",
           "cloudAcceptedConsentGrantedAt",
           "cloudProviderRequestToken",
+          "tagRetrievalContext",
+          "retrievalContext",
+          "retrievalContextHash",
+          "retrievalContextVersion",
+          "retrievalContextCandidateCount",
           "cloudToolCalls",
           "cloudMutationCalls",
           "cloudResolvedFields",
@@ -111,7 +116,8 @@ public class AnalysisService {
   private final AnalysisProposalSchemaValidator proposalSchemaValidator;
   private final AnalysisProposalValidator proposalValidator;
   private final IdempotencyService idempotency;
-  private final TagNormalizer tagNormalizer;
+  private final OwnerTagContextRetriever tagContextRetriever;
+  private final TagRetrievalContextCodec tagContextCodec;
   private final ObjectMapper json;
   private final TransactionTemplate transactions;
 
@@ -127,7 +133,8 @@ public class AnalysisService {
       AnalysisProposalSchemaValidator proposalSchemaValidator,
       AnalysisProposalValidator proposalValidator,
       IdempotencyService idempotency,
-      TagNormalizer tagNormalizer,
+      OwnerTagContextRetriever tagContextRetriever,
+      TagRetrievalContextCodec tagContextCodec,
       ObjectMapper json,
       PlatformTransactionManager transactionManager) {
     this.db = db;
@@ -141,7 +148,8 @@ public class AnalysisService {
     this.proposalSchemaValidator = proposalSchemaValidator;
     this.proposalValidator = proposalValidator;
     this.idempotency = idempotency;
-    this.tagNormalizer = tagNormalizer;
+    this.tagContextRetriever = tagContextRetriever;
+    this.tagContextCodec = tagContextCodec;
     this.json = json;
     this.transactions = new TransactionTemplate(transactionManager);
     this.transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -390,8 +398,9 @@ public class AnalysisService {
             memo.clientRecordedAt(),
             memo.sourceTimeZone());
     canonicalizeProviderMetadata(localProposal, localProposal);
-    validateProposal(
-        ownerId, localProposal, memo, proposalSchemaVersion, provenance, routingPolicyVersion);
+    TagRetrievalContext tagRetrievalContext =
+        validatePreparedProposal(
+            ownerId, localProposal, memo, proposalSchemaVersion, provenance, routingPolicyVersion);
     List<AmbiguityReason> routingReasons = ambiguityGate.routingSignals(localProposal);
     AnalysisRoute route = ambiguityGate.route(routingReasons);
 
@@ -492,7 +501,8 @@ public class AnalysisService {
             descriptor,
             authorizationCheckedAt,
             acceptedConsentGrantedAt,
-            CloudProviderRequestToken.issue(ownerId, START_OPERATION, key, requestHash));
+            CloudProviderRequestToken.issue(ownerId, START_OPERATION, key, requestHash),
+            Optional.of(tagRetrievalContext));
     CloudRunEvidence pendingEvidence = CloudRunEvidence.pending(cloudRequest);
     insertRun(
         ownerId,
@@ -515,6 +525,7 @@ public class AnalysisService {
         requestHash,
         binding.bindingId(),
         localProposal,
+        tagRetrievalContext,
         startedAt);
     RunView pending = new RunView(runId, memo.id(), memo.currentRevision(), "RUNNING", proposalId);
     idempotency.store(ownerId, START_OPERATION, key, requestHash, runId, pending);
@@ -648,19 +659,25 @@ public class AnalysisService {
       String requestHash,
       CloudGatewayBindingId bindingId,
       ObjectNode localProposal,
+      TagRetrievalContext tagRetrievalContext,
       Instant preparedAt) {
     String proposalJson = localProposal.toString();
+    String retrievalContextJson = tagContextCodec.serialize(tagRetrievalContext);
     long timeoutMillis = cloudAttemptTimeout.toMillis();
     db.sql(
             """
             insert into analysis_run_dispatches(
               analysis_run_id, owner_id, reserved_proposal_id, idempotency_key_hash,
               request_hash, validated_local_proposal, validated_local_proposal_hash,
+              retrieval_context, retrieval_context_hash, retrieval_context_version,
+              retrieval_context_candidate_count,
               executor_binding_id, call_timeout_ms, max_attempts, deadline_at, state,
               fence_token, prepared_at, updated_at
             ) values (
               :runId, :ownerId, :proposalId, :idempotencyKeyHash,
               :requestHash, :localProposal, :localProposalHash,
+              :retrievalContext, :retrievalContextHash, :retrievalContextVersion,
+              :retrievalContextCandidateCount,
               :bindingId, :callTimeoutMs, :maxAttempts, :deadlineAt, 'PREPARED',
               0, :preparedAt, :preparedAt
             )
@@ -672,6 +689,10 @@ public class AnalysisService {
         .param("requestHash", requestHash)
         .param("localProposal", proposalJson)
         .param("localProposalHash", Hashing.sha256(proposalJson))
+        .param("retrievalContext", retrievalContextJson)
+        .param("retrievalContextHash", Hashing.sha256(retrievalContextJson))
+        .param("retrievalContextVersion", tagRetrievalContext.version())
+        .param("retrievalContextCandidateCount", tagRetrievalContext.candidateCount())
         .param("bindingId", bindingId.value())
         .param("callTimeoutMs", timeoutMillis)
         .param("maxAttempts", MAX_GATEWAY_ATTEMPTS)
@@ -806,7 +827,8 @@ public class AnalysisService {
             dispatch.descriptor(),
             Optional.ofNullable(attemptEvidence.authorizationCheckedAt()),
             Optional.ofNullable(attemptEvidence.acceptedConsentGrantedAt()),
-            attemptEvidence.providerRequestToken());
+            attemptEvidence.providerRequestToken(),
+            dispatch.tagRetrievalContext());
     return new StartDispatch(runId, proposalId, nextFence, binding, request, attemptTimeout);
   }
 
@@ -957,6 +979,7 @@ public class AnalysisService {
              update analysis_run_dispatches
                 set state = 'FINALIZED',
                     validated_local_proposal = null,
+                    retrieval_context = null,
                     lease_expires_at = null,
                     finalized_at = :finalizedAt,
                     updated_at = :finalizedAt
@@ -1172,6 +1195,10 @@ public class AnalysisService {
                    d.reserved_proposal_id,
                    d.validated_local_proposal,
                    d.validated_local_proposal_hash,
+                   d.retrieval_context,
+                   d.retrieval_context_hash,
+                   d.retrieval_context_version,
+                   d.retrieval_context_candidate_count,
                    d.executor_binding_id,
                    d.call_timeout_ms,
                    d.max_attempts,
@@ -1216,6 +1243,8 @@ public class AnalysisService {
       }
       localProposal = parsedObject;
     }
+    Optional<TagRetrievalContext> tagRetrievalContext =
+        mapTagRetrievalContext(resultSet, dispatchState);
     CloudGatewayDescriptor descriptor =
         new CloudGatewayDescriptor(
             resultSet.getString("cloud_gateway_version"),
@@ -1255,6 +1284,7 @@ public class AnalysisService {
         descriptor,
         evidence,
         localProposal,
+        tagRetrievalContext,
         resultSet.getString("executor_binding_id"),
         resultSet.getInt("call_timeout_ms"),
         resultSet.getInt("max_attempts"),
@@ -1263,6 +1293,37 @@ public class AnalysisService {
         resultSet.getLong("fence_token"),
         instantOrNull(resultSet, "lease_expires_at"),
         instantOrNull(resultSet, "finalized_at"));
+  }
+
+  private Optional<TagRetrievalContext> mapTagRetrievalContext(
+      ResultSet resultSet, String dispatchState) throws SQLException {
+    String version = resultSet.getString("retrieval_context_version");
+    int candidateCount = resultSet.getInt("retrieval_context_candidate_count");
+    String rawContext = resultSet.getString("retrieval_context");
+    String storedHash = resultSet.getString("retrieval_context_hash");
+    if ("none".equals(version)) {
+      if (candidateCount != 0 || rawContext != null || storedHash != null) {
+        throw new IllegalStateException("The legacy retrieval context evidence is incoherent.");
+      }
+      return Optional.empty();
+    }
+    if (!TagRetrievalContext.CURRENT_VERSION.equals(version)) {
+      throw new IllegalStateException("The durable retrieval context version is unsupported.");
+    }
+    if (rawContext == null) {
+      if (!"FINALIZED".equals(dispatchState) || storedHash == null) {
+        throw new IllegalStateException("The durable retrieval context is missing.");
+      }
+      return Optional.empty();
+    }
+    if (storedHash == null || !Hashing.sha256(rawContext).equals(storedHash)) {
+      throw new IllegalStateException("The durable retrieval context failed its integrity check.");
+    }
+    TagRetrievalContext context = tagContextCodec.deserialize(rawContext);
+    if (!version.equals(context.version()) || candidateCount != context.candidateCount()) {
+      throw new IllegalStateException("The durable retrieval context evidence does not match.");
+    }
+    return Optional.of(context);
   }
 
   private List<AmbiguityReason> parseAmbiguityReasons(String value) {
@@ -1576,6 +1637,20 @@ public class AnalysisService {
     requireOwnedActiveTags(ownerId, referencedTagIds);
   }
 
+  private TagRetrievalContext validatePreparedProposal(
+      UUID ownerId,
+      ObjectNode proposal,
+      MemoSnapshot memo,
+      String expectedSchemaVersion,
+      AnalysisProvenance expectedProvenance,
+      String expectedRoutingPolicyVersion) {
+    validateProposalEnvelope(proposal, expectedSchemaVersion);
+    TagRetrievalContext tagRetrievalContext = tagContextRetriever.resolve(ownerId, proposal);
+    validateResolvedProposal(
+        ownerId, proposal, memo, expectedProvenance, expectedRoutingPolicyVersion);
+    return tagRetrievalContext;
+  }
+
   private void validateProposal(
       UUID ownerId,
       ObjectNode proposal,
@@ -1583,6 +1658,12 @@ public class AnalysisService {
       String expectedSchemaVersion,
       AnalysisProvenance expectedProvenance,
       String expectedRoutingPolicyVersion) {
+    validateProposalEnvelope(proposal, expectedSchemaVersion);
+    validateResolvedProposal(
+        ownerId, proposal, memo, expectedProvenance, expectedRoutingPolicyVersion);
+  }
+
+  private void validateProposalEnvelope(ObjectNode proposal, String expectedSchemaVersion) {
     if (proposal == null) {
       throw DomainException.invalid(
           "INVALID_ANALYSIS_PROPOSAL", "The analyzer returned no proposal.");
@@ -1593,7 +1674,14 @@ public class AnalysisService {
           "The proposal schema version does not match the server-owned analyzer contract.");
     }
     proposalSchemaValidator.validate(proposal);
-    resolveOwnerScopedTagCandidates(ownerId, proposal);
+  }
+
+  private void validateResolvedProposal(
+      UUID ownerId,
+      ObjectNode proposal,
+      MemoSnapshot memo,
+      AnalysisProvenance expectedProvenance,
+      String expectedRoutingPolicyVersion) {
     synchronizeNewTopicSignal(proposal);
     synchronizeResolvedRouteMetadata(proposal);
     proposalSchemaValidator.validate(proposal);
@@ -1605,91 +1693,6 @@ public class AnalysisService {
         expectedProvenance,
         expectedRoutingPolicyVersion);
     validateProposalReferences(ownerId, proposal);
-  }
-
-  /**
-   * Converts only structurally valid, explicitly new tag candidates into canonical references. The
-   * analyzer has no owner context, so it must never invent persistence identifiers. A candidate is
-   * resolved only when its normalized canonical/alias values identify exactly one active tag owned
-   * by the authenticated user.
-   */
-  private void resolveOwnerScopedTagCandidates(UUID ownerId, ObjectNode proposal) {
-    for (JsonNode candidateNode : proposal.path("tagCandidates")) {
-      if (!candidateNode.path("isNewProposal").isBoolean()
-          || !candidateNode.path("isNewProposal").asBoolean()
-          || !candidateNode.path("existingTagId").isNull()) {
-        continue;
-      }
-
-      Optional<String> normalizedCanonical =
-          normalizeForResolution(candidateNode.path("canonicalName"));
-      if (normalizedCanonical.isEmpty()) {
-        continue;
-      }
-      Optional<String> normalizedAlias = normalizeForResolution(candidateNode.path("matchedAlias"));
-      String aliasLookup = normalizedAlias.orElse(normalizedCanonical.get());
-
-      List<TagResolution> matches =
-          db.sql(
-                  """
-                  select t.id, t.canonical_name, cast(null as varchar) as matched_alias
-                    from tags t
-                   where t.owner_id = :ownerId
-                     and t.state = 'ACTIVE'
-                     and (t.normalized_name = :canonical or t.normalized_name = :alias)
-                  union all
-                  select t.id, t.canonical_name, ta.alias as matched_alias
-                    from tag_aliases ta
-                    join tags t
-                      on t.id = ta.tag_id
-                     and t.owner_id = ta.owner_id
-                   where ta.owner_id = :ownerId
-                     and t.state = 'ACTIVE'
-                     and (ta.normalized_alias = :canonical or ta.normalized_alias = :alias)
-                  """)
-              .param("ownerId", ownerId)
-              .param("canonical", normalizedCanonical.get())
-              .param("alias", aliasLookup)
-              .query(
-                  (resultSet, rowNumber) ->
-                      new TagResolution(
-                          resultSet.getObject("id", UUID.class),
-                          resultSet.getString("canonical_name"),
-                          resultSet.getString("matched_alias")))
-              .list();
-
-      LinkedHashMap<UUID, TagResolution> uniqueMatches = new LinkedHashMap<>();
-      for (TagResolution match : matches) {
-        uniqueMatches.merge(
-            match.id(), match, (first, second) -> second.matchedAlias() == null ? first : second);
-      }
-      if (uniqueMatches.size() != 1) {
-        continue;
-      }
-
-      TagResolution resolved = uniqueMatches.values().iterator().next();
-      ObjectNode candidate = (ObjectNode) candidateNode;
-      candidate
-          .put("existingTagId", resolved.id().toString())
-          .put("canonicalName", resolved.canonicalName())
-          .put("isNewProposal", false);
-      if (resolved.matchedAlias() == null) {
-        candidate.putNull("matchedAlias");
-      } else {
-        candidate.put("matchedAlias", resolved.matchedAlias());
-      }
-    }
-  }
-
-  private Optional<String> normalizeForResolution(JsonNode value) {
-    if (!value.isTextual()) {
-      return Optional.empty();
-    }
-    try {
-      return Optional.of(tagNormalizer.normalize(value.asText()).normalizedName());
-    } catch (DomainException exception) {
-      return Optional.empty();
-    }
   }
 
   private void synchronizeNewTopicSignal(ObjectNode proposal) {
@@ -1933,8 +1936,6 @@ public class AnalysisService {
 
   private record ProposalRun(UUID runId, UUID memoId, int memoRevision, String status) {}
 
-  private record TagResolution(UUID id, String canonicalName, String matchedAlias) {}
-
   private record CloudConsentState(boolean granted, String policyVersion, Timestamp grantedAt) {}
 
   private record CloudEnrichment(ObjectNode proposal, CloudRunEvidence evidence) {}
@@ -1988,6 +1989,7 @@ public class AnalysisService {
       CloudGatewayDescriptor descriptor,
       CloudRunEvidence evidence,
       ObjectNode localProposal,
+      Optional<TagRetrievalContext> tagRetrievalContext,
       String executorBindingId,
       int callTimeoutMs,
       int maxAttempts,
