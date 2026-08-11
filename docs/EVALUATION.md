@@ -147,6 +147,17 @@ The repository now contains preparation code, not completed human evidence:
   digest, requires distinct opaque reviewer tokens and matching protocol/policy identifiers, and
   emits aggregate agreement only. It never chooses a correction or treats matching
   `CHANGE_REQUIRED` verdicts as resolved.
+- `PublicGoldReviewPacketRunner` explicitly generates one local static HTML packet from the strict
+  public release. Its renderer manually allow-lists source, capture time, time zone, and the scoped
+  date/item gold for presentation. Fixture notes, route/type/tag/signal gold, analyzer output, another
+  review, and generated metrics are never rendered or copied into the packet; the displayed canonical
+  digest still commits to every field in the complete public release. UTF-16 source spans are shown as
+  numeric half-open ranges and highlighted text. The packet has no verdict form, reviewer identity,
+  attestation, or manifest generator.
+- `ExternalPublicGoldReviewRunner` explicitly consumes two complete human-authored manifests from
+  outside the repository, pins a clean candidate commit, delegates verdict comparison to the strict
+  verifier, and writes only its fixed aggregate summary. It cannot prove that either token belongs to
+  a person or that the reviews were independent.
 - `contracts/korean-memo-binding-overlay.schema.json` and `EvaluationV3BindingGoldIntegrity` can
   validate an ID-only TASK-due overlay against one exact immutable public version-2 release digest,
   including complete item-set alternatives and precise emitted-date references. This integrity
@@ -158,6 +169,87 @@ prove validator behavior only. [EVALUATION_LABEL_POLICY.md](EVALUATION_LABEL_POL
 `DRAFT_REQUIRES_INDEPENDENT_HUMAN_APPROVAL`; an Agent must not fill or approve human review inputs.
 Until people complete and freeze both review stages, `dateItemDueBinding` remains
 `SUPPORTED_NOT_SCORED_DATASET_V2`.
+
+## Generating the scoped public-review packet
+
+From `backend/`, explicitly generate the local packet from one clean, fixed checkout. On PowerShell:
+
+```powershell
+$env:PERSONAL_MEMO_CANDIDATE_COMMIT = (git rev-parse HEAD).Trim()
+try {
+  mvn clean -Dtest=PublicGoldReviewPacketRunner test
+} finally {
+  Remove-Item Env:PERSONAL_MEMO_CANDIDATE_COMMIT -ErrorAction SilentlyContinue
+}
+```
+
+`PublicGoldReviewPacketRunner` does not match the ordinary Surefire test-name patterns, so normal
+`test`, `verify`, and public CI do not create the packet. A successful explicit run writes:
+
+```text
+backend/target/evaluation/public-v2-review-packet.html
+```
+
+The packet contains the exact public synthetic memo text and scoped gold needed by a reviewer. It is
+therefore not an aggregate report and must stay local under ignored `target/`; do not upload it as a
+CI artifact or confuse it with a blind release. It is deterministic UTF-8 static HTML with an
+offline-only content-security policy and no script, network request, form, browser storage, or
+manifest-writing function. Its release digest and case count identify the exact release being shown.
+The runner requires the exact lowercase candidate commit, checks the same clean `HEAD` before reading
+the synchronized repository/source/bundled resources and again immediately before atomic publication,
+and fails closed if either check changes. Mirror equality alone is not treated as a commit pin. It
+deletes a safe stale packet before verification and attempts cleanup after later failures; any nonzero
+Maven result invalidates every remaining packet if the host prevents cleanup.
+Humans must independently approve or revise the draft policy and freeze their own opaque release ID
+and policy version before authoring reviews.
+
+Each reviewer receives the same packet but must not receive fixture `notes`, analyzer/Fake output, the
+deterministic report, or the other review. Reviewers create their strict manifests themselves outside
+Git. An Agent may render the fixed packet and validate completed inputs, but must not create, fill,
+approve, copy, or infer either human manifest.
+
+## Verifying two external public-review manifests
+
+Only after two different people have completed independent manifests, run the aggregate verifier from
+one clean, fixed checkout. On PowerShell, from `backend/`:
+
+```powershell
+$env:PERSONAL_MEMO_PUBLIC_REVIEW_MANIFEST_A = '<absolute-outside-repository-path-A>'
+$env:PERSONAL_MEMO_PUBLIC_REVIEW_MANIFEST_B = '<absolute-outside-repository-path-B>'
+$env:PERSONAL_MEMO_CANDIDATE_COMMIT = (git rev-parse HEAD).Trim()
+try {
+  mvn clean -Dtest=ExternalPublicGoldReviewRunner test
+} finally {
+  Remove-Item Env:PERSONAL_MEMO_PUBLIC_REVIEW_MANIFEST_A -ErrorAction SilentlyContinue
+  Remove-Item Env:PERSONAL_MEMO_PUBLIC_REVIEW_MANIFEST_B -ErrorAction SilentlyContinue
+  Remove-Item Env:PERSONAL_MEMO_CANDIDATE_COMMIT -ErrorAction SilentlyContinue
+}
+```
+
+The runner is also outside ordinary Surefire patterns. It fails closed unless both paths are absolute,
+outside the repository, regular non-link files, and different real files; hard-linked aliases are not
+two reviews. Inputs must be non-empty bounded strict UTF-8 JSON without a BOM, duplicate keys, trailing
+content, or schema additions. The bundled and repository public fixtures/schema must match. Both
+manifests must pin the exact public release, use distinct case-insensitive reviewer tokens, cover the
+same complete case universe, and carry every required human attestation. The runner checks the exact
+clean `HEAD` before reading and again before output, never prints an input value, and removes stale or
+temporary output before verification. It attempts the same cleanup after later failures; if deletion
+itself is denied or interrupted, the Maven command still fails and every remaining file must be treated
+as invalid stale output.
+
+Only a successful integrity run may create:
+
+```text
+backend/target/evaluation/public-v2-review-summary.json
+```
+
+The fixed summary contains only the verifier's status, booleans, and aggregate counts. It excludes
+paths, tokens, release/policy identifiers, digests, case IDs, content, notes, gold, corrections, and
+per-case verdicts. `CONSENSUS_ACCEPTED` means only that the two submitted manifests both said `ACCEPT`
+for every scoped field under the same structural contract. It is not proof of reviewer identity or
+independence, policy approval, adjudication, a version-3 binding dataset, blind `PASS`, metric quality,
+or provider readiness. `NEEDS_HUMAN_RESOLUTION` and any `CHANGE_REQUIRED` require people to resolve the
+gold, freeze a changed release when needed, and repeat independent review of the new digest.
 
 ## Separately held blind evaluation
 
@@ -232,7 +324,9 @@ That report is aggregate-only and allow-listed. It contains the envelope version
 and rates, the exact candidate commit, and server-owned analyzer/rules/routing provenance. It must
 not contain raw text, a case ID, a content or ID hash, a source span, a per-case label/result, an
 owner/user/memo identifier, or a filesystem path. The runner checks the serialized report against
-the input values and deletes the report on every validation, privacy, execution, or write failure.
+the input values, deletes stale output before validation, and attempts cleanup after any later
+validation, privacy, execution, or write failure. A nonzero command result invalidates every
+remaining report even when the host denies or interrupts deletion.
 
 Public CI must not receive the blind dataset or reviewer/adjudication inputs as secrets, invoke the
 external runner, or upload those inputs, its report, or diagnostics as an artifact. The tracked-file

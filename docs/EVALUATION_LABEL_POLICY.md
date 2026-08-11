@@ -77,6 +77,39 @@ raw text. It never chooses one review, merges a correction, or treats two matchi
 public release when necessary, and independently review the new digest again. Normal CI tests only
 the verifier with clearly test-only objects; they do not claim that real reviews occurred.
 
+### Safe reviewer presentation and aggregate execution
+
+The explicit `PublicGoldReviewPacketRunner` may render the immutable public release into a local
+static HTML packet. It must manually select only the case ID/split, exact public synthetic source,
+base instant, time zone, and the scoped date/item gold. Every date/item source span is shown as the
+numeric half-open UTF-16 range `[start,end)` and a highlighted source fragment; a boundary that splits
+a surrogate pair fails closed. Fixture `notes`, route/type/tag/signal gold, date ambiguity signals,
+analyzer/Fake output, generated reports, and peer-review data are never rendered or copied into the
+presentation. The displayed canonical digest still commits to all fields of the complete public
+release, including fields outside the review scope.
+
+The packet is presentation only. It has no script, network access, form, verdict control, reviewer
+token, attestation control, or manifest generator. An Agent may generate this deterministic packet but
+must not turn it into a pre-filled or suggested human review. The HTML contains public synthetic raw
+text and gold, so it stays under local ignored `backend/target/evaluation/` and is not a CI artifact or
+blind-evaluation input. Generation requires one exact candidate commit and the same clean `HEAD`
+before reading and immediately before atomic publication; synchronized dirty mirrors are rejected.
+The runner removes a safe stale packet before verification and attempts cleanup after later failures;
+a nonzero command result invalidates every remaining packet.
+
+After two people independently author complete strict manifests outside the repository, the explicit
+`ExternalPublicGoldReviewRunner` may validate them against the same synchronized public release. It
+requires two distinct real non-link files, strict UTF-8 JSON, one exact clean candidate commit, strict
+schema coverage and the existing verifier invariants. On success it atomically writes only the fixed
+11-field aggregate verifier summary. It deletes stale output before verification and attempts cleanup
+after any later failure; a nonzero command result invalidates every remaining file even when the host
+denies deletion. Normal Maven/CI does not execute either Runner.
+
+Tooling cannot establish the facts asserted by human attestations. Even a
+`CONSENSUS_ACCEPTED` summary is only a structural aggregation of the submitted verdicts and cannot be
+called identity verification, independence proof, policy approval, adjudication, accuracy, binding
+support, `PASS`, or permission to configure a provider.
+
 ## Version-3 TASK-due binding overlay
 
 Version 3 is represented as an ID-only overlay on one immutable, independently reviewed version-2
@@ -147,14 +180,16 @@ runner is version-2-only and must not be broadened by this draft.
 ## Agent-safe preparation and next human actions
 
 The current Agent-safe slice consists only of strict contracts, test-resource mirrors, validators,
-focused unit tests, and this human-unapproved draft. Test builders may create synthetic test-only
-manifests and overlays in memory; those objects are not reviewer evidence or dataset labels.
+the scoped presentation renderer, the explicit aggregate-only external runner, focused unit tests,
+and this human-unapproved draft. Test builders may create synthetic test-only manifests and overlays
+in memory; those objects are not reviewer evidence or dataset labels. The renderer cannot create a
+manifest, and the runner cannot create or resolve a verdict.
 
 The next valid steps require people:
 
 1. independently approve or revise this policy;
-2. freeze the public version-2 release and complete two genuinely independent review manifests
-   outside Git;
+2. freeze the public version-2 release, use the scoped packet without exposing forbidden context, and
+   complete two genuinely independent review manifests outside Git;
 3. resolve every requested change or disagreement and re-review any changed digest;
 4. independently author and adjudicate a binding overlay with coverage for single due, unbound due,
    two-task/two-date, shared due, clause-local date, approximate/unknown date, non-task date, and
@@ -164,5 +199,8 @@ The next valid steps require people:
 Focused preparation tests run from `backend/` with:
 
 ```text
-mvn -Dtest=PublicGoldAdjudicationVerifierTest,EvaluationV3BindingGoldIntegrityTest test
+mvn -Dtest=PublicGoldAdjudicationVerifierTest,PublicGoldReviewPacketRendererTest,ExternalPublicGoldReviewRunnerTest,EvaluationV3BindingGoldIntegrityTest test
 ```
+
+The two explicit Runner commands and their output/privacy boundaries are documented in
+`docs/EVALUATION.md`; they are not part of normal verification.
