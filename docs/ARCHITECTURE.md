@@ -144,7 +144,8 @@ Each module may contain `api`, `application`, `domain`, and `infrastructure` pac
   and owner-scoped detail navigation
 - `task`: derived task/event records and state transitions
 - `reminder`: schedule, Web Push and retry
-- `search`: lexical/semantic retrieval and cloud context preparation
+- `search`: owner-scoped exact lexical memo retrieval; future fuzzy/semantic retrieval remains
+  outside the current slice
 - `sync`: client mutation handling and later cursor synchronization
 - `audit`: provenance, analysis applications and undo
 
@@ -308,19 +309,48 @@ PWA background execution is not reliable enough to own reminders or taxonomy mai
 
 ## Search strategy
 
-MVP:
+Current exact lexical slice:
 
-- exact and normalized text search
-- canonical tag/alias lookup
-- `pg_trgm` for fuzzy matching where useful
-- task/date/status filters
+- `POST /api/v1/search/memos` keeps the query in a strict JSON body rather than a URL and applies ordinary
+  session, CSRF, and expected-owner protections. It is read-only and creates no idempotency or
+  analytics row.
+- PostgreSQL reads only the current immutable raw revision for BODY. TITLE comes only from the latest
+  valid `APPLIED` selection and may identify an older `canonicalRevision`; proposal JSON and undone
+  applications never become search authority.
+- The server rejects U+0000 and malformed UTF-16, and bounds both raw and normalized query strings to 200
+  UTF-16 code units. Java produces the query operand with NFKC/strip/`Locale.ROOT` lowercase;
+  PostgreSQL applies `normalize(..., NFKC)` and `lower(... COLLATE "und-x-icu")` to stored BODY/TITLE
+  before literal-substring comparison. These are the implemented two sides of the contract; no
+  broader collation equivalence is assumed. SQL wildcard characters are ordinary content.
+  TAG/ALIAS use `TagNormalizer` and exact normalized equality against current-owner `ACTIVE`
+  canonical data only.
+- lifecycle, task state, snapshot-derived overdue, inclusive current-revision lower time, and
+  exclusive upper time filters are server-validated. Each revision bound is restricted to the
+  inclusive UTC instant range `0001-01-01T00:00:00Z` through
+  `9999-12-31T23:59:59.999999Z` before JDBC binding. Result order is current raw-revision time
+  descending then memo UUID ascending.
+- the server defaults to 20 and rejects pages above 50; the PWA keeps at most five pages/100 results.
+  Each result has a maximum 240-code-point current-raw preview and eight active canonical tags.
+- cursor version 1 contains hashes and identities, not the query or display content. It is bound to
+  the authenticated owner, normalized query, canonical filters, sort shape, 24-hour snapshot, last
+  memo, and a digest of the complete visible result membership/order/display state. Continuation
+  recomputes that digest in `REPEATABLE_READ`; change returns 422 and requires an explicit first-page
+  restart.
+- selecting a result reuses the owner-scoped, no-store current raw memo detail. It neither adds a
+  React Flow node nor mutates the graph projection.
 
-P1:
+Measured follow-up only:
 
-- versioned embeddings and vector retrieval
-- hybrid ranking of lexical and semantic candidates
+- the explicit worst-case all-match 10,000-memo hot-plan observation kept every individual page or
+  digest plan below 1.1 seconds with no shared read/temp I/O and showed no reason to add V18; this is
+  not endpoint latency or an SLA
+- `pg_trgm` or another fuzzy index only when later representative data/concurrency measurements
+  demonstrate a need or the product explicitly adds fuzzy ranking
+- related-memo and versioned vector/embedding retrieval after separate product and evaluation gates
 
-Do not deploy a dedicated Korean search cluster until measured requirements justify it.
+The current slice does not introduce a Flyway migration, `pg_trgm`, a search service, a provider,
+or fuzzy/semantic ranking. Do not deploy a dedicated Korean search cluster until measured
+requirements justify it.
 
 ## Graph projection
 
@@ -369,8 +399,14 @@ no-store current memo detail even when that memo is outside the home projection;
 into React Flow. Independent abort/generation guards prevent stale page or raw-detail responses from
 replacing the current root. A stale cursor keeps the accumulated list visibly stale, hides further
 pagination, and offers an explicit first-page restart. This completes the first read-only Milestone 5
-neighborhood slice without claiming lexical/fuzzy search, alias detail, taxonomy evolution, or graph
-compression.
+neighborhood slice without making that endpoint a search API or claiming alias detail, taxonomy
+evolution, or graph compression. The separate exact lexical slice below still does not claim fuzzy
+or semantic retrieval.
+
+Exact lexical search is a separate projection over the same canonical tables. It can find a memo
+outside graph home and open the same current raw detail, but it does not expand a graph neighborhood
+or make search state part of the graph source of truth. A stale search cursor preserves the visible
+result list only as an explicitly stale UI snapshot until the user restarts at page one.
 
 ## Security boundary
 

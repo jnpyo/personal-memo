@@ -57,3 +57,33 @@ export function isValidOffsetDateTime(value: string | null): value is string {
     (offsetHour < 18 || offsetMinute === 0)
   );
 }
+
+type ParsedInstant = {
+  epochSeconds: number;
+  nanoseconds: number;
+};
+
+function parseOffsetDateTime(value: string): ParsedInstant | null {
+  const match = OFFSET_DATE_TIME.exec(value);
+  if (!match || !isValidOffsetDateTime(value)) return null;
+  const offset = match[6]!;
+  const wholeSecond = `${match[1]}T${match[2]}:${match[3]}:${match[4]}${offset}`;
+  const epochMilliseconds = Date.parse(wholeSecond);
+  if (!Number.isFinite(epochMilliseconds)) return null;
+  return {
+    epochSeconds: epochMilliseconds / 1_000,
+    nanoseconds: Number((match[5] ?? '').padEnd(9, '0')),
+  };
+}
+
+export function compareOffsetDateTimes(left: string, right: string): number {
+  const leftInstant = parseOffsetDateTime(left);
+  const rightInstant = parseOffsetDateTime(right);
+  if (!leftInstant || !rightInstant) {
+    throw new TypeError('Both values must be valid offset date-times.');
+  }
+  if (leftInstant.epochSeconds !== rightInstant.epochSeconds) {
+    return leftInstant.epochSeconds < rightInstant.epochSeconds ? -1 : 1;
+  }
+  return leftInstant.nanoseconds - rightInstant.nanoseconds;
+}

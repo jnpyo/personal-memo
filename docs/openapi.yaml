@@ -2,9 +2,10 @@ openapi: 3.1.0
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 info:
   title: Personal Memo API
-  version: 0.5.0
+  version: 0.6.0
   description: >-
-    Server-session 인증, Milestone 1의 AI-free vertical slice와 외부 모델 없는 결정론적 분석 계약입니다.
+    Server-session 인증, Milestone 1의 AI-free vertical slice, 외부 모델 없는 결정론적 분석,
+    Milestone 5의 privacy-first exact lexical memo-search 계약입니다.
     분석 결과는 제안이며, canonical 태그와 할 일은 사용자 승인 endpoint를
     통해서만 생성됩니다. Cookie-authenticated mutation은 CSRF header가 필요합니다.
     Owner-scoped 요청은 선택적인 X-Expected-Owner-Id client snapshot guard를 지원하지만,
@@ -20,6 +21,7 @@ tags:
   - name: Analysis
   - name: Tasks
   - name: Graph
+  - name: Search
 
 paths:
   /health:
@@ -1029,6 +1031,146 @@ paths:
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
+  /search/memos:
+    post:
+      tags: [Search]
+      operationId: searchMemos
+      summary: Search canonical owner-scoped memo views by exact lexical rules
+      description: >-
+        A read-only POST keeps the private query in a JSON body instead of a URL. It creates no
+        canonical or idempotency row but requires the current CSRF token because it is a
+        cookie-authenticated POST. BODY is the current immutable raw revision; TITLE is the latest
+        valid APPLIED selection and can belong to an older canonicalRevision. The server rejects
+        U+0000 and malformed UTF-16, then creates the query operand with Java NFKC, strip, and Locale.ROOT
+        lowercase. PostgreSQL applies NFKC and lower under the und-x-icu collation to stored
+        BODY/TITLE before literal-substring comparison; no broader collation equivalence is
+        promised, and SQL wildcard characters have no special meaning. TAG/ALIAS use TagNormalizer
+        exact normalized equality against only the authenticated owner's ACTIVE canonical tags
+        linked through APPLIED, unarchived items.
+        Proposal data, UNDONE applications, archived items, and inactive tags are excluded.
+        Lifecycle, aggregate task state, snapshot-derived overdue, inclusive revisedFrom, and
+        exclusive revisedBefore filters apply to the current revision. Results order by current raw
+        revision time descending and memo UUID ascending. Cursor version 1 contains only hashes,
+        identities, sort shape, and a bounded snapshot; it never contains the query or a display/raw
+        value and never grants access. Continuation recomputes the full visible result digest and
+        returns INVALID_SEARCH_CURSOR when membership, order, or display state changed. The PWA
+        preserves that list as stale and explicitly restarts without a cursor. Search responses and
+        current-raw detail reads are no-store, are not persisted in browser/service-worker storage,
+        do not inject nodes into React Flow, and do not implement fuzzy, pg_trgm, vector, embedding,
+        provider, or related-memo retrieval.
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ExpectedOwnerId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoSearchRequest"
+            examples:
+              activeTaskSearch:
+                value:
+                  query: OS 과제
+                  lifecycleStatus: ACTIVE
+                  taskState: TODO
+                  overdue: false
+                  revisedFrom: 2026-08-01T00:00:00Z
+                  revisedBefore: 2026-09-01T00:00:00Z
+                  limit: 20
+              firstPageMinimal:
+                value:
+                  query: 운영체제
+      responses:
+        "200":
+          description: One stable, owner-scoped exact lexical page.
+          headers:
+            Cache-Control:
+              description: Search results are private and are never reusable from an HTTP cache.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoSearchPage"
+              examples:
+                finalPage:
+                  value:
+                    items:
+                      - memoId: 61c6c3e8-846a-4472-a58a-321920001868
+                        currentRevision: 3
+                        canonicalRevision: 2
+                        title: OS 과제 제출
+                        preview: 11.26 OS 과제 수정본 제출
+                        lifecycleStatus: ACTIVE
+                        canonicalTags:
+                          - id: 10000000-0000-0000-0000-000000000001
+                            name: 운영체제
+                        taskState: TODO
+                        overdue: false
+                        pinned: true
+                        revisedAt: 2026-08-11T10:00:00Z
+                        matchedFields: [TITLE, BODY, ALIAS]
+                    nextCursor: null
+                    truncated: false
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          description: >-
+            Malformed JSON/field types, a blank, U+0000, malformed-UTF-16, or out-of-bound raw/normalized
+            query, unsupported or contradictory filters, an out-of-supported-range or
+            non-increasing revision interval, a
+            limit outside 1–50, or a malformed, expired, mismatched, missing-last-result, or
+            visible-state-stale cursor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                malformedJson:
+                  value:
+                    code: MALFORMED_JSON
+                    message: The request body is not valid JSON.
+                    fieldErrors: []
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+                invalidQuery:
+                  value:
+                    code: INVALID_SEARCH_QUERY
+                    message: query must contain between 1 and 200 characters.
+                    fieldErrors: []
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+                invalidFilters:
+                  value:
+                    code: INVALID_SEARCH_FILTERS
+                    message: The search filters are invalid.
+                    fieldErrors: []
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+                invalidDateRange:
+                  value:
+                    code: INVALID_SEARCH_DATE_RANGE
+                    message: >-
+                      Search dates must be between 0001-01-01T00:00:00Z and
+                      9999-12-31T23:59:59.999999Z, and revisedFrom must be earlier than
+                      revisedBefore.
+                    fieldErrors: []
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+                invalidLimit:
+                  value:
+                    code: INVALID_SEARCH_LIMIT
+                    message: limit must be between 1 and 50.
+                    fieldErrors: []
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+                staleCursor:
+                  value:
+                    code: INVALID_SEARCH_CURSOR
+                    message: The memo search cursor is invalid.
+                    fieldErrors: []
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+
   /graph/home:
     parameters:
       - $ref: "#/components/parameters/ExpectedOwnerId"
@@ -1621,6 +1763,10 @@ components:
           type: [string, "null"]
           minLength: 1
           maxLength: 100
+          description: >-
+            New canonical tag input. The server rejects U+0000 and malformed UTF-16, then requires
+            the raw, NFKC/whitespace-normalized canonical, and Locale.ROOT-lowercase forms to each
+            contain 1–100 Unicode code points.
       oneOf:
         - required: [existingTagId]
           properties:
@@ -1637,6 +1783,9 @@ components:
               type: string
               minLength: 1
               maxLength: 100
+              description: >-
+                Must be well-formed UTF-16 without U+0000 and remain within 1–100 Unicode code
+                points after server normalization; invalid input returns INVALID_TAG_NAME.
     DueSelection:
       type: object
       additionalProperties: false
@@ -1993,6 +2142,251 @@ components:
           $ref: "#/components/schemas/TaskStatus"
         updated:
           type: boolean
+
+    MemoSearchLifecycleStatus:
+      type: string
+      enum: [ACTIVE, TRASHED]
+    MemoSearchTaskState:
+      type: string
+      enum: [NONE, TODO, DONE, CANCELLED]
+    MemoSearchMatchedField:
+      type: string
+      enum: [TITLE, BODY, TAG, ALIAS]
+    MemoSearchCursor:
+      type: string
+      minLength: 1
+      maxLength: 1024
+      pattern: "^[A-Za-z0-9_-]+$"
+      description: >-
+        Canonical unpadded URL-safe Base64 version-1 cursor. It binds the authenticated owner,
+        normalized-query and canonical-filter SHA-256 digests, CURRENT_REVISION_RECENCY_V1 sort
+        shape, a canonical UTC snapshot no older than 24 hours and no more than one minute in the
+        future, the full-visible-result change digest, and the last memo UUID. It contains no query,
+        raw body, title, preview, tag/alias value, or authority.
+    MemoSearchRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      description: >-
+        Private search input. query must exclude U+0000, be well-formed UTF-16, and its raw value
+        must contain at most 200 UTF-16 code units. After Java NFKC, strip, and Locale.ROOT lowercase, it must contain
+        1–200 UTF-16 code units and 1–200 Unicode code points. These server checks are stricter for
+        supplementary characters than JSON Schema maxLength alone. A literal substring is used for
+        BODY/TITLE; wildcard-looking characters remain ordinary. Each revision bound must be within
+        0001-01-01T00:00:00Z through 9999-12-31T23:59:59.999999Z. When both bounds are present,
+        revisedFrom must be earlier than revisedBefore. overdue=true is compatible only with
+        omitted taskState or TODO because overdue is derived only for TODO.
+      allOf:
+        - not:
+            required: [overdue, taskState]
+            properties:
+              overdue:
+                const: true
+              taskState:
+                enum: [NONE, DONE, CANCELLED]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >-
+            Private literal query. U+0000, lone high/low surrogates, normalized blank input, and
+            either raw or normalized input above 200 UTF-16 code units return INVALID_SEARCH_QUERY.
+        lifecycleStatus:
+          allOf:
+            - $ref: "#/components/schemas/MemoSearchLifecycleStatus"
+          default: ACTIVE
+        taskState:
+          $ref: "#/components/schemas/MemoSearchTaskState"
+        overdue:
+          type: boolean
+          description: Snapshot-derived filter; never a persisted source state.
+        revisedFrom:
+          type: string
+          format: date-time
+          description: >-
+            Inclusive lower bound over the current raw revision's server-created instant. Must be
+            between 0001-01-01T00:00:00Z and 9999-12-31T23:59:59.999999Z inclusive.
+        revisedBefore:
+          type: string
+          format: date-time
+          description: >-
+            Exclusive upper bound over the current raw revision's server-created instant. Must be
+            between 0001-01-01T00:00:00Z and 9999-12-31T23:59:59.999999Z inclusive.
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 20
+        cursor:
+          oneOf:
+            - $ref: "#/components/schemas/MemoSearchCursor"
+            - type: "null"
+    MemoSearchCanonicalTag:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+    MemoSearchItem:
+      type: object
+      additionalProperties: false
+      required:
+        - memoId
+        - currentRevision
+        - canonicalRevision
+        - title
+        - preview
+        - lifecycleStatus
+        - canonicalTags
+        - taskState
+        - overdue
+        - pinned
+        - revisedAt
+        - matchedFields
+      description: >-
+        A bounded canonical search projection. canonicalRevision/title are both null or both present;
+        a present canonicalRevision may be older than currentRevision. preview always comes from the
+        current raw revision and the result detail must re-read that current revision.
+      allOf:
+        - oneOf:
+            - type: object
+              required: [canonicalRevision, title]
+              properties:
+                canonicalRevision:
+                  type: integer
+                  minimum: 1
+                  maximum: 2147483647
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+            - type: object
+              required: [canonicalRevision, title]
+              properties:
+                canonicalRevision:
+                  type: "null"
+                  const: null
+                title:
+                  type: "null"
+                  const: null
+        - not:
+            required: [overdue, taskState]
+            properties:
+              overdue:
+                const: true
+              taskState:
+                enum: [NONE, DONE, CANCELLED]
+        - if:
+            properties:
+              matchedFields:
+                contains:
+                  enum: [TAG, ALIAS]
+                minContains: 1
+          then:
+            properties:
+              canonicalTags:
+                minItems: 1
+      properties:
+        memoId:
+          type: string
+          format: uuid
+        currentRevision:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+        canonicalRevision:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 2147483647
+          description: Null with title, otherwise no greater than currentRevision.
+        title:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 200
+        preview:
+          type: string
+          minLength: 1
+          maxLength: 240
+          description: >-
+            Current raw content bounded to 240 Unicode code points; when truncated its last returned
+            code point is an ellipsis.
+        lifecycleStatus:
+          $ref: "#/components/schemas/MemoSearchLifecycleStatus"
+        canonicalTags:
+          type: array
+          maxItems: 8
+          uniqueItems: true
+          description: >-
+            Current ACTIVE canonical tags with unique IDs, ordered by exact query match, exact alias
+            match, normalized name, then UUID. A TAG or ALIAS match always exposes its matching tag.
+          items:
+            $ref: "#/components/schemas/MemoSearchCanonicalTag"
+        taskState:
+          $ref: "#/components/schemas/MemoSearchTaskState"
+        overdue:
+          type: boolean
+          readOnly: true
+          description: Derived at the page snapshot and true only for an unfinished TODO task.
+        pinned:
+          type: boolean
+          readOnly: true
+        revisedAt:
+          type: string
+          format: date-time
+          description: Server-created instant of the current immutable raw revision.
+        matchedFields:
+          type: array
+          minItems: 1
+          maxItems: 4
+          uniqueItems: true
+          description: Present matches in fixed TITLE, BODY, TAG, ALIAS order.
+          items:
+            $ref: "#/components/schemas/MemoSearchMatchedField"
+    MemoSearchPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, truncated]
+      allOf:
+        - oneOf:
+            - type: object
+              required: [truncated, nextCursor]
+              properties:
+                truncated:
+                  const: true
+                nextCursor:
+                  $ref: "#/components/schemas/MemoSearchCursor"
+                items:
+                  type: array
+                  minItems: 1
+            - type: object
+              required: [truncated, nextCursor]
+              properties:
+                truncated:
+                  const: false
+                nextCursor:
+                  type: "null"
+                  const: null
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/MemoSearchItem"
+        nextCursor:
+          oneOf:
+            - $ref: "#/components/schemas/MemoSearchCursor"
+            - type: "null"
+        truncated:
+          type: boolean
+          description: True exactly when nextCursor is non-null.
 
     GraphMemoNode:
       type: object

@@ -35,6 +35,15 @@
   digest가 cursor를 무효화하고 화면은 첫 page 재시작을 요청하므로 이웃을 조용히 건너뛰지
   않습니다. active memo의 pin/unpin은 멱등 mutation이며 원문 revision이나 승인된 파생 데이터를
   바꾸지 않습니다.
+- **검색어도 private data로 취급합니다.** Exact lexical search는 query를 URL이나 browser storage가
+  아닌 CSRF-protected JSON POST body로만 보냅니다. request query는 Java NFKC/strip/`Locale.ROOT`
+  lowercase, 저장된 현재 raw body와 최신 applied canonical title은 PostgreSQL NFKC와
+  `und-x-icu` collation lowercase를 적용한 뒤 literal substring으로 비교합니다. active canonical
+  tag/alias는 exact normalized equality로 찾고 lifecycle·task·derived overdue·current-revision date
+  filter를 적용합니다. 서버는 page당 기본 20, 최대 50개, PWA는 5 page/100개로 제한합니다.
+  24시간 full-visible-result digest cursor가 결과 변경을 감지하면 조용한 누락 대신 첫 page
+  재시작을 요구합니다. 검색 결과는 React Flow에 넣지 않고 현재 owner-scoped raw detail을
+  no-store로 다시 엽니다.
 - **소유권 경계는 서버와 데이터베이스에 있습니다.** 각 로그인 수단은 internal user UUID에 매핑되고, 명시적으로 연결한 local·Google 수단은 같은 UUID를 사용합니다. 서버가 Spring Security principal에서 `owner_id`를 결정하며, V5의 owner-aware composite foreign key는 서로 다른 사용자의 하위 record를 데이터베이스 수준에서도 연결할 수 없게 합니다.
 - **브라우저에 인증 token을 보관하지 않습니다.** opaque session은 PostgreSQL에 저장하고 항상 HttpOnly인 cookie(운영에서는 Secure)와 CSRF 검증을 사용합니다. Google email 일치만으로 계정을 합치지 않으며, 기존 로그인 뒤 명시적으로 연결해야 합니다.
 - **라우팅은 신호 기반으로 결정합니다.** 모델의 confidence 하나에 의존하지 않고 날짜·참조·행동·복합 의도 신호를 enum으로 검증합니다. 명확한 메모는 cloud를 호출하지 않으며, 모호한 메모도 현재는 외부 통신 없는 Fake adapter만 거칩니다.
@@ -59,6 +68,9 @@
 - `TODO` / `DONE` / `CANCELLED` 전환, 날짜 전용 기한과 기한 초과 표시
 - `@xyflow/react` 기반 bounded 메모–태그 홈, full-corpus 1-hop pagination, keyboard/touch detail
   drawer, off-home memo raw-detail navigation과 pin control
+- current raw body/latest applied title의 literal substring과 active canonical tag/alias exact
+  equality를 사용하는 privacy-first memo search, lifecycle/task/overdue/revision-date filter,
+  bounded stale-cursor restart와 off-home current-raw detail
 - 요청 재시도 동안 동일한 client UUID와 idempotency key 유지
 - 192px/512px 설치 아이콘, service worker, 오프라인 app shell
 
@@ -80,7 +92,7 @@
 - LOCAL·cloud SUCCESS·fallback 모두에 같은 `providerMetadata` allowlist canonicalizer를 적용해 임의 provider detail 제거
 - 직렬화된 proposal 64 KiB, `providerMetadata` 8 KiB 상한으로 분석 결과 저장 크기 제한
 - authoritative routing reason을 전달하는 provider-independent cloud request, typed success/failure 결과와 no-tool `NO_NETWORK` Fake adapter
-- owner-scoped memo/analysis/task/graph API, no-store raw/detail reads, idempotent memo pin, 승인
+- owner-scoped memo/analysis/task/graph/search API, no-store raw/detail/search reads, idempotent memo pin, 승인
   transaction 안의 tag application
 - 메모 lifecycle API와 owner-scoped 보류 제안/마지막 application 복구 API
 - revision 경쟁 검증, transactional apply/undo, tag 정규화와 provenance
@@ -101,8 +113,11 @@
 - V15 fresh/V14-upgrade migration, durable prepare·binding mismatch·bounded timeout·caller-driven 및 운영 scheduler recovery·fence·stale finalize·owner 격리 통합 검증
 - V16의 V15 `none/0/NULL/NULL` 보존, exact lookup owner 격리·결정성·unique resolution, strict context codec와 PREPARED/RUNNING/FINALIZED raw lifecycle 통합 검증
 - V17의 과거 dispatch `attempt_history_version=none`/0-row 보존, fence별 최대-attempt ledger, executor 거절·provider result·timeout/interrupt의 시작 관측·process-loss·늦은 fence 분리와 evidence nullability 통합 검증
+- 명시적 opt-in 10,000-memo worst-case all-match PostgreSQL search plan runner와 bounded JSON report.
+  한 hot-buffer 실행은 네 page/digest plan이 각각 1.1초 미만이고 shared read/temp I/O가 0임을
+  관측했지만 endpoint latency나 SLA로 사용하지 않으며, 현재 근거로 search V18을 추가하지 않음
 - Playwright의 모바일 viewport에서 보류·새로고침·승인·그래프 node 상세·full-corpus off-home
-  탐색·pin·focus 복원·되돌리기와
+  탐색·exact lexical search·stale restart·off-home current detail·pin·focus 복원·되돌리기와
   설치 가능한 오프라인 app shell 검증
 - 로컬 초안 owner 격리·저장 실패, 교차 탭 인증 전이, 미저장 편집 guard와 prompt형 service-worker 업데이트 단위 테스트
 - GitHub Actions에서 OpenAPI/JSON Schema, backend, frontend, 브라우저 E2E 검사를 실행
@@ -115,7 +130,7 @@ Android Chrome PWA
              │ session cookie + CSRF / REST JSON
              ▼
 Spring Boot modular monolith
-  auth │ memo │ analysis │ taxonomy │ task │ graph
+  auth │ memo │ analysis │ taxonomy │ task │ graph │ search
       │ optional Google OIDC
              │
              ▼
@@ -143,7 +158,7 @@ docker compose --env-file .env.dev -p $devProject -f compose.yaml -f compose.dev
 
 frontend container는 unprivileged Nginx로 빌드된 PWA를 제공하고 `/api`, `/oauth2`, `/login/oauth2`를 `http://backend:8080`으로 proxy합니다. 브라우저에는 같은 origin의 상대 URL만 노출됩니다.
 
-처음 열면 자체 계정을 만든 뒤 로그인합니다. 비밀번호는 12자 이상이며 bcrypt 안전 범위인 UTF-8 72바이트 이하여야 합니다. 그 다음 확인할 시나리오는 `11.25 OS과제 제출`입니다. 원문 저장 후 제안의 제목과 태그를 수정하거나 제외할 수 있고, 승인하면 할 일과 그래프가 갱신됩니다. 그래프 memo/tag 노드를 누르면 전체 corpus의 직접 이웃을 bounded page로 확인하고, tag에서 홈 밖의 오래된 memo 원문까지 열거나 memo를 고정할 수 있습니다. 이후 **마지막 적용 되돌리기**를 누르면 파생 데이터만 제거됩니다.
+처음 열면 자체 계정을 만든 뒤 로그인합니다. 비밀번호는 12자 이상이며 bcrypt 안전 범위인 UTF-8 72바이트 이하여야 합니다. 그 다음 확인할 시나리오는 `11.25 OS과제 제출`입니다. 원문 저장 후 제안의 제목과 태그를 수정하거나 제외할 수 있고, 승인하면 할 일과 그래프가 갱신됩니다. 그래프 memo/tag 노드를 누르면 전체 corpus의 직접 이웃을 bounded page로 확인하고, tag에서 홈 밖의 오래된 memo 원문까지 열거나 memo를 고정할 수 있습니다. 검색 화면에서는 raw body/title/tag/alias와 상태·날짜 filter로 홈 밖 memo를 찾고 현재 원문 detail을 열 수 있습니다. 이후 **마지막 적용 되돌리기**를 누르면 파생 데이터만 제거됩니다.
 
 작성 중 원문은 서버 저장 전까지 internal owner UUID로 분리된 브라우저 `localStorage` 초안입니다. 저장소가 막히거나 가득 차면 화면에 데이터 손실 경고가 표시되고 이탈·업데이트 guard가 켜집니다. 이 초안은 암호화된 보관소가 아니며 로그아웃만으로 삭제되지 않으므로, 공유 기기에서는 브라우저 프로필 자체를 분리하거나 원문을 서버에 저장한 뒤 입력을 비워야 합니다. canonical memo와 완전한 오프라인 동기화 대기열로 취급해서는 안 됩니다.
 
@@ -313,7 +328,8 @@ docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.p
 
 - 실제 로컬 AI 모델 또는 클라우드 LLM
 - 실제 external provider 설정과 사용자 consent grant/revoke API
-- related-memo analysis context, fuzzy/vector/embedding retrieval과 전체 lexical 검색 UI
+- related-memo analysis context와 fuzzy/vector/embedding retrieval; 현재 exact lexical search보다
+  넓은 fuzzy/semantic 검색과 cluster reveal
 - 실제 model token·cost 숫자 수집·예산 집행·집계와 승인된 attempt 보존/삭제 정책
 - local email 검증·비밀번호 재설정 delivery, IP·edge rate limit/abuse protection, MFA/passkey, 완전한 계정 삭제 자동화
 - 완전한 오프라인 동기화와 IndexedDB outbox

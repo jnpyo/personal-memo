@@ -23,6 +23,7 @@ describe('PWA backend routing boundary', () => {
   it('keeps backend API and OAuth endpoints network-only', () => {
     for (const pathname of [
       '/api/v1/auth/me',
+      '/api/v1/search/memos',
       '/oauth2/authorization/google',
       '/login/oauth2',
       '/login/oauth2/code/google',

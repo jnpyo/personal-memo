@@ -9,10 +9,14 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
 - Milestone 0: complete.
 - Milestone 1: complete, including memo lifecycle/recovery, bounded hard-priority graph home,
   accessible node detail/pin interaction, production PWA packaging, and mobile E2E coverage.
-- Milestone 5 has started with its first read-only vertical slice: an independently bounded,
-  owner-scoped full-corpus MEMO_TAG neighborhood endpoint and drawer navigation from a home tag to an
-  off-home memo's current raw detail. It does not complete lexical/fuzzy search, taxonomy evolution,
-  compression, or the Milestone 5 exit criteria.
+- Milestone 5 has two read-only vertical slices. The first is an independently bounded, owner-scoped
+  full-corpus MEMO_TAG neighborhood endpoint and drawer navigation from a home tag to an off-home
+  memo's current raw detail. The second is privacy-first exact lexical memo search over the current
+  raw revision, latest valid applied canonical title, active canonical tag/alias, task/lifecycle/
+  overdue state, and current-revision time range. Search uses a JSON-body POST, a 20 default/50
+  maximum server page, a five-page/100-result browser cap, a 24-hour full-visible-result digest
+  cursor, explicit stale restart, and the shared no-store current raw detail. These slices do not
+  complete fuzzy/semantic search, taxonomy evolution, compression, or the Milestone 5 exit criteria.
 - This is an explicit interim ordering exception, not a claim that Milestones 2–4 are complete. The
   remaining Milestone 2 gates require two independent human reviews and later provider/privacy/cost
   decisions, while Milestones 3–4 require account-delivery or Web Push product choices. The read-only,
@@ -292,8 +296,15 @@ Do not hard-code a model before the benchmark and licensing review.
 - independently bounded full-corpus local-neighborhood endpoint and off-home memo detail navigation
   (implemented as the first read-only slice; server page 20, browser cap 100, visible-state digest
   invalidation and explicit first-page restart for stale traversals)
-- lexical/fuzzy search and alias search
-- open the shared detail experience from results outside the recent memo/home-graph bounds
+- exact lexical current-body/latest-applied-title search and exact normalized canonical tag/alias
+  search (implemented as the second read-only slice; JSON-body POST, current-revision recency keyset,
+  server page 20 default/50 maximum, browser cap 5 pages/100 results, full-visible-result digest
+  invalidation, lifecycle/task/overdue/revision-time filters, and explicit stale restart)
+- retain the measured no-migration decision from the opt-in 10,000-memo worst-case all-match
+  PostgreSQL plan runner; its one hot-buffer observation is not an endpoint SLA
+- open the shared current-raw detail experience from exact-search results outside the recent
+  memo/home-graph bounds without injecting them into React Flow (implemented)
+- fuzzy search after measured PostgreSQL evidence
 - optional vector retrieval after measurement
 - provisional topic collection
 - confirmed-only tag centroids

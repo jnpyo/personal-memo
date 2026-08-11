@@ -55,6 +55,10 @@ operational approval. Resolved decisions are not implementation prompts.
   icons rather than global hub nodes.
 - Existing tags are selectable suggestions; new names remain proposals requiring confirmation.
 - Automatic tag merge/split, node compression, and taxonomy migrations remain deferred.
+- The first user-facing search slice is exact and owner-scoped: current raw body/latest valid applied
+  title use normalized literal substring, active canonical tag/alias uses exact normalized equality,
+  and a result opens current raw detail without changing the graph. Fuzzy/semantic ranking and
+  cluster reveal remain decisions after measured usage.
 
 ### Notification and offline scope
 

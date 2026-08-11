@@ -73,6 +73,13 @@ reporting, aggregation, budget enforcement, related-memo retrieval, fuzzy/vector
 embeddings remain unimplemented. The roadmap's real-provider adapter remains deferred by the
 project decision until explicitly authorized.
 
+Milestone 5 now also has a user-facing exact lexical memo-search endpoint. That read-only product
+search is not an analyzer input or Agent tool: it receives a user query in a JSON POST body, returns
+bounded owner-scoped current-raw/latest-applied canonical results with no-store semantics, and never
+copies its query or results into `CloudAnalysisRequest`, a proposal, provider metadata, browser
+storage, or a dispatch context. It adds no fuzzy/vector/embedding retrieval and does not broaden the
+V16 exact tag-context boundary.
+
 ## Pipeline boundaries
 
 ```text

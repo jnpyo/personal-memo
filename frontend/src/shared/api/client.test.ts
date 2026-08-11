@@ -207,6 +207,94 @@ describe('memo API client', () => {
     expect(requestSignal?.aborted).toBe(true);
   });
 
+  it('posts a private memo search body with CSRF, owner scope and no idempotency key', async () => {
+    const searchPage = {
+      items: [{
+        memoId: '11111111-1111-4111-8111-111111111111',
+        currentRevision: 1,
+        canonicalRevision: null,
+        title: null,
+        preview: '운영체제 메모',
+        lifecycleStatus: 'ACTIVE',
+        canonicalTags: [],
+        taskState: 'NONE',
+        overdue: false,
+        pinned: false,
+        revisedAt: '2026-08-11T03:00:00Z',
+        matchedFields: ['BODY'],
+      }],
+      nextCursor: null,
+      truncated: false,
+    };
+    const { client, applicationFetch } = testClient(searchPage);
+    const controller = new AbortController();
+    client.setSessionOwner('user-a');
+    const body = {
+      query: '운영체제',
+      lifecycleStatus: 'ACTIVE' as const,
+      taskState: 'NONE' as const,
+      revisedFrom: '2026-08-01T00:00:00Z',
+      limit: 20,
+    };
+
+    await client.searchMemos(body, controller.signal);
+
+    expect(applicationFetch).toHaveBeenCalledWith('/api/v1/search/memos', {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'same-origin',
+      signal: expect.any(AbortSignal),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-TOKEN': 'csrf-test-token',
+        [EXPECTED_OWNER_ID_HEADER]: 'user-a',
+      },
+      body: JSON.stringify(body),
+    });
+    expect(applicationFetch.mock.calls[0]?.[0]).not.toContain('?');
+    expect(applicationFetch.mock.calls[0]?.[1]?.headers).not.toHaveProperty('Idempotency-Key');
+    const requestSignal = applicationFetch.mock.calls[0]?.[1]?.signal;
+    controller.abort();
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it('retries a CSRF failure with the exact same search body and cursor', async () => {
+    let csrfAttempt = 0;
+    let searchAttempt = 0;
+    const searchRequests: RequestInit[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/v1/auth/csrf') {
+        csrfAttempt += 1;
+        return csrfResponse(`csrf-${csrfAttempt}`);
+      }
+      searchRequests.push(init ?? {});
+      searchAttempt += 1;
+      if (searchAttempt === 1) {
+        return new Response(JSON.stringify({ code: 'CSRF_TOKEN_INVALID' }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return okResponse({ items: [], nextCursor: null, truncated: false });
+    });
+    const client = createApiClient(fetchMock);
+    client.setSessionOwner('user-a');
+    const body = {
+      query: '운영체제',
+      lifecycleStatus: 'ACTIVE' as const,
+      limit: 20,
+      cursor: 'opaque_cursor-1',
+    };
+
+    await client.searchMemos(body);
+
+    expect(searchRequests).toHaveLength(2);
+    expect(searchRequests[0]?.body).toBe(JSON.stringify(body));
+    expect(searchRequests[1]?.body).toBe(JSON.stringify(body));
+    expect(searchRequests[0]?.headers).toMatchObject({ 'X-CSRF-TOKEN': 'csrf-1' });
+    expect(searchRequests[1]?.headers).toMatchObject({ 'X-CSRF-TOKEN': 'csrf-2' });
+  });
+
   it('rejects a noncanonical neighborhood center before sending a request', async () => {
     const { client, applicationFetch } = testClient({});
     client.setSessionOwner('user-a');

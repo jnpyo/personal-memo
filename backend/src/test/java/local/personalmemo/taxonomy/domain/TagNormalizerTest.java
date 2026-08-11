@@ -26,6 +26,14 @@ class TagNormalizerTest {
   }
 
   @Test
+  void rejectsNulAndUnpairedSurrogatesBeforeNormalization() {
+    assertInvalid("\0");
+    assertInvalid("valid\0tag");
+    assertInvalid("\uD800");
+    assertInvalid("\uDC00");
+  }
+
+  @Test
   void acceptsExactlyOneHundredNormalizedCharacters() {
     var normalized = normalizer.normalize("가".repeat(100));
 

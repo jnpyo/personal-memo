@@ -9,6 +9,7 @@ import {
 import { Background, Controls, Handle, Position, ReactFlow } from '@xyflow/react';
 import type { Node, NodeProps } from '@xyflow/react';
 import type { GraphNode, GraphProjection, MemoView } from '../../shared/api/types';
+import { CurrentMemoDetail } from '../memos/CurrentMemoDetail';
 import {
   buildFlowElements,
   selectedNodeForProjection,
@@ -502,20 +503,13 @@ export function GraphNodeDetailDrawer({
               </div>
             </dl>
 
-            {loading && (
-              <p className="graph-detail-state" role="status">최신 원문을 불러오는 중…</p>
-            )}
-            {!loading && error && (
-              <aside className="graph-detail-state graph-detail-state--error" role="alert">
-                <p>{error}</p>
-                <button type="button" className="secondary-button" onClick={onRetry}>
-                  최신 원문 다시 불러오기
-                </button>
-              </aside>
-            )}
-            {!loading && !error && !memoDetail && (
-              <p className="graph-detail-state">표시할 최신 원문이 없습니다.</p>
-            )}
+            <CurrentMemoDetail
+              memo={memoDetail}
+              loading={loading}
+              error={error}
+              onRetry={onRetry}
+              headingId="graph-raw-content-title"
+            />
             {isRootMemoDetail && neighborhoodLoading && !neighborhood && (
               <p className="graph-detail-state" role="status">전체 연결을 불러오는 중…</p>
             )}
@@ -529,14 +523,6 @@ export function GraphNodeDetailDrawer({
             )}
             {!loading && !error && memoDetail && (
               <>
-                <section className="graph-detail-block" aria-labelledby="graph-raw-content-title">
-                  <div className="graph-detail-block__heading">
-                    <h3 id="graph-raw-content-title">현재 원문</h3>
-                    <span>revision {memoDetail.currentRevision}</span>
-                  </div>
-                  <pre aria-label="현재 원문">{memoDetail.content}</pre>
-                </section>
-
                 {pinError && (
                   <aside className="graph-detail-state graph-detail-state--error" role="alert">
                     <p>{pinError}</p>

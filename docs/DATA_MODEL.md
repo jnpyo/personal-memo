@@ -625,7 +625,7 @@ keyset을 사용한다. cursor version 2는 identity, 24시간 `snapshotAsOf`, �
 첫 page의 전체 visible center/neighborhood membership·표시 field·정렬 tuple을 결합한 opaque
 SHA-256 digest를 보존한다. 각 continuation은 같은 owner 범위에서 digest를 다시 계산한 뒤 마지막
 neighbor의 tuple을 hydrate하므로, canonical 상태가 바뀐 traversal은 `422`로 폐기되고 첫 page부터
-다시 읽는다. cursor는 저장 schema나 authorization이 아니다. lexical search index는 계속 deferred다.
+다시 읽는다. cursor는 저장 schema나 authorization이 아니다.
 
 `GraphNeighborhoodQueryPlanBenchmarkRunner`는 기본 Surefire pattern에서 제외된 명시적 opt-in
 PostgreSQL 17.6 runner다. 10,000 memo, 10,000 tag, 19,999 canonical link를 seed하고 `ANALYZE`한
@@ -662,6 +662,90 @@ try {
 분포에서 runner를 다시 측정해 근거가 생기기 전에는 계산된 overdue/due 우선순위만을 위해
 speculative index를 만들지 않는다.
 
+## Exact lexical search projection
+
+Milestone 5의 두 번째 read-only slice도 별도 search table이나 복제본을 만들지 않고 다음 canonical
+data를 owner scope 안에서 투영한다.
+
+```text
+memos + current memo_revisions
+  ├── latest valid APPLIED analysis_application selection title
+  ├── APPLIED, unarchived memo_items + task_details
+  └── APPLIED, unarchived memo_items + item_tags + ACTIVE tags/tag_aliases
+```
+
+- BODY는 `memos.current_revision`이 가리키는 immutable raw content만 읽는다. TITLE은 memo의 최신
+  `APPLIED` application selection이 strict object/string title을 가질 때만 읽고, 그 application의
+  revision을 nullable `canonicalRevision`으로 함께 반환한다. 따라서 canonical title은 현재 raw
+  revision보다 오래될 수 있지만 proposal이나 `UNDONE` application의 title을 대신 사용하지 않는다.
+- raw query는 Java NFKC/strip/`Locale.ROOT` lowercase로 만들고 저장된 current raw content와
+  canonical title에는 PostgreSQL `normalize(..., NFKC)`와 `lower(... COLLATE "und-x-icu")`를
+  적용한 뒤 literal substring으로 match한다. 두 lowercase 경로보다 넓은 collation 동등성은
+  가정하지 않는다. tag와 alias는 `TagNormalizer` exact normalized equality로만 match한다. 현재
+  owner의 `ACTIVE` tag, `APPLIED` application, unarchived item/link만 canonical tag/task 근거가 된다.
+- lifecycle, task state, snapshot에서 계산한 overdue, current revision `created_at`의 inclusive lower /
+  exclusive upper bound를 적용한다. order는 `current_revision.created_at DESC, memo.id ASC`다.
+- 한 server page는 기본 20, 최대 50이고 visible canonical tag는 memo당 matching-first stable order로
+  최대 8개, raw preview는 최대 240 Unicode code point다. PWA는 최대 5 page/100 result만 유지한다.
+- cursor version 1은 owner, normalized query/filter digest, sort shape, 최대 24시간의
+  `snapshotAsOf`, full visible result digest, 마지막 memo UUID를 가진 canonical URL-safe Base64다.
+  query/filter raw text, body, title, preview, tag/alias display value는 넣지 않는다.
+- digest는 owner/query/filter/sort/snapshot과 전체 result의 membership, current/canonical revision,
+  canonical title, raw content hash, lifecycle/task/overdue/pin, revision time, match field, 표시되는
+  최대 8개 tag ID/name을 결합한다. continuation은 같은 `REPEATABLE_READ` transaction에서 digest와
+  마지막 memo tuple을 다시 확인하며 변경되면 `INVALID_SEARCH_CURSOR`로 첫 page 재시작을 요구한다.
+
+`MemoSearchQueryPlanBenchmarkRunner`는 기본 Surefire pattern에서 제외된 명시적 opt-in
+PostgreSQL 17.6 runner다. 한 owner에 current revision, latest `APPLIED` title, active canonical tag
+link와 canonical task가 각각 10,000개인 worst-case all-match Korean corpus를 seed하고 `ANALYZE`한
+뒤 page의 `limit + 1`인 21개 fetch와 full-visible-result digest를 BODY/TITLE 및 exact ALIAS 경로에서
+각각 `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`으로 측정한다.
+
+2026-08-11의 한 격리 실행은 `postgres:17.6-alpine`, `en_US.utf8/en_US.utf8` database locale,
+존재하는 `und-x-icu` collation, Java 21 runner에서 다음 hot-buffer 관측을 남겼다.
+
+| plan | actual rows | execution time |
+| --- | ---: | ---: |
+| Korean BODY + TITLE page fetch 21 | 21 | 812.126 ms |
+| Korean BODY + TITLE full digest | 1 | 1082.515 ms |
+| exact Korean ALIAS page fetch 21 | 21 | 555.671 ms |
+| exact Korean ALIAS full digest | 1 | 1009.93 ms |
+
+네 plan의 planning time은 2.466–3.437 ms였고 shared read와 temp read/write block은 모두 0이었다.
+application/item lookup index와 PK/owner integrity index가 사용됐으며 full index 목록, node type,
+query SHA-256와 raw bounded EXPLAIN JSON은 report에 포함된다. 이는 warm-cache 단일 query-plan
+관측이지 endpoint 또는 기기의 end-to-end latency, 동시성 결과, SLA나 CI threshold가 아니다.
+continuation은 digest 외에도 cursor의 last memo 확인과 page query를 수행한다.
+
+저장소 root의 PowerShell에서 아래처럼 재현한다. runner는 explicit opt-in이 없으면 실패하고 시작
+전에 stale report를 지운다. 성공한 512 KiB 미만 JSON만 원자적으로
+`backend/target/memo-search-query-plan-report.json`에 발행하며, 고유 test project의 임시 PostgreSQL
+volume은 report를 읽은 뒤 `finally`에서 정리한다. Maven이나 report read가 nonzero이면 이전 report를
+증거로 사용하지 않는다.
+
+```powershell
+$searchPlanProject = "personal-memo-search-plan-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+try {
+  docker compose -p $searchPlanProject -f compose.test.yaml run --rm `
+    -e RUN_MEMO_SEARCH_PLAN_BENCHMARK=true `
+    backend-integration `
+    mvn -B -Dtest=MemoSearchQueryPlanBenchmarkRunner test
+  if ($LASTEXITCODE -ne 0) { throw "Memo search benchmark failed." }
+
+  docker compose -p $searchPlanProject -f compose.test.yaml run --rm --no-deps `
+    backend-integration sh -c 'cat target/memo-search-query-plan-report.json'
+  if ($LASTEXITCODE -ne 0) { throw "Memo search report read failed." }
+} finally {
+  docker compose -p $searchPlanProject -f compose.test.yaml down --volumes --remove-orphans
+}
+```
+
+이 evidence에서는 NFKC/ICU literal substring에 B-tree를 추가할 측정 근거가 없고 canonical join은
+기존 index를 사용했으므로 search용 V18을 추가하지 않았다. 이 slice는 기존 canonical schema만
+사용하며 새 Flyway migration/search index, `pg_trgm`, vector/embedding storage 또는 search service를
+추가하지 않는다. 실제 개인 data 분포나 동시성 측정에서 근거가 달라지기 전에는 SLA나 새 index
+효과를 추정하지 않는다.
+
 ## Current indexes
 
 - partial unique `users(primary_email_normalized)` when email is present
@@ -693,7 +777,7 @@ speculative index를 만들지 않는다.
 - embedding/pgvector storage
 - automatic tag merge/split proposal
 - graph cluster/compression/layout persistence
-- event detail, rich item/tag relation, search index
+- event detail, rich item/tag relation, fuzzy/dedicated search index
 - local email verification and password-reset token/delivery state
 - login abuse/rate-limit audit state if the selected policy requires additional persistence
 - MFA/passkey authenticators and account recovery codes

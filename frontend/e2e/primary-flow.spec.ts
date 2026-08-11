@@ -140,6 +140,40 @@ async function advanceMemoRevisionOutOfBand(page: Page, content: string): Promis
   expect(updateResponse.status()).toBe(200);
 }
 
+async function createMemoOutOfBand(page: Page, content: string): Promise<void> {
+  const sessionResponse = await page.request.get('/api/v1/auth/me');
+  expect(sessionResponse.ok()).toBe(true);
+  const session = await sessionResponse.json() as AuthSession;
+  const idempotencyKey = `e2e-search-memo-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const data = {
+    id: crypto.randomUUID(),
+    content,
+    clientCreatedAt: new Date().toISOString(),
+    timeZone: 'Asia/Seoul',
+  };
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const csrfResponse = await page.request.get('/api/v1/auth/csrf');
+    expect(csrfResponse.ok()).toBe(true);
+    const csrf = await csrfResponse.json() as CsrfToken;
+    const response = await page.request.post('/api/v1/memos', {
+      headers: {
+        [csrf.headerName]: csrf.token,
+        'X-Expected-Owner-Id': session.userId,
+        'Idempotency-Key': idempotencyKey,
+      },
+      data,
+    });
+    if (response.status() === 201) return;
+    const responseBody = await response.text();
+    if (attempt === 0 && response.status() === 403 && responseBody.includes('CSRF_TOKEN_INVALID')) {
+      continue;
+    }
+    expect(response.status(), responseBody).toBe(201);
+  }
+  throw new Error('Memo creation did not complete after the bounded CSRF retry.');
+}
+
 async function openProposalEditor(page: Page): Promise<void> {
   await page.getByRole('button', { name: '아니오, 다른 경우 보기' }).click();
   await page.getByRole('button', { name: /유형은 맞아요/ }).click();
@@ -749,6 +783,217 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
   ).toHaveText('1');
 });
 
+test('private lexical search opens an off-home current raw memo without graph injection', async ({
+  page,
+}, testInfo) => {
+  const marker = `search-${Date.now()}-${testInfo.retry}`;
+  const targetRaw = `오래된 검색 대상 ${marker}`;
+  await page.route('**/api/v1/graph/home?limit=100', async (route) => {
+    const url = new URL(route.request().url());
+    url.searchParams.set('limit', '2');
+    await route.continue({ url: url.toString() });
+  });
+  await registerIsolatedUser(page, testInfo);
+  await createMemoOutOfBand(page, targetRaw);
+  await createMemoOutOfBand(page, `최근 메모 하나 ${marker}`);
+  await createMemoOutOfBand(page, `최근 메모 둘 ${marker}`);
+  await page.reload();
+
+  const offHomeNode = page.locator('.graph-node--memo').filter({ hasText: targetRaw });
+  await expect(offHomeNode).toHaveCount(0);
+  const query = page.getByLabel('메모 검색어');
+  await query.fill(targetRaw);
+  const searchRequestPromise = page.waitForRequest((request) =>
+    new URL(request.url()).pathname === '/api/v1/search/memos',
+  );
+  await query.press('Enter');
+  const searchRequest = await searchRequestPromise;
+  expect(searchRequest.method()).toBe('POST');
+  expect(new URL(searchRequest.url()).search).toBe('');
+  expect(searchRequest.postDataJSON()).toMatchObject({
+    query: targetRaw,
+    lifecycleStatus: 'ACTIVE',
+    limit: 20,
+  });
+  expect(searchRequest.headers()['idempotency-key']).toBeUndefined();
+
+  const result = page.locator('.memo-search-result').filter({ hasText: targetRaw });
+  await expect(result).toBeVisible();
+  await expectMinimumTouchHeight(result, 48);
+  await result.click();
+  const detail = page.getByRole('dialog', { name: `${targetRaw} 상세` });
+  await expect(detail).toBeVisible();
+  await expect(detail.getByRole('heading', { name: `${targetRaw} 상세` })).toBeFocused();
+  await expect(detail.getByRole('region', { name: '현재 원문' }).locator('pre')).toHaveText(targetRaw);
+  await expect(detail.getByText('revision 1')).toBeVisible();
+  await expect(offHomeNode).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 854, height: 384 });
+  await expectInsideViewport(page, detail.locator('.search-detail-drawer'));
+  await expectNoHorizontalOverflow(page);
+  await expectMinimumTouchHeight(detail.getByRole('button', { name: '검색 메모 상세 닫기' }), 48);
+  await page.setViewportSize({ width: 412, height: 915 });
+  await detail.getByRole('button', { name: '검색 메모 상세 닫기' }).click();
+  await expect(detail).toHaveCount(0);
+  await expect(result).toBeFocused();
+});
+
+test('latest search wins and an invalid continuation requires an explicit first-page restart', async ({
+  page,
+}, testInfo) => {
+  await registerIsolatedUser(page, testInfo);
+  let releaseDelayed!: () => void;
+  let markDelayedStarted!: () => void;
+  const delayed = new Promise<void>((resolve) => { releaseDelayed = resolve; });
+  const delayedStarted = new Promise<void>((resolve) => { markDelayedStarted = resolve; });
+  let cursorStarts = 0;
+  const responseItem = (memoId: string, preview: string, revisedAt: string) => ({
+    memoId,
+    currentRevision: 1,
+    canonicalRevision: null,
+    title: null,
+    preview,
+    lifecycleStatus: 'ACTIVE',
+    canonicalTags: [],
+    taskState: 'NONE',
+    overdue: false,
+    pinned: false,
+    revisedAt,
+    matchedFields: ['BODY'],
+  });
+
+  await page.route('**/api/v1/search/memos', async (route) => {
+    const body = route.request().postDataJSON() as { query: string; cursor?: string };
+    if (body.query === 'delayed-a') {
+      markDelayedStarted();
+      await delayed;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [responseItem(
+            '11111111-1111-4111-8111-111111111111',
+            'delayed-a result',
+            '2026-08-11T03:00:00Z',
+          )],
+          nextCursor: null,
+          truncated: false,
+        }),
+      }).catch(() => undefined);
+      return;
+    }
+    if (body.query === 'latest-b') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [responseItem(
+            '22222222-2222-4222-8222-222222222222',
+            'latest-b result',
+            '2026-08-11T02:00:00Z',
+          )],
+          nextCursor: null,
+          truncated: false,
+        }),
+      });
+      return;
+    }
+    if (body.query === 'cursor-test' && body.cursor) {
+      await route.fulfill({
+        status: 422,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 'INVALID_SEARCH_CURSOR',
+          message: 'The memo search cursor is invalid.',
+        }),
+      });
+      return;
+    }
+    if (body.query === 'cursor-test') {
+      cursorStarts += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [responseItem(
+            cursorStarts === 1
+              ? '33333333-3333-4333-8333-333333333333'
+              : '44444444-4444-4444-8444-444444444444',
+            cursorStarts === 1 ? 'stale accumulated result' : 'fresh restarted result',
+            cursorStarts === 1 ? '2026-08-11T01:00:00Z' : '2026-08-11T04:00:00Z',
+          )],
+          nextCursor: cursorStarts === 1 ? 'cursor_1' : null,
+          truncated: cursorStarts === 1,
+        }),
+      });
+      return;
+    }
+    await route.fulfill({ status: 500, body: '{}' });
+  });
+
+  const query = page.getByLabel('메모 검색어');
+  await query.fill('delayed-a');
+  await query.press('Enter');
+  await delayedStarted;
+  await query.fill('latest-b');
+  await query.press('Enter');
+  const latestResult = page.locator('.memo-search-result').filter({ hasText: 'latest-b result' });
+  await expect(latestResult).toBeVisible();
+  releaseDelayed();
+  await expect(latestResult).toBeVisible();
+  await expect(page.locator('.memo-search-result').filter({ hasText: 'delayed-a result' })).toHaveCount(0);
+
+  await query.fill('cursor-test');
+  await query.press('Enter');
+  const staleResult = page.locator('.memo-search-result').filter({ hasText: 'stale accumulated result' });
+  await expect(staleResult).toBeVisible();
+  await page.getByRole('button', { name: '결과 더 불러오기' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: '검색 결과가 변경되었거나' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '결과 더 불러오기' })).toHaveCount(0);
+  await page.getByRole('button', { name: '처음부터 다시 검색' }).click();
+  await expect(page.locator('.memo-search-result').filter({ hasText: 'fresh restarted result' })).toBeVisible();
+  await expect(staleResult).toHaveCount(0);
+});
+
+test('search filters send an explicit half-open private body', async ({ page }, testInfo) => {
+  await registerIsolatedUser(page, testInfo);
+  let capturedBody: Record<string, unknown> | null = null;
+  let capturedUrl = '';
+  await page.route('**/api/v1/search/memos', async (route) => {
+    capturedBody = route.request().postDataJSON() as Record<string, unknown>;
+    capturedUrl = route.request().url();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], nextCursor: null, truncated: false }),
+    });
+  });
+
+  const searchSection = page.locator('.search-section');
+  await searchSection.getByText('작업·수정일 필터').click();
+  await searchSection.getByLabel('휴지통', { exact: true }).check();
+  await searchSection.getByLabel('작업 상태').selectOption('NONE');
+  await expect(searchSection.getByLabel('기한 지난 미완료만')).toBeDisabled();
+  await searchSection.getByLabel('원문 수정일 시작').fill('2026-08-10');
+  await searchSection.getByLabel('원문 수정일 끝 (포함)').fill('2026-08-11');
+  await searchSection.getByLabel('메모 검색어').fill('필터 검색');
+  await searchSection.getByLabel('메모 검색어').press('Enter');
+  await expect(searchSection.getByText('일치하는 메모가 없습니다. 검색어나 필터를 바꿔 보세요.'))
+    .toBeVisible();
+
+  expect(new URL(capturedUrl).search).toBe('');
+  expect(capturedBody).toEqual({
+    query: '필터 검색',
+    lifecycleStatus: 'TRASHED',
+    taskState: 'NONE',
+    revisedFrom: '2026-08-09T15:00:00.000Z',
+    revisedBefore: '2026-08-11T15:00:00.000Z',
+    limit: 20,
+  });
+  expect(JSON.stringify(capturedBody)).not.toContain('overdue');
+});
+
 test('UNKNOWN analysis requires an explicit type and manually confirmed item', async ({ page }, testInfo) => {
   const marker = `unknown-e2e-${Date.now()}-${testInfo.retry}`;
   const rawMemo = `${marker} 11.25 운영체제 과제`;
@@ -884,6 +1129,7 @@ test('production build registers an installable offline app shell', async ({
 
   const networkOnlyPaths = [
     '/api/v1/auth/me',
+    '/api/v1/search/memos',
     '/oauth2/authorization/google',
     '/login/oauth2/code/google',
   ];

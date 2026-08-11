@@ -6,6 +6,7 @@ import {
   assertGraphNeighborhoodExpectedCenter,
   decodeGraphNeighborhoodPage,
 } from './graphNeighborhoodDecoder';
+import { decodeMemoSearchPage } from './searchDecoder';
 import type {
   AnalysisRun,
   AnalysisReviewOutcomeSummary,
@@ -18,6 +19,8 @@ import type {
   GraphNode,
   LatestApplication,
   MemoPinResult,
+  MemoSearchPage,
+  MemoSearchRequest,
   MemoView,
   MemoStatus,
   ReviewDispositionResult,
@@ -380,6 +383,19 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
         cache: 'no-store',
         signal,
       }),
+
+    searchMemos: async (
+      input: MemoSearchRequest,
+      signal?: AbortSignal,
+    ): Promise<MemoSearchPage> => decodeMemoSearchPage(
+      await request<unknown>('/api/v1/search/memos', {
+        method: 'POST',
+        cache: 'no-store',
+        signal,
+        body: JSON.stringify(input),
+      }),
+      input,
+    ),
 
     updateMemo: (
       memoId: string,

@@ -89,6 +89,7 @@ final class ActiveAccountFilter extends OncePerRequestFilter {
         || path.startsWith("/api/v1/analysis-review-outcomes")
         || path.startsWith("/api/v1/tasks")
         || path.startsWith("/api/v1/graph")
+        || path.startsWith("/api/v1/search")
         || path.equals("/api/v1/auth/logout")
         || path.equals("/api/v1/auth/google/link-intent")
         || path.equals("/api/v1/auth/identities/google");

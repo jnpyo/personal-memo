@@ -17,6 +17,7 @@ import { PwaUpdateManager } from '../features/pwa/PwaUpdateManager';
 import { PostponedReview } from '../features/review/PostponedReview';
 import { ProposalReview } from '../features/review/ProposalReview';
 import { ReviewOutcomeSummary } from '../features/review/ReviewOutcomeSummary';
+import { MemoSearch } from '../features/search/MemoSearch';
 import {
   confirmReviewDiscard,
   hasUnsavedWorkspaceChanges,
@@ -306,6 +307,8 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
           </button>
         </aside>
       )}
+
+      <MemoSearch />
 
       <MemoLibrary
         activeMemos={workspace.activeMemos}

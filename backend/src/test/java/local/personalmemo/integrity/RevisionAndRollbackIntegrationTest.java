@@ -120,4 +120,112 @@ class RevisionAndRollbackIntegrationTest extends PostgresIntegrationTestSupport 
                 .single())
         .isEqualTo("두 작업 후보");
   }
+
+  @Test
+  void invalidTagUnicodeReturnsStableErrorAndLeavesNoApplicationWrites() throws Exception {
+    UUID memoId = UUID.randomUUID();
+    createMemo(memoId, "create-before-invalid-tag", "invalid tag rollback candidate");
+    UUID proposalId =
+        UUID.fromString(
+            response(startAnalysis(memoId, "start-before-invalid-tag", 1))
+                .path("proposalId")
+                .asText());
+    long initialTagCount =
+        db.sql("select count(*) from tags where owner_id=:owner")
+            .param("owner", OWNER_ID)
+            .query(Long.class)
+            .single();
+    List<String> invalidNames = List.of("\0", "valid\0tag", "\uD800", "\uDC00", "😀".repeat(101));
+
+    for (int index = 0; index < invalidNames.size(); index++) {
+      Map<String, Object> selection =
+          Map.of(
+              "expectedMemoRevision",
+              1,
+              "selectedType",
+              "TASK",
+              "title",
+              "invalid tag rollback item",
+              "selectedTags",
+              List.of(Map.of("newCanonicalName", invalidNames.get(index))),
+              "items",
+              List.of(Map.of("kind", "TASK", "title", "invalid tag rollback item")));
+
+      var failed = applyProposal(proposalId, "invalid-tag-" + index, selection);
+
+      assertThat(failed.getResponse().getStatus()).isEqualTo(422);
+      assertThat(response(failed).path("code").asText()).isEqualTo("INVALID_TAG_NAME");
+    }
+
+    assertThat(db.sql("select count(*) from analysis_applications").query(Long.class).single())
+        .isZero();
+    assertThat(db.sql("select count(*) from memo_items").query(Long.class).single()).isZero();
+    assertThat(db.sql("select count(*) from item_tags").query(Long.class).single()).isZero();
+    assertThat(
+            db.sql("select count(*) from idempotency_records where operation='ANALYSIS_APPLY'")
+                .query(Long.class)
+                .single())
+        .isZero();
+    assertThat(
+            db.sql("select count(*) from tags where owner_id=:owner")
+                .param("owner", OWNER_ID)
+                .query(Long.class)
+                .single())
+        .isEqualTo(initialTagCount);
+    assertThat(
+            db.sql(
+                    "select ar.status from analysis_runs ar join analysis_proposals ap "
+                        + "on ap.analysis_run_id=ar.id where ap.id=:proposal")
+                .param("proposal", proposalId)
+                .query(String.class)
+                .single())
+        .isEqualTo("REVIEW_REQUIRED");
+  }
+
+  @Test
+  void supplementaryTagAtCodePointLimitPassesTransportAndDomainValidation() throws Exception {
+    UUID memoId = UUID.randomUUID();
+    createMemo(memoId, "create-before-supplementary-tag", "supplementary tag candidate");
+    UUID proposalId =
+        UUID.fromString(
+            response(startAnalysis(memoId, "start-before-supplementary-tag", 1))
+                .path("proposalId")
+                .asText());
+    String canonicalName = "😀".repeat(100);
+    Map<String, Object> selection =
+        Map.of(
+            "expectedMemoRevision",
+            1,
+            "selectedType",
+            "TASK",
+            "title",
+            "supplementary tag item",
+            "selectedTags",
+            List.of(Map.of("newCanonicalName", canonicalName)),
+            "items",
+            List.of(Map.of("kind", "TASK", "title", "supplementary tag item")));
+
+    var applied = applyProposal(proposalId, "apply-supplementary-tag", selection);
+
+    assertThat(applied.getResponse().getStatus()).isEqualTo(200);
+    assertThat(response(applied).path("status").asText()).isEqualTo("APPLIED");
+    String stored =
+        db.sql("select canonical_name from tags where owner_id=:owner and canonical_name=:name")
+            .param("owner", OWNER_ID)
+            .param("name", canonicalName)
+            .query(String.class)
+            .single();
+    assertThat(stored).isEqualTo(canonicalName);
+    assertThat(stored).hasSize(200);
+    assertThat(stored.codePointCount(0, stored.length())).isEqualTo(100);
+    assertThat(
+            db.sql(
+                    "select count(*) from item_tags it join tags t on t.id=it.tag_id "
+                        + "where it.owner_id=:owner and t.canonical_name=:name")
+                .param("owner", OWNER_ID)
+                .param("name", canonicalName)
+                .query(Long.class)
+                .single())
+        .isOne();
+  }
 }

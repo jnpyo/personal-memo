@@ -258,6 +258,46 @@ export type ProposalSummary = {
 };
 
 export type TaskStatus = 'TODO' | 'DONE' | 'CANCELLED';
+export type MemoSearchTaskState = TaskStatus | 'NONE';
+
+export type MemoSearchMatchedField = 'TITLE' | 'BODY' | 'TAG' | 'ALIAS';
+
+export type MemoSearchRequest = {
+  query: string;
+  lifecycleStatus: MemoStatus;
+  taskState?: MemoSearchTaskState;
+  overdue?: boolean;
+  revisedFrom?: string;
+  revisedBefore?: string;
+  limit: number;
+  cursor?: string;
+};
+
+export type MemoSearchCanonicalTag = {
+  id: string;
+  name: string;
+};
+
+export type MemoSearchItem = {
+  memoId: string;
+  currentRevision: number;
+  canonicalRevision: number | null;
+  title: string | null;
+  preview: string;
+  lifecycleStatus: MemoStatus;
+  canonicalTags: MemoSearchCanonicalTag[];
+  taskState: MemoSearchTaskState;
+  overdue: boolean;
+  pinned: boolean;
+  revisedAt: string;
+  matchedFields: MemoSearchMatchedField[];
+};
+
+export type MemoSearchPage = {
+  items: MemoSearchItem[];
+  nextCursor: string | null;
+  truncated: boolean;
+};
 
 export type Task = {
   id: string;

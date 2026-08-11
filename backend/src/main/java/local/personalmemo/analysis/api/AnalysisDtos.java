@@ -31,7 +31,9 @@ public final class AnalysisDtos {
   public record Item(
       @NotBlank String kind, @NotBlank @Size(max = 200) String title, @Valid Due due) {}
 
-  public record Tag(UUID existingTagId, @Size(max = 100) String newCanonicalName) {}
+  // TagNormalizer owns Unicode-scalar and normalized-length validation. Bean Validation's @Size
+  // counts UTF-16 code units and would reject an otherwise valid 100-supplementary-code-point name.
+  public record Tag(UUID existingTagId, String newCanonicalName) {}
 
   public record Apply(
       @Min(1) int expectedMemoRevision,

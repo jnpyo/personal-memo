@@ -528,6 +528,7 @@ main {
 .graph-section,
 .task-section,
 .memo-section,
+.search-section,
 .review-outcome-section,
 .review-card {
   margin: 28px 0;
@@ -553,6 +554,327 @@ main {
   border-radius: 24px;
   background: #f0ecdf;
   padding: 18px;
+}
+
+.search-section {
+  border: 1px solid #cbd8ce;
+  border-radius: 24px;
+  background: #eef4ef;
+  padding: 18px;
+}
+
+.search-privacy-note {
+  margin: 0 0 16px;
+  border-left: 3px solid #2f7c57;
+  color: #536158;
+  padding-left: 12px;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.memo-search-form {
+  display: grid;
+  gap: 10px;
+}
+
+.memo-search-form > label,
+.memo-search-filter-grid label {
+  color: #435148;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.memo-search-query-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.memo-search-query-row input {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  border: 1px solid #aebdb3;
+  border-radius: 12px;
+  background: #fff;
+  color: #17221c;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.memo-search-query-row button {
+  min-height: 48px;
+}
+
+.memo-search-lifecycle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin: 2px 0 0;
+  border: 0;
+  border-radius: 12px;
+  background: #dce7de;
+  padding: 4px;
+}
+
+.memo-search-lifecycle legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.memo-search-lifecycle label {
+  position: relative;
+  display: grid;
+  min-height: 48px;
+  place-items: center;
+  border-radius: 9px;
+  color: #59655d;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.memo-search-lifecycle input {
+  position: absolute;
+  opacity: 0;
+}
+
+.memo-search-lifecycle label:has(input:checked) {
+  background: #fff;
+  color: #244d3b;
+  box-shadow: 0 3px 10px #17221c12;
+}
+
+.memo-search-lifecycle label:has(input:focus-visible) {
+  outline: 3px solid #e4b657;
+  outline-offset: 2px;
+}
+
+.memo-search-filters {
+  border: 1px solid #cbd7ce;
+  border-radius: 14px;
+  background: #f8faf7;
+}
+
+.memo-search-filters summary {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  padding: 10px 12px;
+  color: #355342;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.memo-search-filter-grid {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid #dce4de;
+  padding: 14px 12px 8px;
+}
+
+.memo-search-filter-grid label:not(.memo-search-checkbox) {
+  display: grid;
+  gap: 6px;
+}
+
+.memo-search-filter-grid select,
+.memo-search-filter-grid input[type="date"] {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  border: 1px solid #b8c5bc;
+  border-radius: 10px;
+  background: #fff;
+  color: #17221c;
+  padding: 9px 10px;
+  font: inherit;
+}
+
+.memo-search-checkbox {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 10px;
+  border-radius: 10px;
+  background: #edf2ed;
+  padding: 10px 12px;
+}
+
+.memo-search-checkbox input {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+}
+
+.memo-search-checkbox:has(input:disabled) {
+  opacity: 0.55;
+}
+
+.memo-search-time-zone {
+  margin: 4px 12px 12px;
+  color: #68746c;
+  font-size: 0.72rem;
+}
+
+.memo-search-validation,
+.memo-detail-revision-warning,
+.search-detail-restriction {
+  margin: 0;
+  border-radius: 10px;
+  background: #fff0cc;
+  color: #765719;
+  padding: 10px 12px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.memo-search-live {
+  min-height: 1.5em;
+  margin: 14px 0 8px;
+  color: #5f6d64;
+  font-size: 0.78rem;
+}
+
+.memo-search-results {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memo-search-result {
+  display: grid;
+  width: 100%;
+  min-height: 48px;
+  gap: 9px;
+  border: 1px solid #d5ded7;
+  border-radius: 15px;
+  background: #fff;
+  color: #17221c;
+  padding: 14px;
+  text-align: left;
+  box-shadow: 0 5px 18px #17221c0d;
+}
+
+.memo-search-result:hover {
+  border-color: #78a48a;
+}
+
+.memo-search-result__heading,
+.memo-search-result__meta,
+.memo-search-result__tags,
+.memo-search-result__matches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.memo-search-result__heading {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.memo-search-result__heading strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 1rem;
+}
+
+.memo-search-result__heading > span,
+.memo-search-result__meta span,
+.memo-search-result__matches span {
+  border-radius: 999px;
+  background: #edf2ed;
+  color: #506158;
+  padding: 4px 7px;
+  font-size: 0.68rem;
+  font-weight: 750;
+}
+
+.memo-search-result > small {
+  color: #765719;
+  font-size: 0.7rem;
+}
+
+.memo-search-result__preview {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #33433a;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.memo-search-result__meta {
+  color: #68746c;
+  font-size: 0.7rem;
+}
+
+.memo-search-result__meta time {
+  margin-left: auto;
+}
+
+.memo-search-result__tags > span {
+  color: #2f6d4e;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.memo-search-result__matches span {
+  background: #fff3d6;
+  color: #765719;
+}
+
+.memo-search-error,
+.memo-search-cap {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 0;
+  border: 1px solid #ddb9b4;
+  border-radius: 14px;
+  background: #fbefed;
+  color: #8a3c35;
+  padding: 14px;
+}
+
+.memo-search-error p,
+.memo-search-cap {
+  overflow-wrap: anywhere;
+}
+
+.memo-search-error p {
+  margin: 0;
+}
+
+.memo-search-error button,
+.memo-search-more {
+  width: 100%;
+  min-height: 48px;
+}
+
+.memo-search-more {
+  margin-top: 12px;
+}
+
+.memo-search-cap {
+  border-color: #d7bd82;
+  background: #fff8e9;
+  color: #765719;
+}
+
+.search-detail-restriction {
+  margin-top: 18px;
 }
 
 .memo-preservation-note {
@@ -2037,6 +2359,19 @@ main {
 
   .memo-card__actions {
     grid-template-columns: minmax(190px, 1fr) auto auto;
+  }
+
+  .memo-search-query-row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .memo-search-query-row input {
+    grid-column: auto;
+  }
+
+  .memo-search-filter-grid {
+    grid-template-columns: 1fr 1fr;
+    align-items: end;
   }
 
   .memo-card__actions--restore {

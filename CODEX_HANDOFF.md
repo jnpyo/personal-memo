@@ -235,8 +235,32 @@ Codex는 바로 실제 모델을 연결하지 말고 다음 세로 흐름부터 
   item/tag/task를 바꾸지 않는다. 명시적 opt-in 10,000 memo/tag high-fanout EXPLAIN runner는
   양방향 bounded page와 digest query가 기존 V5/V12/PK index를 사용하고 shared read/temp block 없이
   끝나는 한 번의 격리 관측을 남겼다. 이는 SLA가 아니며 재현 명령과 bounded JSON report 계약은
-  `docs/DATA_MODEL.md`에 있다. 현재 근거로는 V18을 추가하지 않았고 lexical search는 여전히
-  Milestone 5 후속이다.
+  `docs/DATA_MODEL.md`에 있다. 현재 근거로는 V18을 추가하지 않았다.
+- Milestone 5의 두 번째 read-only slice는 `POST /api/v1/search/memos` exact lexical search다. query는
+  CSRF-protected JSON body에만 있고 URL·browser storage·service-worker cache·ordinary access log에
+  저장하지 않는다. query는 U+0000과 lone surrogate를 포함하지 않아야 하고, raw와
+  NFKC/strip/`Locale.ROOT` lowercase 결과 모두 200 UTF-16 code unit 이하여야 한다. 저장된 current
+  raw BODY와 latest valid `APPLIED` canonical TITLE은
+  PostgreSQL NFKC/`und-x-icu` lowercase를 적용해 그 query와 literal substring으로 비교하고, current
+  owner의 `ACTIVE` TAG/ALIAS는 `TagNormalizer` exact normalized equality로 찾는다. proposal,
+  `UNDONE` application, archived item과 inactive tag는 검색 authority가 아니다. lifecycle,
+  aggregated task state, snapshot-derived overdue, current-revision inclusive lower/exclusive upper
+  instant filter를 제공한다. 각 bound는 JDBC binding 전
+  `0001-01-01T00:00:00Z`–`9999-12-31T23:59:59.999999Z`로 제한하고 current revision
+  recency/UUID keyset으로 page한다.
+  server page는 기본 20·최대 50, PWA는 5 page/100 result이며 preview는 current raw 최대 240 Unicode
+  code point, visible canonical tag는 matching-first 최대 8개다. cursor v1은 query/filter raw나 display
+  text 없이 owner·normalized query/filter digest·sort shape·24시간 snapshot·full-visible-result digest·
+  last memo identity를 묶는다. 결과 membership/order/display state가 바뀌면 `422
+  INVALID_SEARCH_CURSOR`로 기존 목록을 stale 표시하고 cursor 없는 첫 page 재시작을 요구한다.
+  결과는 React Flow에 주입하지 않고 owner-scoped `GET /memos/{id}`로 current raw detail을 no-store로
+  다시 연다. 이는 exact lexical 첫 slice이며 fuzzy/`pg_trgm`, related-memo, vector/embedding,
+  provider/Agent tool, cluster reveal, taxonomy evolution이나 Milestone 5 전체 완료를 뜻하지 않는다.
+  별도 opt-in 10,000-memo worst-case all-match runner의 한 hot-buffer 관측에서 BODY/TITLE page/digest는
+  812.126/1082.515 ms, exact ALIAS page/digest는 555.671/1009.93 ms였고 shared read/temp I/O가
+  없었다. 이는 end-to-end latency나 SLA가 아니다. canonical join이 기존 index를 사용하고 새 B-tree
+  효용 근거가 없어 search V18을 추가하지 않았으며 exact 재현/report 계약은 `docs/DATA_MODEL.md`에
+  있다.
 - Flyway `V1`–`V17`이 memo/revision, proposal/application, canonical item/tag/task, owner integrity, revision capture context, analyzer·prompt·local model·embedding model·routing policy provenance, local/Google identity, JDBC session schema, claimed user identity 무결성과 일회성 initial-account provisioning gate를 관리한다. `V11`은 owner별 proposal의 최신 application을 찾는 review-outcome 조회 인덱스, `V12`는 memo별 최신 `APPLIED` selection과 활성 item을 읽는 graph projection partial index만 추가한다. `V13`은 boolean-only legacy cloud consent를 폐기하고 owner row의 exact policy-version·granted-at pin을 강제하며, run마다 cloud transfer/gateway/provider/model/policy/outcome evidence를 추가한다. `V14`는 새 run의 내부 authorization/grant snapshot과 결정론적 provider-request token을 일관되게 저장하고 과거 row는 `legacy-v0`로 보존한다. `V15`는 호출 전에 `durable-v1` run과 1:1 `analysis_run_dispatches` preparation을 commit하고 immutable executor binding·descriptor, deadline/lease/fence, reserved proposal와 idempotency evidence를 보존한다. `V16`은 새 dispatch에 owner-scoped exact tag/alias K=8 context의 raw/hash/version/count를 함께 준비하고, 기존 V15 row는 `none/0/NULL/NULL`로 보존한다. `V17`은 새 dispatch를 `gateway-attempt-v1`로 versioning하고 claim fence별 owner-scoped `analysis_run_dispatch_attempts` row를 `max_attempts` 상한 안에서 보존한다. 기존 dispatch는 `attempt_history_version=none`이고 attempt row를 소급 생성하지 않는다. V14까지의 row에도 dispatch를 소급 생성하지 않는다. 새 raw analytics 복제본이나 일반 clickstream table은 만들지 않는다.
 - 각 local/Google 로그인 수단은 internal UUID에 매핑되고, 명시적으로 연결한 두 수단은 같은 UUID와 PostgreSQL-backed server session을 사용한다. Google email만으로 자동 연결하지 않고 기존 로그인 뒤 명시적 link intent를 요구하며, 마지막 login method는 해제할 수 없다. domain owner는 client 값이나 개발 상수가 아니라 Spring Security context에서 가져온다.
 - React 인증 shell은 capability·CSRF·현재 session을 먼저 확인하고, 로그인 전에는 owner domain API를 호출하지 않는다. service worker는 API와 OAuth/login 경로를 cache하지 않는다.

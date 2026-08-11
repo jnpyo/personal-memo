@@ -2,7 +2,9 @@
 
 Base path: `/api/v1`
 
-이 문서는 local/Google 이중 로그인, AI-free vertical slice와 외부 모델 없는 결정론적 분석 slice에서 구현한 HTTP 계약을 설명한다. 후속 마일스톤의 search, reminder, sync API는 구현 전이므로 포함하지 않는다.
+이 문서는 local/Google 이중 로그인, AI-free vertical slice, 외부 모델 없는 결정론적 분석,
+그리고 Milestone 5의 첫 exact lexical memo search slice에서 구현한 HTTP 계약을 설명한다.
+후속 fuzzy/semantic search, reminder, sync API는 구현 전이므로 포함하지 않는다.
 
 기계 판독 가능한 동일 범위의 명세는 [`openapi.yaml`](openapi.yaml)에 있다.
 
@@ -54,6 +56,7 @@ owner-scoped API는 선택적인 `X-Expected-Owner-Id` header를 지원한다. �
 | memo와 분석 시작 | `/memos/**` |
 | 분석 제안, application, 검토 결과 집계 | `/analysis-proposals/**`, `/analysis-applications/**`, `/analysis-review-outcomes/**` |
 | task와 graph | `/tasks/**`, `/graph/**` |
+| memo search | `/search/**` |
 | 계정 및 session 작업 | `POST /auth/logout`, `POST /auth/google/link-intent`, `DELETE /auth/identities/google` |
 
 PWA는 authenticated bootstrap 뒤 owner ID를 API client에 설정하고, 각 guard 대상 request 시작 시 그 값을 고정한다. 응답을 기다리는 동안 탭이나 session owner가 바뀌어도 header를 새 owner로 다시 쓰지 않는다. `SESSION_OWNER_CHANGED`를 받으면 이전 owner의 in-flight scope를 폐기하고 현재 session을 다시 bootstrap한다. 특히 실패 후 남아 있던 A의 logout intent가 B session에서 이 오류를 받으면 그 stale intent와 재시도 marker를 제거한 뒤 B session을 유지한다.
@@ -472,7 +475,11 @@ Content-Type: application/json
 }
 ```
 
-한 요청에는 최대 10개 tag와 1–3개 item을 선택할 수 있다. `DATE_ONLY`는 `YYYY-MM-DD`, `EXACT_TIME`은 offset을 포함한 ISO 8601 timestamp여야 한다. 기존 tag도 현재 owner 소유인지 검증한다.
+한 요청에는 최대 10개 tag와 1–3개 item을 선택할 수 있다. `newCanonicalName`은 well-formed
+UTF-16이고 U+0000을 포함하지 않아야 하며, raw name과 NFKC·여백 정규화 후 canonical
+name, `Locale.ROOT` lowercase name이 각각 1–100 Unicode code point여야 한다. 위반은 `422
+INVALID_TAG_NAME`이다. `DATE_ONLY`는 `YYYY-MM-DD`, `EXACT_TIME`은 offset을 포함한 ISO 8601
+timestamp여야 한다. 기존 tag도 현재 owner 소유인지 검증한다.
 
 apply body의 `items[].due.timeZone`은 기존 client 계약을 깨지 않기 위한 검증 대상 입력일 뿐 canonical zone 선택 권한이 아니다. 서버는 proposal이 참조하는 immutable memo revision을 잠근 뒤 모든 due의 persisted `source_time_zone`을 그 revision의 `source_time_zone`으로 교체한다. 따라서 다른 기기나 여행 중 복구·승인해도 date-only `OVERDUE` 경계는 원문을 기록한 시간대에서 계산된다.
 
@@ -815,6 +822,128 @@ TAG neighbor memo는 React Flow home에 추가하지 않고 기존 owner-scoped 
 현재 raw revision을 no-store로 연다. Back은 해당 neighbor control로, Close는 원래 home node로
 focus를 복원하되 node remount나 사용자 focus 이동을 안전하게 처리한다. lexical/alias 검색,
 fuzzy/vector retrieval, tag alias 상세는 이 endpoint가 구현했다고 간주하지 않는다.
+
+## Exact lexical memo search
+
+```http
+POST /api/v1/search/memos
+Content-Type: application/json
+X-XSRF-TOKEN: ...
+X-Expected-Owner-Id: 018f4fad-e9a9-7a01-a4d1-936938a8a1e8
+```
+
+검색어를 URL, query string, browser storage 또는 service-worker cache에 남기지 않기 위해
+read-only 검색도 JSON body를 받는 `POST`로 제공한다. Cookie-authenticated `POST`이므로 일반 mutation과
+같이 현재 CSRF token이 필요하지만, canonical 또는 idempotency 상태를 쓰지 않으므로
+`Idempotency-Key`는 받지 않는다. frontend Nginx access log는 method와 normalized `$uri`만 기록하며,
+Spring application도 query나 memo preview를 일반 로그에 기록하지 않는다.
+
+```json
+{
+  "query": "OS 과제",
+  "lifecycleStatus": "ACTIVE",
+  "taskState": "TODO",
+  "overdue": false,
+  "revisedFrom": "2026-08-01T00:00:00Z",
+  "revisedBefore": "2026-09-01T00:00:00Z",
+  "limit": 20,
+  "cursor": null
+}
+```
+
+Request 계약은 다음과 같다.
+
+- `query`는 필수이며 well-formed UTF-16이어야 한다. raw 값과 NFKC/strip/lowercase 결과가 각각
+  최대 200 UTF-16 code unit이고, normalized 결과는 1–200 Unicode code point여야 한다. lone high/low
+  surrogate, U+0000, normalized blank, 어느 쪽이든 초과한 값은 `422 INVALID_SEARCH_QUERY`다. `%`, `_`,
+  backslash 같은 wildcard 문자는 query language가 아니라 일반 문자다.
+- `lifecycleStatus`는 `ACTIVE` 또는 `TRASHED`이고 기본값은 `ACTIVE`다.
+- `taskState`는 `NONE`, `TODO`, `DONE`, `CANCELLED` 중 하나다. 생략하면 task state로 거르지 않는다.
+- `overdue`는 derived Boolean filter다. `true`는 정의상 `TODO`만 매칭하므로 명시한
+  `taskState`가 있다면 `TODO`여야 한다. `OVERDUE`는 저장 상태나 `taskState` 값이 아니다.
+- `revisedFrom`은 현재 raw revision의 server-created instant에 대한 inclusive lower bound,
+  `revisedBefore`는 exclusive upper bound다. 각 값은
+  `0001-01-01T00:00:00Z`–`9999-12-31T23:59:59.999999Z` 범위여야 하고, 둘 다 있으면
+  `revisedFrom < revisedBefore`여야 한다. 범위나 순서가 틀리면 `422 INVALID_SEARCH_DATE_RANGE`다.
+- `limit` 기본값은 20이고 1–50 밖의 값은 clamp하지 않고 `422 INVALID_SEARCH_LIMIT`이다.
+- `cursor`는 이전 page가 반환한 1–1,024자의 canonical unpadded URL-safe Base64 값이다. 첫 page에서는
+  생략하거나 null로 보낸다.
+
+Java는 query를 NFKC/strip/`Locale.ROOT` lowercase로 만든다. PostgreSQL은 저장된 BODY/TITLE에
+`normalize(..., NFKC)`와 `lower(... COLLATE "und-x-icu")`를 적용한 뒤 query operand와 literal
+substring으로 비교한다. 이 두 구현 경로보다 넓은 locale/collation 동등성은 계약하지 않는다.
+BODY는 현재 immutable raw revision만, TITLE은 memo의 최신 유효 `APPLIED` application에 저장된
+canonical title만 비교한다. 그 application은 현재 raw revision보다 오래될 수 있으므로 응답은
+`currentRevision`과 nullable `canonicalRevision`을 분리한다. TAG와 ALIAS는 같은 원문 query를
+`TagNormalizer`로 정규화할 수 있을 때만 현재 owner의 `ACTIVE` canonical tag/alias에 exact normalized
+equality를 적용한다. 부분 tag 이름, fuzzy score, proposal tag, `UNDONE` application, archived item,
+inactive tag는 결과 근거가 아니다.
+
+성공 응답은 current raw revision 시각 내림차순, memo UUID 오름차순의 stable keyset page이며
+`Cache-Control: no-store`를 포함한다.
+
+```json
+{
+  "items": [
+    {
+      "memoId": "61c6c3e8-846a-4472-a58a-321920001868",
+      "currentRevision": 3,
+      "canonicalRevision": 2,
+      "title": "OS 과제 제출",
+      "preview": "11.26 OS 과제 수정본 제출",
+      "lifecycleStatus": "ACTIVE",
+      "canonicalTags": [
+        {
+          "id": "10000000-0000-0000-0000-000000000001",
+          "name": "운영체제"
+        }
+      ],
+      "taskState": "TODO",
+      "overdue": false,
+      "pinned": true,
+      "revisedAt": "2026-08-11T10:00:00Z",
+      "matchedFields": ["TITLE", "BODY", "ALIAS"]
+    }
+  ],
+  "nextCursor": null,
+  "truncated": false
+}
+```
+
+각 item의 `preview`는 현재 raw content를 최대 240 Unicode code point로 제한하고, 잘리면 마지막
+code point를 `…`로 바꾼다. `title`과 `canonicalRevision`은 함께 값이 있거나 함께 null이며 title은
+최신 유효 `APPLIED` selection에서만 온다. `canonicalTags`는 matching tag/alias 우선, normalized
+name, UUID 순으로 최대 8개인 현재 활성 canonical tag다. `taskState`는 활성 application의
+unarchived task를 `TODO` → `DONE` → `CANCELLED` 순으로 집계하며 task가 없으면 `NONE`이다.
+`overdue`는 page의 `snapshotAsOf`에서 `TODO`와 exact/date-only due를 계산한 값이다.
+`matchedFields`는 `TITLE`, `BODY`, `TAG`, `ALIAS` 중 실제 match를 위 순서로 하나 이상 담는다.
+
+`truncated=true`이면 `nextCursor`가 반드시 존재하고 마지막 page는
+`truncated=false`, `nextCursor=null`이다. cursor version 1은 owner, normalized-query digest,
+canonical filter digest, `CURRENT_REVISION_RECENCY_V1` sort shape, UTC `snapshotAsOf`, 첫 page의
+전체 visible result membership·표시 field·정렬 tuple SHA-256 digest와 마지막 memo UUID를 담는다.
+query, title, body, preview, tag/alias name 또는 filter raw value는 cursor에 넣지 않는다. cursor는
+authorization이 아니며 모든 query는 authenticated principal의 owner를 다시 적용한다.
+
+Continuation은 같은 owner/query/filter와 24시간 이내 snapshot에서 full-visible-result digest를
+재계산한다. current revision/title/application/task/due/pin/tag/alias/link/lifecycle 등 결과의
+membership·표시·정렬 상태가 달라졌거나 cursor가 malformed/non-canonical, 다른 owner/query/filter,
+마지막 memo가 더 이상 결과에 없거나 1분을 넘는 미래/24시간 초과 snapshot이면
+`422 INVALID_SEARCH_CURSOR`다. PWA는 이미 모은 결과를 stale로 표시하고 더 불러오기를 숨긴 뒤,
+사용자가 cursor 없는 첫 page부터 명시적으로 다시 시작하게 한다. 한 검색 화면은 최대 5 page와
+100 result만 유지한다.
+
+검색 결과 선택은 graph home projection을 확장하거나 React Flow에 node를 주입하지 않는다.
+기존 owner-scoped `GET /memos/{memoId}`를 `no-store`로 다시 호출하여 **현재** raw revision의 공유
+detail을 연다. 검색 snapshot의 title/preview와 detail 원문이 달라질 수 있으며, detail의 현재 원문이
+authoritative하다. `TRASHED` 결과도 원문 detail은 열 수 있지만 graph/pin action은 제공하지 않는다.
+
+오류는 `401 AUTHENTICATION_REQUIRED`, `403 CSRF_TOKEN_INVALID`, `409 SESSION_OWNER_CHANGED`,
+`422 INVALID_SEARCH_QUERY`, `INVALID_SEARCH_FILTERS`, `INVALID_SEARCH_DATE_RANGE`,
+`INVALID_SEARCH_LIMIT`, `INVALID_SEARCH_CURSOR`를 사용한다. JSON shape/type이나 instant를 읽을 수
+없으면 공통 `422 MALFORMED_JSON`이다.
+이 endpoint는 exact lexical 첫 slice이며 fuzzy/`pg_trgm`, related-memo, vector/embedding, provider,
+새 search migration 또는 별도 search service가 구현됐다는 뜻이 아니다.
 
 ## Health
 

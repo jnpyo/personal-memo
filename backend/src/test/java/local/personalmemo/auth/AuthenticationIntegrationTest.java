@@ -138,6 +138,16 @@ class AuthenticationIntegrationTest {
     assertThat(unauthenticated.getResponse().getStatus()).isEqualTo(401);
     assertThat(body(unauthenticated).path("code").asText()).isEqualTo("AUTHENTICATION_REQUIRED");
 
+    MvcResult unauthenticatedSearch =
+        mvc.perform(
+                csrfPost("/api/v1/search/memos", null)
+                    .contentType("application/json")
+                    .content("{\"query\":\"private\"}"))
+            .andReturn();
+    assertThat(unauthenticatedSearch.getResponse().getStatus()).isEqualTo(401);
+    assertThat(body(unauthenticatedSearch).path("code").asText())
+        .isEqualTo("AUTHENTICATION_REQUIRED");
+
     MvcResult csrfFailure =
         mvc.perform(
                 post("/api/v1/auth/register")
@@ -595,6 +605,17 @@ class AuthenticationIntegrationTest {
     assertThat(blockedRead.getResponse().getStatus()).isEqualTo(409);
     assertThat(body(blockedRead).path("code").asText()).isEqualTo("SESSION_OWNER_CHANGED");
 
+    MvcResult blockedSearchBeforeBodyParsing =
+        mvc.perform(
+                csrfPost("/api/v1/search/memos", secondSession)
+                    .header(EXPECTED_OWNER_HEADER, firstOwnerId)
+                    .contentType("application/json")
+                    .content("{"))
+            .andReturn();
+    assertThat(blockedSearchBeforeBodyParsing.getResponse().getStatus()).isEqualTo(409);
+    assertThat(body(blockedSearchBeforeBodyParsing).path("code").asText())
+        .isEqualTo("SESSION_OWNER_CHANGED");
+
     MvcResult blockedReviewOutcomeRead =
         mvc.perform(
                 get("/api/v1/analysis-review-outcomes/summary")
@@ -668,6 +689,17 @@ class AuthenticationIntegrationTest {
             .andReturn();
     assertThat(usableSession.getResponse().getStatus()).isEqualTo(200);
     assertThat(body(usableSession).toString()).contains("second-owner-private");
+
+    MvcResult usableSearch =
+        mvc.perform(
+                csrfPost("/api/v1/search/memos", secondSession)
+                    .header(EXPECTED_OWNER_HEADER, secondOwnerId)
+                    .contentType("application/json")
+                    .content("{\"query\":\"second-owner-private\"}"))
+            .andReturn();
+    assertThat(usableSearch.getResponse().getStatus()).isEqualTo(200);
+    assertThat(usableSearch.getResponse().getHeader("Cache-Control")).contains("no-store");
+    assertThat(body(usableSearch).toString()).contains(memoId.toString(), "second-owner-private");
     assertThat(
             db.sql("select owner_id from memos where id=:memoId")
                 .param("memoId", memoId)

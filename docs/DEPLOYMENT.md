@@ -183,7 +183,23 @@ PostgreSQL owner UUID는 그대로 유지하고 personal TLS overlay 대신 serv
 
 Spring의 `prod` profile은 forwarded header 해석을 활성화하고 session cookie와 `XSRF-TOKEN` cookie를 `Secure`, `SameSite=Lax`로 발급한다. frontend Nginx는 정확한 `http`/`https` scheme과 1–5자리 forwarded port만 backend로 보존하고, 누락되거나 잘못된 값은 자신의 connection 값으로 대체한다. frontend port가 loopback에만 묶인다는 전제 아래 public header의 신뢰 주체는 외부 edge다. 이 설정은 HTTP만 공개해도 안전해진다는 뜻이 아니며 실제 사용자 트래픽은 반드시 HTTPS edge를 통과해야 한다.
 
-frontend Nginx access log는 요청 대상을 method와 정규화된 `$uri`로만 기록하고 query argument와 Referer를 제외하므로 opaque graph cursor나 향후 검색어가 이 로그에 남지 않는다. 이 설정은 별도 외부 HTTPS edge나 Spring backend의 로그 정책을 변경하지 않으므로 각 upstream도 독립적으로 같은 개인정보 경계를 검토해야 한다.
+frontend Nginx access log는 요청 대상을 method와 정규화된 `$uri`로만 기록하고 query argument와
+Referer를 제외하므로 opaque graph cursor가 이 로그에 남지 않는다. Exact lexical memo search는
+`POST /api/v1/search/memos`의 JSON body로만 query를 전달하고 URL, browser storage, service-worker
+cache에 저장하지 않으며 응답은 `Cache-Control: no-store`다. Nginx access log는 request body도
+기록하지 않는다. 이 설정은 별도 외부 HTTPS edge나 Spring backend의 body/log 정책을 변경하지
+않으므로 각 upstream도 search body, raw preview, cursor를 기록하지 않는지 독립적으로 검토해야 한다.
+
+Exact BODY/TITLE matching은 query 수준에서 PostgreSQL `normalize(..., NFKC)`와
+`lower(... COLLATE "und-x-icu")`를 사용한다. 현재 pinned `postgres:17.6-alpine`의 10,000-memo
+runner는 `und-x-icu` 존재를 확인했지만, 외부 관리형 PostgreSQL이나 image를 바꾸면 배포 전에 아래
+preflight가 `true`인지 확인해야 한다. 이 요구는 V18 migration이나 새 index를 만들지 않는다.
+
+```sql
+SELECT count(*) = 1
+FROM pg_collation
+WHERE collname = 'und-x-icu';
+```
 
 ### 운영 환경 변수
 

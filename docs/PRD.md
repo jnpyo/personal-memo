@@ -79,6 +79,19 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 - Tapping a node highlights its local neighborhood and opens a detail drawer.
 - Zooming changes detail level: clusters → tags → individual memos.
 
+### 2a. Search
+
+- Search is usable without understanding the graph and can open a memo outside the bounded home.
+- The current first slice searches the current raw body and latest applied title by literal
+  normalized substring, plus canonical tags and aliases by exact normalized equality.
+- Lifecycle, task state, derived overdue, and current-revision date filters narrow results without
+  making proposal or undone data canonical.
+- The query stays in a JSON request body and is not persisted in the URL, browser storage, service
+  worker, or ordinary access logs.
+- Opening a result re-reads the owner-scoped current raw memo detail and never silently injects it
+  into the graph projection.
+- Fuzzy/semantic retrieval, cluster reveal, and search-driven graph expansion remain later slices.
+
 ### 3. Quick capture
 
 - A persistent input affordance is available from the graph home.
