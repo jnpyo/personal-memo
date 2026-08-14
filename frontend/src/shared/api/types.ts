@@ -151,12 +151,25 @@ export type SelectedTag = {
   newCanonicalName: string | null;
 };
 
+export type RelationReviewCandidate = {
+  proposalIndex: number;
+  targetType: RelationCandidate['targetType'];
+  targetId: string;
+  targetLabel: string | null;
+  available: boolean;
+};
+
+export type SelectedRelation = {
+  proposalIndex: number;
+};
+
 export type ApplyProposalRequest = {
   expectedMemoRevision: number;
   selectedType: ItemKind;
   title: string;
   selectedTags: SelectedTag[];
   items: Array<{
+    proposalCandidateId: string | null;
     kind: ItemKind;
     title: string;
     due: {
@@ -167,6 +180,7 @@ export type ApplyProposalRequest = {
       timeSpecified: boolean;
     } | null;
   }>;
+  selectedRelations: SelectedRelation[];
 };
 
 export type ApplicationResult = {

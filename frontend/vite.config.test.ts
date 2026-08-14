@@ -1,9 +1,12 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   BACKEND_NETWORK_ONLY_PATH_PATTERNS,
   isBackendNetworkOnlyPath,
   PWA_REGISTER_TYPE,
 } from './vite.config';
+
+const applicationStyles = readFileSync(new URL('./src/app/styles.css', import.meta.url), 'utf8');
 
 function navigationFallbackIsDenied(pathname: string): boolean {
   return BACKEND_NETWORK_ONLY_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
@@ -37,5 +40,13 @@ describe('PWA backend routing boundary', () => {
     expect(isBackendNetworkOnlyPath('/apian')).toBe(false);
     expect(isBackendNetworkOnlyPath('/oauth2callback')).toBe(false);
     expect(isBackendNetworkOnlyPath('/login/oauth2callback')).toBe(false);
+  });
+});
+
+describe('review touch target CSS contract', () => {
+  it('keeps the unavailable relation exclusion action above the 48px touch minimum', () => {
+    expect(applicationStyles).toMatch(
+      /\.review-dialog \.relation-review__exclude\s*\{\s*min-height:\s*48px;/,
+    );
   });
 });

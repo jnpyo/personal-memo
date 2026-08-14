@@ -573,6 +573,328 @@ test('keeps an apply failure and its retry action inside the proposal popup', as
   expect(applyAttempts[1]).toEqual(applyAttempts[0]);
 });
 
+test('reviews owner-visible relations manually and recovers an unavailable target without losing the draft', async ({
+  page,
+}, testInfo) => {
+  const marker = `relation-review-${Date.now()}-${testInfo.retry}`;
+  const rawMemo = `11.25 연결 검토 E2E ${marker} 제출`;
+  const relationTagLabel = `연결 전용 태그 ${marker}`;
+  const editedTitle = `연결 검토 수정 ${marker}`;
+  const tagTargetId = '42a8b44d-e2f2-42d0-9168-49e19947e6e7';
+  const memoTargetId = '8e2c76fd-c91f-4b8e-9657-5c0a737e334e';
+  let sourceCandidateId: string | null = null;
+  let relationCandidateRequests = 0;
+  let targetBecameUnavailable = false;
+  const applyAttempts: Array<{
+    idempotencyKey: string | undefined;
+    body: Record<string, unknown>;
+  }> = [];
+
+  await registerIsolatedUser(page, testInfo);
+  await page.route(/\/api\/v1\/analysis-proposals\/[^/?]+$/, async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const proposal = await response.json() as {
+      itemCandidates: Array<{ candidateId: string }>;
+      relationCandidates: unknown[];
+    };
+    sourceCandidateId = proposal.itemCandidates[0]?.candidateId ?? null;
+    expect(sourceCandidateId).toBeTruthy();
+    await route.fulfill({
+      response,
+      json: {
+        ...proposal,
+        relationCandidates: [
+          {
+            sourceCandidateId,
+            targetType: 'TAG',
+            targetId: tagTargetId,
+            relationType: 'RELATED_TO',
+            score: 0.84,
+          },
+          {
+            sourceCandidateId,
+            targetType: 'MEMO',
+            targetId: memoTargetId,
+            relationType: 'REFERENCES',
+            score: 0.72,
+          },
+        ],
+      },
+    });
+  });
+  await page.route('**/api/v1/analysis-proposals/*/relation-review-candidates', async (route) => {
+    relationCandidateRequests += 1;
+    expect(route.request().headers()['x-expected-owner-id']).toBeTruthy();
+    expect(route.request().headers()['idempotency-key']).toBeUndefined();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: { 'Cache-Control': 'no-store' },
+      body: JSON.stringify([
+        {
+          proposalIndex: 0,
+          targetType: 'TAG',
+          targetId: tagTargetId,
+          targetLabel: targetBecameUnavailable ? null : relationTagLabel,
+          available: !targetBecameUnavailable,
+        },
+        {
+          proposalIndex: 1,
+          targetType: 'MEMO',
+          targetId: memoTargetId,
+          targetLabel: null,
+          available: false,
+        },
+      ]),
+    });
+  });
+  await page.route(/\/api\/v1\/analysis-proposals\?status=REVIEW_REQUIRED&limit=1$/, async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+  });
+  await page.route('**/api/v1/analysis-proposals/*/apply', async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    applyAttempts.push({
+      idempotencyKey: route.request().headers()['idempotency-key'],
+      body,
+    });
+    if (applyAttempts.length === 1) {
+      targetBecameUnavailable = true;
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 'RELATION_TARGET_UNAVAILABLE',
+          message: 'target changed during apply',
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ applicationId: 'mock-relation-application', status: 'APPLIED' }),
+    });
+  });
+
+  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(rawMemo);
+  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  const dialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: '선택한 내용을 확인해 주세요.' }))
+    .toBeFocused();
+
+  const relationOptions = dialog.locator('.relation-review-option');
+  const availableOption = relationOptions.nth(0);
+  const unavailableOption = relationOptions.nth(1);
+  const availableCheckbox = availableOption.getByRole('checkbox');
+  const unavailableCheckbox = unavailableOption.getByRole('checkbox');
+  await expect(availableOption).toContainText(relationTagLabel);
+  await expect(availableOption).toContainText('관련 있음 · 태그');
+  await expect(availableCheckbox).toBeEnabled();
+  await expect(availableCheckbox).not.toBeChecked();
+  await expect(unavailableCheckbox).toBeDisabled();
+  await availableOption.scrollIntoViewIfNeeded();
+  await expectMinimumTouchHeight(availableOption, 48);
+  await expectNoHorizontalOverflow(page);
+
+  await page.getByLabel('대표 제목').fill(editedTitle);
+  await availableCheckbox.check();
+  await page.getByRole('button', { name: '수정한 내용 승인·적용' }).click();
+
+  await expect(dialog.getByRole('alert')).toContainText('검토 내용은 유지되었습니다.');
+  await expect(page.getByLabel('대표 제목')).toHaveValue(editedTitle);
+  await expect.poll(() => relationCandidateRequests).toBe(2);
+  await expect(availableCheckbox).toBeChecked();
+  await expect(availableCheckbox).toBeDisabled();
+  const excludeUnavailable = dialog.getByRole('button', { name: '이 연결 제외' });
+  await expect(excludeUnavailable).toBeVisible();
+  await expectMinimumTouchHeight(excludeUnavailable, 48);
+
+  await excludeUnavailable.click();
+  await expect(page.getByRole('button', { name: '수정한 내용 승인·적용' })).toBeEnabled();
+  await page.getByRole('button', { name: '수정한 내용 승인·적용' }).click();
+  await expect(dialog).toHaveCount(0);
+
+  expect(applyAttempts).toHaveLength(2);
+  expect(applyAttempts[0]?.idempotencyKey).toBeTruthy();
+  expect(applyAttempts[1]?.idempotencyKey).toBeTruthy();
+  expect(applyAttempts[1]?.idempotencyKey).not.toBe(applyAttempts[0]?.idempotencyKey);
+  expect(applyAttempts[0]?.body).toMatchObject({
+    title: editedTitle,
+    selectedRelations: [{ proposalIndex: 0 }],
+    items: expect.arrayContaining([
+      expect.objectContaining({ proposalCandidateId: sourceCandidateId }),
+    ]),
+  });
+  expect(applyAttempts[1]?.body).toMatchObject({
+    title: editedTitle,
+    selectedRelations: [],
+  });
+  expect(JSON.stringify(applyAttempts[0]?.body.selectedTags)).not.toContain(relationTagLabel);
+});
+
+test('keeps a generic apply conflict draft and exact retry identity with explicit empty relations', async ({
+  page,
+}, testInfo) => {
+  const marker = `generic-conflict-${Date.now()}-${testInfo.retry}`;
+  const editedTitle = `일반 충돌 초안 ${marker}`;
+  const applyAttempts: Array<{ idempotencyKey: string | undefined; body: string | null }> = [];
+
+  await registerIsolatedUser(page, testInfo);
+  await page.route(/\/api\/v1\/analysis-proposals\?status=REVIEW_REQUIRED&limit=1$/, async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+  });
+  await page.route('**/api/v1/analysis-proposals/*/apply', async (route) => {
+    applyAttempts.push({
+      idempotencyKey: route.request().headers()['idempotency-key'],
+      body: route.request().postData(),
+    });
+    if (applyAttempts.length === 1) {
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 'FUTURE_CONFLICT', message: 'simulated generic conflict' }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ applicationId: 'mock-generic-application', status: 'APPLIED' }),
+    });
+  });
+
+  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
+    .fill(`11.25 OS과제 E2E ${marker} 제출`);
+  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await openProposalEditor(page);
+  await page.getByLabel('대표 제목').fill(editedTitle);
+  await page.getByRole('button', { name: '수정한 내용 승인·적용' }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
+  await expect(dialog).toBeVisible();
+  await expect(page.getByLabel('대표 제목')).toHaveValue(editedTitle);
+  await expect(dialog.getByRole('alert')).toContainText('입력한 검토 내용은 유지되었습니다.');
+  const retry = dialog.getByRole('button', { name: '승인 다시 시도' });
+  await expect(retry).toBeVisible();
+  await expectMinimumTouchHeight(retry, 48);
+  await retry.click();
+  await expect(dialog).toHaveCount(0);
+
+  expect(applyAttempts).toHaveLength(2);
+  expect(applyAttempts[0]?.idempotencyKey).toBeTruthy();
+  expect(applyAttempts[1]).toEqual(applyAttempts[0]);
+  expect(JSON.parse(applyAttempts[0]?.body ?? '{}')).toMatchObject({
+    title: editedTitle,
+    selectedRelations: [],
+  });
+});
+
+test('ignores an aborted late relation-label response after a new proposal opens', async ({
+  page,
+}, testInfo) => {
+  const marker = `relation-generation-${Date.now()}-${testInfo.retry}`;
+  const targetId = '7cf3f117-5b35-4631-8f6e-8c074d1a9de8';
+  const staleLabel = `이전 연결 ${marker}`;
+  const freshLabel = `현재 연결 ${marker}`;
+  let proposalReads = 0;
+  let relationCandidateRequests = 0;
+  let releaseFirstResponse = () => {};
+  let finishFirstResponse = () => {};
+  const holdFirstResponse = new Promise<void>((resolve) => {
+    releaseFirstResponse = resolve;
+  });
+  const firstResponseFinished = new Promise<void>((resolve) => {
+    finishFirstResponse = resolve;
+  });
+
+  await registerIsolatedUser(page, testInfo);
+  await page.route(/\/api\/v1\/analysis-proposals\/[^/?]+$/, async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const proposal = await response.json() as {
+      itemCandidates: Array<{ candidateId: string }>;
+    };
+    proposalReads += 1;
+    await route.fulfill({
+      response,
+      json: {
+        ...proposal,
+        relationCandidates: [{
+          sourceCandidateId: proposal.itemCandidates[0]?.candidateId,
+          targetType: 'TAG',
+          targetId,
+          relationType: 'CONTINUES',
+          score: 0.78,
+        }],
+      },
+    });
+  });
+  await page.route('**/api/v1/analysis-proposals/*/relation-review-candidates', async (route) => {
+    relationCandidateRequests += 1;
+    const requestNumber = relationCandidateRequests;
+    if (requestNumber === 1) await holdFirstResponse;
+    try {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { 'Cache-Control': 'no-store' },
+        body: JSON.stringify([{
+          proposalIndex: 0,
+          targetType: 'TAG',
+          targetId,
+          targetLabel: requestNumber === 1 ? staleLabel : freshLabel,
+          available: true,
+        }]),
+      });
+    } catch {
+      // The first browser request is expected to be aborted when its review closes.
+    } finally {
+      if (requestNumber === 1) finishFirstResponse();
+    }
+  });
+
+  try {
+    await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
+      .fill(`11.25 첫 연결 E2E ${marker} 제출`);
+    await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+    const firstDialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
+    await expect(firstDialog.getByText('내 메모와 태그에서 연결 대상 이름을 확인하고 있습니다…'))
+      .toBeVisible();
+    await firstDialog.getByRole('button', { name: '이 제안 사용하지 않기' }).click();
+    await firstDialog.getByRole('button', { name: '예, 제안만 버리기' }).click();
+    await expect(firstDialog).toHaveCount(0);
+
+    await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
+      .fill(`11.25 둘째 연결 E2E ${marker} 제출`);
+    const analyze = page.getByRole('button', { name: '원문 저장 후 제안 분석' });
+    await expect(analyze).toBeEnabled();
+    await analyze.click();
+
+    const currentDialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
+    await expect(currentDialog.getByText(freshLabel)).toBeVisible();
+    await expect(currentDialog.getByRole('heading', { name: '선택한 내용을 확인해 주세요.' }))
+      .toBeFocused();
+    await expect(currentDialog.getByRole('checkbox')).not.toBeChecked();
+
+    releaseFirstResponse();
+    await firstResponseFinished;
+    await expect(currentDialog.getByText(freshLabel)).toBeVisible();
+    await expect(currentDialog.getByText(staleLabel)).toHaveCount(0);
+    expect(proposalReads).toBe(2);
+    expect(relationCandidateRequests).toBe(2);
+  } finally {
+    releaseFirstResponse();
+  }
+});
+
 test('discards a failed apply retry when the proposal is postponed', async ({ page }, testInfo) => {
   const marker = `apply-postpone-${Date.now()}-${testInfo.retry}`;
   const proposedTitle = `OS과제 E2E ${marker} 제출`;

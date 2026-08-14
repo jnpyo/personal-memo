@@ -387,6 +387,20 @@ X-Analysis-Proposal-Schema-Version: 2
 
 `schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`, `tagCandidates`, `itemCandidates`, `relationCandidates`, `ambiguityReasons`, `providerMetadata`를 포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag나 task를 생성하지 않는다. 현재 Fake analyzer의 필수 provenance 값은 `fake-v6`, `none`, `none`, `none`, `field-policy-v1`이며 `toolCalls`는 `0`이다. 추가 metadata의 `deterministicRulesVersion`은 `korean-rules-v4`다. `HYBRID` proposal에는 서버가 덮어쓴 `cloudTransferMode`, `cloudGatewayVersion`, `cloudProviderId`, `cloudModelVersion`, `cloudConsentPolicyVersion`, `cloudOutcome`, `cloudToolCalls=0`, `cloudMutationCalls=0`, `cloudResolvedFields`, `receivedRoutingPolicyVersion`, `receivedRoutingReasons`가 추가된다. 이 값은 provider error detail이 아니며 같은 run의 server-owned evidence와 일치한다. schema v2의 모든 `dateCandidates[]`에는 proposal-local `candidateId`, 모든 `itemCandidates[]`에는 nullable `dueDateCandidateId`가 필수다. non-null due reference는 같은 proposal의 정밀 date candidate를 가리키는 `TASK`에서만 유효하며, 사용자 승인 전에는 canonical due가 아니다. non-null `itemCandidates[].sourceSpan`은 해당 immutable raw memo revision을 기준으로 하는 비어 있지 않은 UTF-16 code-unit half-open 범위 `[start, end)`다. 서버는 범위가 원문 안에 있고 surrogate pair를 쪼개지 않는지 검증한다. 과거 schema v1 proposal은 recovery와 application 검토를 위해 계속 반환할 수 있다.
 
+### Resolve relation candidates for informed review
+
+```http
+GET /api/v1/analysis-proposals/{proposalId}/relation-review-candidates
+```
+
+서버는 저장된 `relationCandidates` 순서를 그대로 유지한 최대 10개 배열을 반환한다. 각 원소는
+`proposalIndex`, `targetType`, `targetId`, nullable `targetLabel`, `available`만 포함한다. owner의
+현재 `ACTIVE` MEMO는 current raw revision의 최대 240 Unicode-code-point preview, `ACTIVE` TAG는
+canonical name을 label로 쓴다. foreign·missing·trashed/inactive target은 identity 외 정보를
+노출하지 않고 `targetLabel:null`, `available:false`로 표시한다. 응답은 `Cache-Control: no-store`이며
+canonical record를 만들지 않는다. Apply는 이 label 응답을 권한 증명으로 신뢰하지 않고 선택된
+target row를 transaction 안에서 다시 잠그고 검증한다.
+
 ### Recover proposals awaiting review
 
 ```http
@@ -461,6 +475,7 @@ Content-Type: application/json
   ],
   "items": [
     {
+      "proposalCandidateId": "item-1",
       "kind": "TASK",
       "title": "OS 과제 제출",
       "due": {
@@ -471,6 +486,9 @@ Content-Type: application/json
         "timeSpecified": false
       }
     }
+  ],
+  "selectedRelations": [
+    { "proposalIndex": 0 }
   ]
 }
 ```
@@ -481,9 +499,25 @@ name, `Locale.ROOT` lowercase name이 각각 1–100 Unicode code point여야 �
 INVALID_TAG_NAME`이다. `DATE_ONLY`는 `YYYY-MM-DD`, `EXACT_TIME`은 offset을 포함한 ISO 8601
 timestamp여야 한다. 기존 tag도 현재 owner 소유인지 검증한다.
 
+`items[].proposalCandidateId`는 저장된 proposal의 `itemCandidates[].candidateId`를 글자 하나도
+정규화하지 않고 복사한 opaque identity다. 사용자가 직접 추가한 item은 `null`이다.
+`selectedRelations`는 target/type/score를 다시 보내지 않고 잠긴 proposal 배열의 index만 최대 10개
+선택한다. 모든 관계 후보는 기본 미선택이며, 명시적인 `[]`는 관계를 전부 제외한 partial apply다.
+새 PWA는 후보가 없어도 이 빈 배열을 전송한다. 구형 PWA의 field 누락은 proposal 관계가 비어 있을
+때만 호환되며, non-empty proposal에서 누락하면 write 전에 `422 RELATION_SELECTION_REQUIRED`다.
+선택한 relation의 `sourceCandidateId`는 정확히 하나의 적용 item과 매핑되어야 한다.
+relation field와 source candidate identity가 모두 없는 구형 request는 배포 전 Apply request-hash
+shape로 재투영되어 이미 성공한 idempotency key를 그대로 replay할 수 있다. relation-aware request는
+별도 versioned hash material을 사용해 구형 hash와 충돌하지 않는다.
+
 apply body의 `items[].due.timeZone`은 기존 client 계약을 깨지 않기 위한 검증 대상 입력일 뿐 canonical zone 선택 권한이 아니다. 서버는 proposal이 참조하는 immutable memo revision을 잠근 뒤 모든 due의 persisted `source_time_zone`을 그 revision의 `source_time_zone`으로 교체한다. 따라서 다른 기기나 여행 중 복구·승인해도 date-only `OVERDUE` 경계는 원문을 기록한 시간대에서 계산된다.
 
-검증과 application, item, task, tag link 생성은 한 transaction이다. 한 항목이라도 유효하지 않으면 아무 canonical record도 적용하지 않는다. 현재 Apply DTO와 canonical schema는 relation 선택·저장·application 단위 undo를 아직 표현하지 않는다. 따라서 저장된 proposal의 `relationCandidates`가 비어 있지 않으면 관계를 조용히 누락하지 않고 transaction write 전에 `409 PROPOSAL_RELATIONS_UNSUPPORTED`로 fail-closed한다. 이때 application, item, task, tag link, relation은 하나도 생성하지 않으며 원본 memo revision은 그대로 보존한다. 성공 응답:
+검증과 application, item, task, tag link, 선택 relation 생성은 한 transaction이다. 서버는 각 index를
+잠긴 proposal의 full candidate로 해소하고 owner 소유 `ACTIVE` MEMO/TAG target을 종류·UUID 순으로
+잠근다. client가 보낸 target/type/score는 받지 않는다. relation은 선택 item에서 target identity로
+향하는 typed canonical row이며 TAG relation을 `item_tags`로 합치지 않는다. 하나라도 유효하지 않거나
+target이 review 뒤 unavailable해지면 application, item, task, tag link, relation, idempotency response를
+전부 rollback하고 raw memo revision을 보존한다. 성공 응답:
 
 ```json
 {
@@ -492,7 +526,10 @@ apply body의 `items[].due.timeZone`은 기존 client 계약을 깨지 않기 �
 }
 ```
 
-이미 적용되었거나 stale인 proposal, 아직 지원하지 않는 relation 후보가 있는 proposal은 `409`이며, 분석 provider가 이 endpoint를 직접 호출하는 계약은 없다.
+이미 적용되었거나 stale인 proposal은 기존 conflict다. target race는 `409
+RELATION_TARGET_UNAVAILABLE`, index/source/mapping 오류는 relation-specific `422`이며 PWA는 사용자의
+검토 draft를 보존한다. 분석 provider가 이 endpoint를 직접 호출하는 계약은 없다. 저장된 relation은
+아직 current `MEMO_TAG` graph나 neighborhood에 투영하지 않는다.
 
 ### Reject or postpone
 
@@ -531,7 +568,10 @@ Idempotency-Key: undo-018f...
 }
 ```
 
-해당 application에서 파생된 item, task, tag link와 안전하게 제거할 수 있는 신규 tag만 되돌린다. source memo와 모든 raw revision은 보존한다.
+해당 application의 relation을 source item보다 먼저 삭제한 뒤 파생 item, task, tag link와 안전하게
+제거할 수 있는 신규 tag만 되돌린다. 다른 application의 canonical relation이 target으로 참조하는
+tag는 orphan으로 간주하지 않는다. relation target memo/tag, source memo와 모든 raw revision은
+보존한다.
 
 ### Recover latest application
 

@@ -489,6 +489,7 @@ public class AnalysisProposalValidator {
 
   private void validateRelationCandidates(JsonNode candidates, Set<String> itemCandidateIds) {
     requireArray(candidates, "relationCandidates", 0, 10);
+    Set<RelationIdentity> uniqueRelations = new HashSet<>();
     for (JsonNode candidate : candidates) {
       requireObject(candidate, "relationCandidates[]");
       rejectUnknownFields(candidate, "relationCandidates[]", RELATION_CANDIDATE_FIELDS);
@@ -500,14 +501,22 @@ public class AnalysisProposalValidator {
       if (!Set.of("MEMO", "TAG").contains(targetType)) {
         fail("relationCandidates[] contains an unsupported targetType.");
       }
-      parseUuid(requireText(candidate, "targetId", 1, 64), "relationCandidates[].targetId");
+      UUID targetId =
+          parseUuid(requireText(candidate, "targetId", 1, 64), "relationCandidates[].targetId");
       String relationType = requireText(candidate, "relationType", 1, 32);
       if (!Set.of("RELATED_TO", "CONTINUES", "DEPENDS_ON", "REFERENCES").contains(relationType)) {
         fail("relationCandidates[] contains an unsupported relationType.");
       }
+      if (!uniqueRelations.add(
+          new RelationIdentity(sourceCandidateId, targetType, targetId, relationType))) {
+        fail("relationCandidates[] must not contain duplicate directed relations.");
+      }
       requireScore(candidate.path("score"), "relationCandidates[].score");
     }
   }
+
+  private record RelationIdentity(
+      String sourceCandidateId, String targetType, UUID targetId, String relationType) {}
 
   private void validateAmbiguityReasons(JsonNode reasons, String field) {
     requireArray(reasons, field, 0, AMBIGUITY_REASONS.size());

@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import type { Proposal } from '../../shared/api/types';
+import type { Proposal, RelationReviewCandidate } from '../../shared/api/types';
 import { createReviewDraft } from './reviewModel';
-import { ProposalReview } from './ProposalReview';
+import { ProposalReview, shouldFocusStepHeadingOnInitialOpen } from './ProposalReview';
 
 const taskProposal: Proposal = {
   schemaVersion: '1',
@@ -119,16 +119,28 @@ function explicitDateProposal(shared = false): Proposal {
 
 function renderProposal(
   proposal: Proposal,
-  options: { busy?: boolean; retryScope?: string } = {},
+  options: {
+    busy?: boolean;
+    retryScope?: string;
+    relationReviewCandidates?: RelationReviewCandidate[] | null;
+    relationReviewLoading?: boolean;
+    relationReviewError?: string | null;
+  } = {},
 ): string {
   return renderToStaticMarkup(
     <ProposalReview
       review={createReviewDraft('proposal-1', proposal)}
+      relationReviewCandidates={
+        options.relationReviewCandidates === undefined ? [] : options.relationReviewCandidates
+      }
+      relationReviewLoading={options.relationReviewLoading ?? false}
+      relationReviewError={options.relationReviewError ?? null}
       busy={options.busy ?? false}
       onChange={vi.fn()}
       onApply={vi.fn()}
       onPostpone={vi.fn()}
       onReject={vi.fn()}
+      onRetryRelationReview={vi.fn()}
       onTransientDirtyChange={vi.fn()}
       feedback={options.retryScope ? { kind: 'error', message: '적용 실패' } : null}
       retryScope={options.retryScope}
@@ -468,5 +480,89 @@ describe('proposal review dialog', () => {
 
     expect(markup).toContain('적용 실패');
     expect(markup).not.toContain('승인 다시 시도');
+  });
+
+  it('shows informed owner-visible relation labels unchecked and separate from tags', () => {
+    const targetId = '71b13444-0122-42fd-a998-4df258e767af';
+    const relatedProposal: Proposal = {
+      ...taskProposal,
+      relationCandidates: [{
+        sourceCandidateId: 'item-1',
+        targetType: 'TAG',
+        targetId,
+        relationType: 'DEPENDS_ON',
+        score: 0.82,
+      }],
+    };
+    const markup = renderProposal(relatedProposal, {
+      relationReviewCandidates: [{
+        proposalIndex: 0,
+        targetType: 'TAG',
+        targetId,
+        targetLabel: '졸업 프로젝트',
+        available: true,
+      }],
+    });
+
+    expect(markup).toContain('연결 후보');
+    expect(markup).toContain('운영체제 과제 제출');
+    expect(markup).toContain('의존함 ·');
+    expect(markup).toContain('태그 졸업 프로젝트');
+    expect(markup).toContain('체크해도 메모 태그로 추가되지 않습니다.');
+    expect(markup).toContain('type="checkbox"');
+    expect(markup).not.toContain('type="checkbox" checked=""');
+    expect(markup).not.toContain('예, 이대로 적용');
+  });
+
+  it('focuses the current step heading only when the first open goes directly to relation edit', () => {
+    const relatedProposal: Proposal = {
+      ...taskProposal,
+      relationCandidates: [{
+        sourceCandidateId: 'item-1',
+        targetType: 'TAG',
+        targetId: '71b13444-0122-42fd-a998-4df258e767af',
+        relationType: 'DEPENDS_ON',
+        score: 0.82,
+      }],
+    };
+
+    expect(shouldFocusStepHeadingOnInitialOpen(createReviewDraft('concise', taskProposal)))
+      .toBe(false);
+    expect(shouldFocusStepHeadingOnInitialOpen(createReviewDraft('related', relatedProposal)))
+      .toBe(true);
+  });
+
+  it('disables an unavailable relation and exposes an accessible label reload error', () => {
+    const targetId = '0776a1a1-9567-4642-bc71-5e34801472f7';
+    const relatedProposal: Proposal = {
+      ...taskProposal,
+      relationCandidates: [{
+        sourceCandidateId: 'item-1',
+        targetType: 'MEMO',
+        targetId,
+        relationType: 'REFERENCES',
+        score: 0.7,
+      }],
+    };
+    const unavailableMarkup = renderProposal(relatedProposal, {
+      relationReviewCandidates: [{
+        proposalIndex: 0,
+        targetType: 'MEMO',
+        targetId,
+        targetLabel: null,
+        available: false,
+      }],
+    });
+    const errorMarkup = renderProposal(relatedProposal, {
+      relationReviewCandidates: null,
+      relationReviewError: '연결 정보를 확인하지 못했습니다.',
+    });
+
+    expect(unavailableMarkup).toMatch(/type="checkbox"[^>]*disabled=""/);
+    expect(unavailableMarkup).toContain('이 연결 대상은 현재 사용할 수 없습니다.');
+    expect(errorMarkup).toContain('role="alert"');
+    expect(errorMarkup).toContain('연결 대상 다시 불러오기');
+    expect(errorMarkup).toMatch(/수정한 내용 승인·적용<\/button>/);
+    expect(errorMarkup).toMatch(/approve-button" disabled=""/);
   });
 });

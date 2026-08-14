@@ -412,6 +412,9 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         <ProposalReview
           key={workspace.review.proposalId}
           review={workspace.review}
+          relationReviewCandidates={workspace.relationReviewCandidates}
+          relationReviewLoading={workspace.relationReviewLoading}
+          relationReviewError={workspace.relationReviewError}
           busy={interactionLocked}
           onChange={workspace.changeReview}
           onApply={workspace.applyCurrentReview}
@@ -424,6 +427,7 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
             ) workspace.postponeCurrentReview();
           }}
           onReject={workspace.rejectCurrentReview}
+          onRetryRelationReview={workspace.retryRelationReviewCandidates}
           onTransientDirtyChange={setTransientReviewDirty}
           feedback={workspace.feedback?.kind === 'error' ? workspace.feedback : null}
           retryScope={workspace.retryAction?.scope}

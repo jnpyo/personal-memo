@@ -1925,6 +1925,7 @@ main {
 .review-navigation-actions button,
 .review-content-edit-choice,
 .review-type-option,
+.review-dialog .feedback button,
 .review-dialog .review-actions button {
   min-height: 48px;
 }
@@ -2085,6 +2086,108 @@ main {
   margin-left: 2px;
   padding: 0 5px;
   color: #34473c;
+}
+
+.review-card .relation-review {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid #e7e2d8;
+  padding-top: 18px;
+}
+
+.relation-review__status,
+.relation-review__error {
+  margin: 0;
+  border-radius: 12px;
+  background: #f5f2e9;
+  color: #59665e;
+  padding: 12px;
+  line-height: 1.5;
+}
+
+.relation-review__error {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #dfbbb6;
+  background: #fff5f3;
+  color: #8b3e35;
+}
+
+.relation-review__error p {
+  margin: 0;
+}
+
+.relation-review__error button,
+.review-dialog .relation-review__exclude {
+  min-height: 48px;
+}
+
+.relation-review__list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.relation-review__list > li {
+  display: grid;
+  gap: 8px;
+}
+
+.relation-review-option {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  min-height: 64px;
+  border: 1px solid #c7cec5;
+  border-radius: 14px;
+  background: #f8faf8;
+  padding: 10px 12px 10px 4px;
+  cursor: pointer;
+}
+
+.review-dialog .relation-review-option input[type="checkbox"] {
+  justify-self: center;
+  width: 22px;
+  min-height: 22px;
+  height: 22px;
+  margin: 0;
+  accent-color: #244d3b;
+}
+
+.relation-review-option > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.relation-review-option strong,
+.relation-review-option span,
+.relation-review-option small {
+  overflow-wrap: anywhere;
+}
+
+.relation-review-option strong {
+  color: #263a2f;
+  font-size: 0.86rem;
+}
+
+.relation-review-option span {
+  color: #536158;
+  line-height: 1.45;
+}
+
+.relation-review-option small {
+  color: #68746c;
+  line-height: 1.45;
+}
+
+.relation-review-option--disabled {
+  border-color: #ddd8cd;
+  background: #f2f0eb;
+  cursor: not-allowed;
+  opacity: 0.78;
 }
 
 .review-items__empty {

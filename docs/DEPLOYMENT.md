@@ -193,7 +193,7 @@ cache에 저장하지 않으며 응답은 `Cache-Control: no-store`다. Nginx ac
 Exact BODY/TITLE matching은 query 수준에서 PostgreSQL `normalize(..., NFKC)`와
 `lower(... COLLATE "und-x-icu")`를 사용한다. 현재 pinned `postgres:17.6-alpine`의 10,000-memo
 runner는 `und-x-icu` 존재를 확인했지만, 외부 관리형 PostgreSQL이나 image를 바꾸면 배포 전에 아래
-preflight가 `true`인지 확인해야 한다. 이 요구는 V18 migration이나 새 index를 만들지 않는다.
+preflight가 `true`인지 확인해야 한다. 이 요구는 search 전용 migration이나 새 index를 만들지 않는다.
 
 ```sql
 SELECT count(*) = 1

@@ -40,20 +40,29 @@ class DefensiveCollectionRecordsTest {
   @Test
   void validatedApplySnapshotsAndProtectsValidatedCollections() {
     var tag = new AnalysisApplicationValidator.ValidatedTag(null, "portfolio", "portfolio");
-    var item = new AnalysisApplicationValidator.ValidatedItem("TASK", "Polish portfolio", null);
+    var item =
+        new AnalysisApplicationValidator.ValidatedItem(null, "TASK", "Polish portfolio", null);
+    var relation = new AnalysisApplicationValidator.ValidatedSelectedRelation(0);
     List<AnalysisApplicationValidator.ValidatedTag> tags = new ArrayList<>(List.of(tag));
     List<AnalysisApplicationValidator.ValidatedItem> items = new ArrayList<>(List.of(item));
+    List<AnalysisApplicationValidator.ValidatedSelectedRelation> relations =
+        new ArrayList<>(List.of(relation));
 
     var apply =
-        new AnalysisApplicationValidator.ValidatedApply(1, "TASK", "Polish portfolio", tags, items);
+        new AnalysisApplicationValidator.ValidatedApply(
+            1, "TASK", "Polish portfolio", tags, items, relations);
     tags.clear();
     items.clear();
+    relations.clear();
 
     assertThat(apply.selectedTags()).containsExactly(tag);
     assertThat(apply.items()).containsExactly(item);
+    assertThat(apply.selectedRelations()).containsExactly(relation);
     assertThatThrownBy(() -> apply.selectedTags().clear())
         .isInstanceOf(UnsupportedOperationException.class);
     assertThatThrownBy(() -> apply.items().clear())
+        .isInstanceOf(UnsupportedOperationException.class);
+    assertThatThrownBy(() -> apply.selectedRelations().clear())
         .isInstanceOf(UnsupportedOperationException.class);
   }
 

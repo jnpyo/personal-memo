@@ -168,6 +168,16 @@ immutable memo revision's `source_time_zone` before task persistence. This keeps
 semantics tied to capture context even when review happens later on another device or in another
 zone.
 
+Relation application follows the same untrusted-proposal boundary. A no-store owner-scoped read
+resolves only bounded display labels for the stored relation array; it does not grant authority.
+The mutation accepts proposal array indexes rather than client-supplied target/type/score values,
+maps each exact opaque source candidate identity to one selected item, locks every owner-owned
+ACTIVE target in deterministic order, and writes directed item-to-MEMO/TAG rows in the application
+transaction. An explicit empty relation selection is valid partial application. A legacy omission
+is accepted only for a proposal with no relation candidates. Undo deletes the application's
+relation rows before source items and never deletes target memos or tags still referenced by another
+application.
+
 ## Cloud Agent orchestration
 
 The public cloud boundary remains one synchronous request backed by an internal durable state
@@ -342,8 +352,8 @@ Current exact lexical slice:
 Measured follow-up only:
 
 - the explicit worst-case all-match 10,000-memo hot-plan observation kept every individual page or
-  digest plan below 1.1 seconds with no shared read/temp I/O and showed no reason to add V18; this is
-  not endpoint latency or an SLA
+  digest plan below 1.1 seconds with no shared read/temp I/O and showed no reason to add a
+  search-specific migration or index; this is not endpoint latency or an SLA
 - `pg_trgm` or another fuzzy index only when later representative data/concurrency measurements
   demonstrate a need or the product explicitly adds fuzzy ranking
 - related-memo and versioned vector/embedding retrieval after separate product and evaluation gates
@@ -356,16 +366,24 @@ requirements justify it.
 
 The graph API projects domain data into view DTOs.
 
+V18's confirmed item-scoped typed relations are canonical data but are not yet graph input. The
+current graph exposes only `MEMO_TAG` edges derived from `item_tags`. Promoting an ITEM source to its
+memo, merging TAG-target relations with membership edges, mapping four directed relation types, and
+deduplicating multiple application provenances all require an explicit edge-semantics and budgeting
+decision. Until then relation apply/undo cannot change graph nodes, edges, neighborhoods, or
+`projectionVersion`.
+
 MVP visible node kinds:
 
 - `MEMO`
 - `TAG`
 
-MVP edge kinds:
+Current MVP edge kinds:
 
 - `MEMO_TAG`
-- optional confirmed `MEMO_RELATED_TO_MEMO`
-- optional confirmed `TAG_RELATED_TO_TAG`
+
+Deferred graph edge candidates, pending the explicit mapping and budgeting decision above, include
+`MEMO_RELATED_TO_MEMO` and `TAG_RELATED_TO_TAG`; they are not emitted by the current API.
 
 Task/event/information type is metadata and styling on a memo, not a universal type node. This prevents giant `TASK` and `INFORMATION` hubs.
 

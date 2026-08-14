@@ -55,6 +55,10 @@ operational approval. Resolved decisions are not implementation prompts.
   icons rather than global hub nodes.
 - Existing tags are selectable suggestions; new names remain proposals requiring confirmation.
 - Automatic tag merge/split, node compression, and taxonomy migrations remain deferred.
+- V18 stores confirmed ITEM-to-MEMO/TAG directed relations separately from tag membership. Whether an
+  ITEM source is promoted to its memo, how the four relation types map to graph edges, how TAG-target
+  relations differ visually from `MEMO_TAG`, and how multiple application provenances are budgeted or
+  deduplicated remain explicit graph product decisions; current graph projection ignores these rows.
 - The first user-facing search slice is exact and owner-scoped: current raw body/latest valid applied
   title use normalized literal substring, active canonical tag/alias uses exact normalized equality,
   and a result opens current raw detail without changing the graph. Fuzzy/semantic ranking and

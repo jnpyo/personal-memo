@@ -362,6 +362,12 @@ is not a count of currently retained accepts. The independent outcome and applic
 also do not reveal their intersection. Product conclusions still require enough owner-authorized
 cases and a separately reviewed blind evaluation set.
 
+V18 makes explicitly selected relation candidates canonical and reversible, but it does not change
+the evaluation dataset, Fake output, or `review-default-v3`. That comparison policy has no adjudicated
+relation-selection target, so any proposal with a non-empty `relationCandidates` array remains
+`UNCLASSIFIABLE` even after a valid application. This means “outside the current comparison policy,”
+not “outside the Apply contract,” and it must not be counted as relation accuracy.
+
 ## Gate before a real LLM
 
 A real provider remains blocked until all of the following are true:

@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { DateCandidate, ItemKind, TagCandidate } from '../../shared/api/types';
+import type {
+  DateCandidate,
+  ItemKind,
+  RelationReviewCandidate,
+  TagCandidate,
+} from '../../shared/api/types';
 import { FeedbackBanner, type Feedback } from '../../shared/ui/FeedbackBanner';
 import {
   addManualItem,
@@ -8,11 +13,14 @@ import {
   changeItemKind,
   changeItemTitle,
   changeReviewTitle,
+  changeRelationSelection,
   changeSelectedType,
   createCustomDateOnly,
   isItemKind,
   isValidDue,
   isValidReviewDraft,
+  isRelationSelectionReady,
+  isRelationSourceApplied,
   ITEM_KINDS,
   preferredItemKind,
   removeReviewItem,
@@ -24,11 +32,15 @@ import {
 
 type Props = {
   review: ReviewDraft;
+  relationReviewCandidates: RelationReviewCandidate[] | null;
+  relationReviewLoading: boolean;
+  relationReviewError: string | null;
   busy: boolean;
   onChange: (review: ReviewDraft) => void;
   onApply: () => void;
   onPostpone: () => void;
   onReject: () => void;
+  onRetryRelationReview: () => void;
   onTransientDirtyChange: (dirty: boolean) => void;
   feedback: Feedback | null;
   retryScope?: string;
@@ -62,6 +74,18 @@ const DATE_PRECISION_LABEL: Record<DateCandidate['precision'], string> = {
   RELATIVE_EXACT: '계산된 시각',
   APPROXIMATE: '대략적인 날짜',
   UNKNOWN: '날짜 미확정',
+};
+
+const RELATION_TYPE_LABEL: Record<ReviewDraft['proposal']['relationCandidates'][number]['relationType'], string> = {
+  RELATED_TO: '관련 있음',
+  CONTINUES: '이어짐',
+  DEPENDS_ON: '의존함',
+  REFERENCES: '참조함',
+};
+
+const RELATION_TARGET_TYPE_LABEL: Record<RelationReviewCandidate['targetType'], string> = {
+  MEMO: '메모',
+  TAG: '태그',
 };
 
 function dateCandidateLabel(candidate: DateCandidate): string {
@@ -182,12 +206,17 @@ function requiresDetailedCloudReview(review: ReviewDraft): boolean {
 }
 
 function initialStep(review: ReviewDraft): MainReviewStep {
+  if (review.proposal.relationCandidates.length > 0) return 'EDIT';
   return suggestedType(review) &&
     isValidReviewDraft(review) &&
     !requiresExplicitDateMapping(review) &&
     !requiresDetailedCloudReview(review)
     ? 'CONFIRM'
     : 'ALTERNATIVES';
+}
+
+export function shouldFocusStepHeadingOnInitialOpen(review: ReviewDraft): boolean {
+  return initialStep(review) === 'EDIT';
 }
 
 function orderedTypeOptions(review: ReviewDraft): ItemKind[] {
@@ -213,11 +242,15 @@ function dueSummary(due: DateCandidate | null): string | null {
 
 export function ProposalReview({
   review,
+  relationReviewCandidates,
+  relationReviewLoading,
+  relationReviewError,
   busy,
   onChange,
   onApply,
   onPostpone,
   onReject,
+  onRetryRelationReview,
   onTransientDirtyChange,
   feedback,
   retryScope,
@@ -235,7 +268,7 @@ export function ProposalReview({
   const resumeButtonRef = useRef<HTMLButtonElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
-  const focusStepHeading = useRef(false);
+  const focusStepHeading = useRef(shouldFocusStepHeadingOnInitialOpen(review));
   const scrollRef = useRef<HTMLElement>(null);
   const representativeTypeRef = useRef<HTMLSelectElement>(null);
   const itemTitleRefs = useRef<Array<HTMLInputElement | null>>([]);
@@ -256,7 +289,8 @@ export function ProposalReview({
   const primaryType = suggestedType(review);
   const isValid = isValidReviewDraft(review);
   const hasPendingTag = newTag.trim().length > 0;
-  const canApply = isValid && !hasPendingTag;
+  const relationSelectionReady = isRelationSelectionReady(review, relationReviewCandidates);
+  const canApply = isValid && !hasPendingTag && relationSelectionReady;
   const [retryOperation, retryProposalId] = retryScope?.split(':') ?? [];
   const retryMatchesReview = retryProposalId === review.proposalId;
   const canShowRetry = !busy && retryMatchesReview && (
@@ -599,6 +633,7 @@ export function ProposalReview({
               <div className="review-navigation-actions">
                 {primaryType &&
                   !draftChanged &&
+                  review.proposal.relationCandidates.length === 0 &&
                   isValidReviewDraft(review) &&
                   !requiresExplicitDateMapping(review) &&
                   !requiresDetailedCloudReview(review) && (
@@ -857,6 +892,108 @@ export function ProposalReview({
                   </span>
                 </div>
               </fieldset>
+
+              {review.proposal.relationCandidates.length > 0 && (
+                <fieldset
+                  className="relation-review"
+                  aria-describedby="relation-review-help"
+                  disabled={busy}
+                >
+                  <legend>연결 후보</legend>
+                  <p id="relation-review-help" className="field-help">
+                    기본값은 모두 선택 안 함입니다. 필요한 연결만 직접 체크해 주세요. 연결 후보는
+                    태그 제안과 별도이며, 체크해도 메모 태그로 추가되지 않습니다.
+                  </p>
+
+                  {relationReviewLoading && (
+                    <p className="relation-review__status" role="status">
+                      내 메모와 태그에서 연결 대상 이름을 확인하고 있습니다…
+                    </p>
+                  )}
+
+                  {relationReviewError && (
+                    <div className="relation-review__error" role="alert">
+                      <p>{relationReviewError}</p>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={busy}
+                        onClick={onRetryRelationReview}
+                      >
+                        연결 대상 다시 불러오기
+                      </button>
+                    </div>
+                  )}
+
+                  {relationReviewCandidates && (
+                    <ul className="relation-review__list">
+                      {review.proposal.relationCandidates.map((relation, proposalIndex) => {
+                        const candidate = relationReviewCandidates[proposalIndex];
+                        const sourceApplied = isRelationSourceApplied(review, proposalIndex);
+                        const sourceItem = review.items.find(
+                          (item) => item.proposalCandidateId === relation.sourceCandidateId,
+                        );
+                        const proposedSource = review.proposal.itemCandidates.find(
+                          (item) => item.candidateId === relation.sourceCandidateId,
+                        );
+                        const selected = review.selectedRelationIndexes.includes(proposalIndex);
+                        const available = candidate?.available === true;
+                        const helpId = `relation-candidate-${proposalIndex}-help`;
+                        return (
+                          <li key={`${relation.targetType}-${relation.targetId}-${proposalIndex}`}>
+                            <label
+                              className={`relation-review-option${
+                                !available || !sourceApplied ? ' relation-review-option--disabled' : ''
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                disabled={busy || !available || !sourceApplied}
+                                aria-describedby={helpId}
+                                onChange={(event) =>
+                                  changeDraft(changeRelationSelection(
+                                    review,
+                                    proposalIndex,
+                                    event.target.checked,
+                                  ))
+                                }
+                              />
+                              <span>
+                                <strong>{sourceItem?.title ?? proposedSource?.title ?? '출발 항목 확인 필요'}</strong>
+                                <span>
+                                  {RELATION_TYPE_LABEL[relation.relationType]} ·{' '}
+                                  {RELATION_TARGET_TYPE_LABEL[relation.targetType]}{' '}
+                                  {candidate?.targetLabel ?? '현재 이름을 확인할 수 없음'}
+                                </span>
+                                <small id={helpId}>
+                                  {!sourceApplied
+                                    ? '출발 항목이 생성 목록에서 제외되어 선택할 수 없습니다.'
+                                    : !available
+                                      ? '이 연결 대상은 현재 사용할 수 없습니다.'
+                                      : '체크한 경우에만 승인 요청에 포함됩니다.'}
+                                </small>
+                              </span>
+                            </label>
+                            {selected && (!available || !sourceApplied) && (
+                              <button
+                                type="button"
+                                className="secondary-button relation-review__exclude"
+                                disabled={busy}
+                                onClick={() =>
+                                  changeDraft(changeRelationSelection(review, proposalIndex, false))
+                                }
+                              >
+                                이 연결 제외
+                              </button>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </fieldset>
+              )}
 
               <fieldset disabled={busy}>
                 <legend>태그 제안</legend>

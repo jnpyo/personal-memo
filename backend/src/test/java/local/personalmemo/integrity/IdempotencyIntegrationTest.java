@@ -8,6 +8,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -22,6 +26,7 @@ import local.personalmemo.analysis.domain.CloudAnalysisResult;
 import local.personalmemo.analysis.domain.CloudGatewayBinding;
 import local.personalmemo.analysis.domain.CloudGatewayDescriptor;
 import local.personalmemo.analysis.domain.CloudTransferMode;
+import local.personalmemo.common.security.Hashing;
 import local.personalmemo.support.PostgresIntegration;
 import local.personalmemo.support.PostgresIntegrationTestSupport;
 import org.junit.jupiter.api.Test;
@@ -39,6 +44,82 @@ class IdempotencyIntegrationTest extends PostgresIntegrationTestSupport {
           CloudTransferMode.NO_NETWORK);
 
   @MockitoBean private CloudAnalysisGateway cloudGateway;
+
+  @Test
+  void replaysFrozenPreRelationApplyHashAndStillRejectsChangedLegacyBody() throws Exception {
+    UUID proposalId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    UUID applicationId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+    String legacyJson =
+        "{\"proposalId\":\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\",\"request\":{"
+            + "\"expectedMemoRevision\":1,\"selectedType\":\"TASK\","
+            + "\"title\":\"Legacy apply\",\"selectedTags\":[{"
+            + "\"existingTagId\":\"10000000-0000-0000-0000-000000000001\","
+            + "\"newCanonicalName\":null}],\"items\":[{\"kind\":\"TASK\","
+            + "\"title\":\"Legacy apply\",\"due\":null}]}}";
+    String frozenHash = "d503a796cae5851e63d0c4988e4cb7835b39eccc1d94e94bbda4d897b7895999";
+    assertThat(Hashing.sha256(legacyJson)).isEqualTo(frozenHash);
+    db.sql(
+            """
+            insert into idempotency_records(
+              owner_id, operation, idempotency_key, request_hash, resource_id, response_json,
+              created_at
+            ) values (
+              :ownerId, 'ANALYSIS_APPLY', :key, :requestHash, :applicationId,
+              cast(:responseJson as jsonb), :createdAt
+            )
+            """)
+        .param("ownerId", OWNER_ID)
+        .param("key", "pre-v18-apply-key")
+        .param("requestHash", frozenHash)
+        .param("applicationId", applicationId)
+        .param(
+            "responseJson",
+            "{\"applicationId\":\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\",\"status\":\"APPLIED\"}")
+        .param("createdAt", Timestamp.from(Instant.parse("2026-08-05T02:00:00Z")))
+        .update();
+
+    var replay = applyProposal(proposalId, "pre-v18-apply-key", 1, "Legacy apply", null);
+
+    assertThat(replay.getResponse().getStatus()).isEqualTo(200);
+    assertThat(response(replay).path("applicationId").asText()).isEqualTo(applicationId.toString());
+
+    var changed = applyProposal(proposalId, "pre-v18-apply-key", 1, "Changed legacy apply", null);
+    assertIdempotencyConflict(changed);
+  }
+
+  @Test
+  void malformedApplyArraysRemainValidationErrorsInsteadOfHashingFailures() throws Exception {
+    UUID proposalId = UUID.randomUUID();
+    Map<String, Object> item = new LinkedHashMap<>();
+    item.put("kind", "TASK");
+    item.put("title", "Validation boundary");
+    item.put("due", null);
+    Map<String, Object> valid = new LinkedHashMap<>();
+    valid.put("expectedMemoRevision", 1);
+    valid.put("selectedType", "TASK");
+    valid.put("title", "Validation boundary");
+    valid.put("selectedTags", List.of(Map.of("existingTagId", OPERATING_SYSTEMS_TAG_ID)));
+    valid.put("items", List.of(item));
+    valid.put("selectedRelations", List.of());
+
+    Map<String, Object> nullItems = new LinkedHashMap<>(valid);
+    nullItems.put("items", null);
+    Map<String, Object> nullItemElement = new LinkedHashMap<>(valid);
+    nullItemElement.put("items", Collections.singletonList(null));
+    Map<String, Object> nullTagElement = new LinkedHashMap<>(valid);
+    nullTagElement.put("selectedTags", Collections.singletonList(null));
+    Map<String, Object> nullRelationElement = new LinkedHashMap<>(valid);
+    nullRelationElement.put("selectedRelations", Collections.singletonList(null));
+
+    List<Map<String, Object>> invalidBodies =
+        List.of(nullItems, nullItemElement, nullTagElement, nullRelationElement);
+    for (int index = 0; index < invalidBodies.size(); index++) {
+      var result =
+          applyProposal(proposalId, "invalid-apply-array-" + index, invalidBodies.get(index));
+      assertThat(result.getResponse().getStatus()).isEqualTo(422);
+      assertThat(response(result).path("code").asText()).isEqualTo("VALIDATION_FAILED");
+    }
+  }
 
   @Test
   void concurrentAnalysisStartWithOneKeyProducesOneRunProposalAndGatewayInvocation()

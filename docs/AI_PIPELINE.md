@@ -519,22 +519,28 @@ The review UI sends selected candidate values, not the raw model response as an 
 The backend:
 
 1. re-checks owner and memo revision;
-2. validates selected tags and dates;
+2. validates selected tags, items, dates, and proposal-index-only relation selections;
 3. replaces each validated due `timeZone` compatibility input with the locked immutable memo
    revision's source time zone before canonical task persistence;
-4. fails closed with `PROPOSAL_RELATIONS_UNSUPPORTED` when `relationCandidates` is non-empty,
-   because explicit relation selection, canonical relation persistence, and relation undo are not
-   implemented yet;
-5. creates the application event only after that boundary passes;
-6. writes the currently supported derived items, task records, tags, and tag links in one
-   transaction;
-7. records provenance for each derived value;
-8. commits the transaction; after success, the client refetches the task and graph projections.
+4. resolves every selected index from the locked stored `relationCandidates` array, requires the
+   exact `sourceCandidateId` to map to one applied item, and ignores no selected candidate;
+5. locks each owner-owned `ACTIVE` MEMO/TAG target in deterministic order and fails closed if the
+   review label became stale;
+6. creates the application event and writes items, task records, tags, tag links, and confirmed
+   item-scoped typed relations in one transaction;
+7. records the resolved relation execution fields and source-item mapping in `selection_json`, while
+   score remains provenance only in the immutable proposal rather than execution authority;
+8. commits the transaction; after success, the client refetches the task and current MEMO_TAG graph
+   projections.
 
-The fail-closed relation boundary prevents a future analyzer from making a run appear `APPLIED`
-while silently dropping proposed relationships. It creates no partial canonical records and does not
-alter the raw memo. Relation application remains a separate vertical slice with its own selection
-contract, persistence, ownership constraints, and application-scoped undo.
+The request contains only `proposalIndex`, never a client-asserted target/type/score. An explicit
+empty selection applies the other reviewed fields while rejecting all relation candidates; omission
+is accepted only for an older client when the proposal relation array is already empty. Undo deletes
+the application's relation rows before their source items and preserves target memo/tag identities.
+These canonical item-to-MEMO/TAG relations are intentionally absent from the current graph: mapping
+four directed relation types onto MEMO/TAG graph edges is a separate product decision. Fake output,
+evaluation fixtures, and `review-default-v3` remain unchanged; any non-empty relation proposal stays
+`UNCLASSIFIABLE` in review-outcome evidence.
 
 ## Read-only review outcome evidence
 
@@ -559,10 +565,12 @@ type-incompatible v2 date mappings require user resolution rather than a guessed
 `EXACT` means only that the user applied the default selection without a semantic change. It is not
 an AI correctness label. `CORRECTED` records changed type/title/tag/item/due fields;
 `USER_RESOLVED` records a proposal that lacked a directly applicable default, such as a tied or
-`UNKNOWN` type or no item; `UNCLASSIFIABLE` is the fail-closed bucket for unsupported relations,
-unknown historical shapes, inconsistent revisions, or other comparisons the current policy cannot
-prove. Reject and postpone state also must not be treated as corrected gold labels: rejected runs do
-not store a corrected target, and a later transition overwrites the current `POSTPONED` state.
+`UNKNOWN` type or no item; `UNCLASSIFIABLE` is the fail-closed bucket for relation-bearing proposals
+outside the current comparison policy, unknown historical shapes, inconsistent revisions, or other
+comparisons the policy cannot prove. Relation Apply is supported, but `review-default-v3` has no
+adjudicated relation-selection target. Reject and postpone state also must not be treated as corrected
+gold labels: rejected runs do not store a corrected target, and a later transition overwrites the
+current `POSTPONED` state.
 
 The server reads a 1,001st row only to enforce a hard 1,000-proposal cardinality bound. It returns an
 explicit error instead of publishing a silent partial aggregate. This row cap is not a serialized-byte

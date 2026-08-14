@@ -39,6 +39,8 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 - The system suggests type, tags, dates, actions, and relations.
 - Ambiguous fields are highlighted independently.
 - The user can accept, edit, reject, or postpone analysis.
+- Relation proposals show only owner-visible target labels, start unchecked, and become canonical
+  only for the explicitly selected source-item/target pairs; unavailable targets fail closed.
 - All applied analysis can be undone without deleting the original.
 
 ### Graph-first retrieval

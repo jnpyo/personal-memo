@@ -13,6 +13,7 @@ import java.util.UUID;
 import local.personalmemo.analysis.api.AnalysisDtos.Apply;
 import local.personalmemo.analysis.api.AnalysisDtos.Due;
 import local.personalmemo.analysis.api.AnalysisDtos.Item;
+import local.personalmemo.analysis.api.AnalysisDtos.SelectedRelation;
 import local.personalmemo.common.error.DomainException;
 import local.personalmemo.taxonomy.domain.TagNormalizer;
 import org.springframework.stereotype.Component;
@@ -36,6 +37,7 @@ public class AnalysisApplicationValidator {
 
     List<ValidatedTag> tags = validateTags(request);
     List<ValidatedItem> items = validateItems(request);
+    List<ValidatedSelectedRelation> selectedRelations = validateSelectedRelations(request);
     boolean selectedTypeIsRepresented =
         items.stream().anyMatch(item -> item.kind().equals(selectedType));
     if (!selectedTypeIsRepresented) {
@@ -43,7 +45,8 @@ public class AnalysisApplicationValidator {
           "SELECTED_TYPE_NOT_APPLIED", "selectedType must match at least one confirmed item kind.");
     }
 
-    return new ValidatedApply(request.expectedMemoRevision(), selectedType, title, tags, items);
+    return new ValidatedApply(
+        request.expectedMemoRevision(), selectedType, title, tags, items, selectedRelations);
   }
 
   public ValidatedApply canonicalizeDueTimeZone(ValidatedApply selection, String sourceTimeZone) {
@@ -57,6 +60,7 @@ public class AnalysisApplicationValidator {
                     return item;
                   }
                   return new ValidatedItem(
+                      item.proposalCandidateId(),
                       item.kind(),
                       item.title(),
                       new ValidatedDue(
@@ -74,7 +78,8 @@ public class AnalysisApplicationValidator {
         selection.selectedType(),
         selection.title(),
         selection.selectedTags(),
-        items);
+        items,
+        selection.selectedRelations());
   }
 
   private List<ValidatedTag> validateTags(Apply request) {
@@ -110,16 +115,45 @@ public class AnalysisApplicationValidator {
 
   private List<ValidatedItem> validateItems(Apply request) {
     List<ValidatedItem> items = new ArrayList<>();
+    Set<String> proposalCandidateIds = new HashSet<>();
     for (Item item : request.items()) {
+      String proposalCandidateId = optionalCandidateId(item.proposalCandidateId());
+      if (proposalCandidateId != null && !proposalCandidateIds.add(proposalCandidateId)) {
+        throw invalid(
+            "INVALID_RELATION_SELECTION",
+            "Each proposalCandidateId can map to at most one applied item.");
+      }
       String kind = requireItemKind(item.kind(), "items.kind");
       String itemTitle = boundedText(item.title(), 200, "items.title");
       ValidatedDue due = validateDue(item.due());
       if (due != null && !"TASK".equals(kind)) {
         throw invalid("DUE_REQUIRES_TASK", "Only a TASK item may contain a due value.");
       }
-      items.add(new ValidatedItem(kind, itemTitle, due));
+      items.add(new ValidatedItem(proposalCandidateId, kind, itemTitle, due));
     }
     return List.copyOf(items);
+  }
+
+  private List<ValidatedSelectedRelation> validateSelectedRelations(Apply request) {
+    if (request.selectedRelations() == null) {
+      return null;
+    }
+    List<ValidatedSelectedRelation> relations = new ArrayList<>();
+    Set<Integer> proposalIndexes = new HashSet<>();
+    for (SelectedRelation relation : request.selectedRelations()) {
+      if (relation == null || relation.proposalIndex() == null) {
+        throw invalid(
+            "INVALID_RELATION_SELECTION", "Each selected relation requires a proposalIndex.");
+      }
+      int proposalIndex = relation.proposalIndex();
+      if (proposalIndex < 0 || proposalIndex > 9 || !proposalIndexes.add(proposalIndex)) {
+        throw invalid(
+            "INVALID_RELATION_SELECTION",
+            "Each proposal relation index must be unique and between 0 and 9.");
+      }
+      relations.add(new ValidatedSelectedRelation(proposalIndex));
+    }
+    return List.copyOf(relations);
   }
 
   private ValidatedDue validateDue(Due due) {
@@ -211,6 +245,37 @@ public class AnalysisApplicationValidator {
     return value;
   }
 
+  private String optionalCandidateId(String raw) {
+    if (raw == null) {
+      return null;
+    }
+    int codePointCount = raw.codePointCount(0, raw.length());
+    if (raw.isBlank()
+        || codePointCount > 100
+        || raw.indexOf('\0') >= 0
+        || hasUnpairedSurrogate(raw)) {
+      throw invalid(
+          "INVALID_RELATION_SELECTION",
+          "proposalCandidateId must be a non-blank, well-formed identity of at most 100 Unicode code points.");
+    }
+    return raw;
+  }
+
+  private boolean hasUnpairedSurrogate(String value) {
+    for (int index = 0; index < value.length(); index++) {
+      char current = value.charAt(index);
+      if (Character.isHighSurrogate(current)) {
+        if (index + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(index + 1))) {
+          return true;
+        }
+        index++;
+      } else if (Character.isLowSurrogate(current)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private DomainException invalid(String code, String message) {
     return DomainException.invalid(code, message);
   }
@@ -220,16 +285,21 @@ public class AnalysisApplicationValidator {
       String selectedType,
       String title,
       List<ValidatedTag> selectedTags,
-      List<ValidatedItem> items) {
+      List<ValidatedItem> items,
+      List<ValidatedSelectedRelation> selectedRelations) {
     public ValidatedApply {
       selectedTags = List.copyOf(selectedTags);
       items = List.copyOf(items);
+      selectedRelations = selectedRelations == null ? null : List.copyOf(selectedRelations);
     }
   }
 
   public record ValidatedTag(UUID existingTagId, String newCanonicalName, String normalizedName) {}
 
-  public record ValidatedItem(String kind, String title, ValidatedDue due) {}
+  public record ValidatedItem(
+      String proposalCandidateId, String kind, String title, ValidatedDue due) {}
+
+  public record ValidatedSelectedRelation(int proposalIndex) {}
 
   public record ValidatedDue(
       String surfaceText,

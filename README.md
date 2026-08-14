@@ -62,6 +62,8 @@
 - 메모 캡처, 연결/실패/재시도 상태, 모바일 제안 팝업의 예/아니오 승인과 필요할 때만 여는 제목·유형·날짜·태그 수정
 - 제안·새 태그·원문 revision 편집을 아우르는 dirty-state 보호, 미확정 교차 탭 로그아웃 중 mounted-state 보존, 사용자 선택형 PWA 업데이트
 - `UNKNOWN` 유형의 명시적 사용자 선택, 수동 항목 추가·제거와 부분 적용
+- relation 후보의 owner-visible label, 기본 미선택 체크, unavailable 상태와 재시도, exact source-item
+  mapping을 포함한 informed review; 선택 관계는 Apply/undo에 포함하되 현재 그래프에는 주입하지 않음
 - 활성/휴지통 메모 목록, 기록 시각·시간대를 포함한 새 revision 편집, 휴지통 이동·복원, 기존 메모 재분석
 - 제안 승인·보류·거절과 마지막 application 되돌리기
 - 새로고침 뒤 마지막 application과 검토 중·보류한 제안 복구
@@ -93,7 +95,9 @@
 - 직렬화된 proposal 64 KiB, `providerMetadata` 8 KiB 상한으로 분석 결과 저장 크기 제한
 - authoritative routing reason을 전달하는 provider-independent cloud request, typed success/failure 결과와 no-tool `NO_NETWORK` Fake adapter
 - owner-scoped memo/analysis/task/graph/search API, no-store raw/detail/search reads, idempotent memo pin, 승인
-  transaction 안의 tag application
+  transaction 안의 tag 및 item-scoped typed relation application
+- 저장된 relation 후보의 bounded owner-visible label, 기본 미선택 review, index-only Apply,
+  owner/ACTIVE target 재잠금과 application-scoped undo; V18 relation은 현재 MEMO_TAG graph에 미투영
 - 메모 lifecycle API와 owner-scoped 보류 제안/마지막 application 복구 API
 - revision 경쟁 검증, transactional apply/undo, tag 정규화와 provenance
 - HTTP DTO·domain snapshot과 JDBC persistence mapping의 분리
@@ -113,9 +117,12 @@
 - V15 fresh/V14-upgrade migration, durable prepare·binding mismatch·bounded timeout·caller-driven 및 운영 scheduler recovery·fence·stale finalize·owner 격리 통합 검증
 - V16의 V15 `none/0/NULL/NULL` 보존, exact lookup owner 격리·결정성·unique resolution, strict context codec와 PREPARED/RUNNING/FINALIZED raw lifecycle 통합 검증
 - V17의 과거 dispatch `attempt_history_version=none`/0-row 보존, fence별 최대-attempt ledger, executor 거절·provider result·timeout/interrupt의 시작 관측·process-loss·늦은 fence 분리와 evidence nullability 통합 검증
+- V18 relation proposal source mapping, owner/ACTIVE target race, semantic duplicate/rollback/undo,
+  target-tag orphan protection와 no-store label privacy 통합 검증
+- V18 relation table을 current `MEMO_TAG` graph query input에 포함하지 않는 구조적 비투영 경계
 - 명시적 opt-in 10,000-memo worst-case all-match PostgreSQL search plan runner와 bounded JSON report.
   한 hot-buffer 실행은 네 page/digest plan이 각각 1.1초 미만이고 shared read/temp I/O가 0임을
-  관측했지만 endpoint latency나 SLA로 사용하지 않으며, 현재 근거로 search V18을 추가하지 않음
+  관측했지만 endpoint latency나 SLA로 사용하지 않으며, search 전용 migration/index는 추가하지 않음
 - Playwright의 모바일 viewport에서 보류·새로고침·승인·그래프 node 상세·full-corpus off-home
   탐색·exact lexical search·stale restart·off-home current detail·pin·focus 복원·되돌리기와
   설치 가능한 오프라인 app shell 검증
@@ -340,6 +347,12 @@ docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.p
 local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 적용되며 잠금 중 추가 시도로 만료가 연장되지 않습니다. 만료 뒤 정상 로그인하면 실패 기록을 초기화합니다. V13은 과거 boolean-only cloud consent를 모두 폐기하고, true consent가 owner row의 정확한 policy version과 승인 시각을 함께 갖도록 강제합니다. V14는 내부 authorization/grant/token snapshot을 도입했고, V15는 `analysis_runs`의 `QUEUED`/`PENDING` row와 `analysis_run_dispatches`의 검증된 local proposal·reserved proposal ID·idempotency/request hash·immutable executor binding·deadline을 gateway 호출 전에 함께 commit합니다. V16은 owner의 `ACTIVE` tag/alias에 대한 exact equality 결과로 만든 deterministic K=8 context를 같은 dispatch에 raw/hash/version/count로 저장합니다. 기존 V15 dispatch는 과거 문맥을 지어내지 않고 `none/0/NULL/NULL`로 남습니다. V17은 새 dispatch를 `gateway-attempt-v1`로 표시하고 claim한 각 fence마다 owner-scoped ledger row를 `max_attempts` 상한 안에서 하나씩 만듭니다. 과거 dispatch는 `attempt_history_version=none`으로 남고 attempt row를 backfill하지 않습니다. gateway result가 반환되면 execution은 `STARTED`다. executor가 작업을 받지 못하면 local `EXECUTOR_REJECTED`, execution `NOT_STARTED`, remote result `UNKNOWN`으로 남겨 gateway가 실제로 반환한 `UNAVAILABLE` result와 구분합니다. 제출 뒤 timeout·caller interruption·unexpected local termination이 발생하면 시작이 관측된 경우 `STARTED`, 관측되지 않은 경우 `UNKNOWN`이며 후자를 `NOT_STARTED`로 단정하지 않습니다. 완료·timeout·caller interruption처럼 프로세스가 종료를 관측한 시도는 `System.nanoTime` 기반 local elapsed millisecond를 저장하지만, process loss는 duration과 remote result를 `UNKNOWN`/null로 남깁니다. local termination을 관측하고 descriptor가 model version `none`의 `NO_NETWORK` Fake임을 확인한 경우 execution uncertainty와 무관하게 model-token/cost가 `NOT_APPLICABLE`/null입니다. 미래 real-model은 확정적 `NOT_STARTED`일 때만 `NOT_APPLICABLE`/null이고, 실행 또는 remote completion이 불확실하면 `UNKNOWN`/null이며, 관측된 result도 usage/cost가 gateway 계약에 연결되기 전까지 `NOT_REPORTED`/null입니다. `REPORTED` 숫자 저장 shape만 DB가 검증하며 미확인 값을 0으로 지어내지 않습니다. caller는 lease와 fence를 claim한 뒤 DB transaction 밖에서 bounded gateway 호출을 수행하며, 같은 key/body retry와 운영 scheduler recovery는 tag를 다시 조회하지 않고 저장된 context와 같은 provider token을 사용합니다. 운영 프로필에서는 bounded scheduler가 30초 fixed delay로 DB에서 `PREPARED` 또는 lease가 만료된 `RUNNING`을 최대 25건 고르고, row가 가리키는 owner와 기존 raw idempotency key에 같은 owner+operation+key advisory lock을 적용해 동일 lifecycle을 실행합니다. live lease는 호출하지 않고 다음 주기로 넘기며, process 재시작 뒤에도 남은 dispatch가 같은 상한 안에서 다시 선택됩니다. finalize는 memo owner·활성 상태·revision을 다시 잠가 확인하고, 변경되었으면 결과를 `STALE`로 확정한 transaction을 commit한 뒤 caller에게 `409 STALE_MEMO_REVISION`을 반환합니다. 이때 prepared local proposal과 retrieval-context raw text를 지우고 각 hash와 context version/count는 보존합니다. context는 hint일 뿐이며 최종 owner/reference validation이 계속 authoritative합니다. 공개 POST·DTO·proposal·`providerMetadata`·UI·평가 report는 V17에서 바뀌지 않았습니다. attempt ledger와 내부 상태, 복구용 key, prepared payload/context, provider/model ID, binding, lease, fence, provider token은 일반 log·browser/service-worker storage에도 노출하지 않습니다. ledger에는 provider text·ID·token·raw memo·retrieval context를 저장하지 않으며, 승인된 purge 정책이 생기기 전까지 현재 run data와 함께 보존하고 임의 TTL로 지우지 않습니다. 현재 Fake descriptor는 `NO_NETWORK`라 동의 없이 동작하며, 실제 external provider, Ollama/LiquidAI와 consent grant/revoke HTTP API는 구성되어 있지 않습니다. 이 경계는 exactly-once가 아니라 at-least-once이므로 실제 provider는 동일 token의 중복 호출을 멱등하게 처리해야 합니다. raw/related memo와 fuzzy/vector/embedding retrieval, 실제 model-token/cost 숫자 수집·집계·budget enforcement는 아직 구현하지 않았습니다.
 
 위 `NOT_APPLICABLE`은 descriptor로 no-model임을 확인하고 local termination을 관측한 Fake 또는 확정적으로 시작되지 않은 real-model 실행에만 해당합니다. 시작 여부나 remote completion이 불확실한 real-model attempt와 observation 없이 유실된 process의 duration·model-token·cost evidence는 `UNKNOWN`/null로 남깁니다.
+
+V18은 사용자가 review에서 명시적으로 고른 relation proposal만 application 소유의 item→MEMO/TAG
+방향 관계로 저장합니다. label 조회는 owner의 현재 `ACTIVE` target만 no-store로 보여 주며 Apply가
+target을 다시 잠가 확인합니다. undo는 relation을 source item보다 먼저 제거하고 target memo/tag와
+raw revision을 보존합니다. 이 typed relation은 TAG membership과 다르며, 현재 MEMO_TAG graph에
+투영하는 의미·중복 제거·예산 정책은 아직 결정하지 않았습니다.
 
 결정론적 평가 v2는 regression의 proposal schema/domain 유효성, wrong-local 0, 정밀 날짜 발명 0, local overflow 0, 누락된 overflow 신호 0, 미해결 action/object 환각 0을 hard gate로 검사합니다. `fake-v6` / `korean-rules-v4`는 순차 item과 immutable 원문의 UTF-16 source span을 보존하면서 proposal schema v2의 날짜 candidate ID와 TASK별 정밀 due candidate 참조를 제안합니다. 과거 schema v1 proposal은 복구할 수 있고 기존의 단일 TASK·단일 정밀 날짜 보수적 기본값만 유지합니다. 현재 공개 합성 자료에서 item 수는 regression/challenge 각각 12/12 case, source span은 15/15·14/14개가 일치하지만, dataset v2에는 date-to-item binding gold가 없으므로 report capability는 `SUPPORTED_NOT_SCORED_DATASET_V2`이며 binding 품질을 hard gate로 사용하지 않습니다. 엄격한 v2 2인 review manifest schema/verifier와 immutable v2 release를 참조하는 ID-only v3 binding overlay integrity validator는 준비됐지만, 실제 human manifest·adjudication·v3 dataset·binding score·`PASS`는 없습니다. [평가 label 정책](docs/EVALUATION_LABEL_POLICY.md)도 아직 human approval이 필요한 draft입니다. 외부 blind runner는 원문을 저장소나 CI에 넣지 않는 aggregate-only 경계까지만 준비됐고 metric gate는 `NOT_CONFIGURED`입니다. 실제 AI provider와 로컬 모델 연결은 독립적인 gold 검토, 사전 승인된 threshold, provider/region·보존·비용·실패 수명주기 경계가 준비되기 전까지 보류합니다.
 

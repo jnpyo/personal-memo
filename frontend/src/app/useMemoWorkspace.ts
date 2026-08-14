@@ -11,6 +11,7 @@ import type {
   GraphNode,
   GraphProjection,
   MemoView,
+  RelationReviewCandidate,
   Task,
   TaskStatus,
 } from '../shared/api/types';
@@ -31,7 +32,12 @@ import {
   type GraphNeighborhoodRetryRequest,
 } from '../features/graph/graphNeighborhoodModel';
 import { buildUpdateMemoRequest } from '../features/memos/memoModel';
-import { buildApplyRequest, createReviewDraft, type ReviewDraft } from '../features/review/reviewModel';
+import {
+  buildApplyRequest,
+  createReviewDraft,
+  isRelationSelectionReady,
+  type ReviewDraft,
+} from '../features/review/reviewModel';
 import {
   deriveCapturePolicy,
   deriveRecoveryState,
@@ -54,6 +60,19 @@ type RetryAction = {
   label: string;
   run: () => void;
 };
+
+type RelationReviewLoadState = {
+  proposalId: string;
+  status: 'LOADING' | 'READY' | 'ERROR';
+  candidates: RelationReviewCandidate[] | null;
+  error: string | null;
+};
+
+const TERMINAL_APPLY_CONFLICT_CODES = new Set([
+  'STALE_MEMO_REVISION',
+  'PROPOSAL_CHANGED',
+  'PROPOSAL_NOT_APPLICABLE',
+]);
 
 function browserTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Seoul';
@@ -99,12 +118,17 @@ export function useMemoWorkspace(ownerId: string) {
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [retryAction, setRetryAction] = useState<RetryAction | null>(null);
+  const [relationReviewLoadState, setRelationReviewLoadState] =
+    useState<RelationReviewLoadState | null>(null);
 
   const captureAttempt = useRef<CaptureAttempt | null>(null);
   const retryIdentities = useRef(new RetryIdentityStore());
   const workspaceRequest = useRef(0);
   const memoListRequest = useRef(0);
   const reviewOutcomeRequest = useRef(0);
+  const relationReviewRequest = useRef(0);
+  const relationReviewAbort = useRef<AbortController | null>(null);
+  const relationReviewLoadStateRef = useRef<RelationReviewLoadState | null>(null);
   const graphDetailRequest = useRef(0);
   const graphDetailAbort = useRef<AbortController | null>(null);
   const graphNeighborhoodRequest = useRef(0);
@@ -406,6 +430,66 @@ export function useMemoWorkspace(ownerId: string) {
     }
   }, []);
 
+  const loadRelationReviewCandidates = useCallback(async (
+    snapshot: Pick<ReviewDraft, 'proposalId' | 'proposal'>,
+  ) => {
+    const request = ++relationReviewRequest.current;
+    relationReviewAbort.current?.abort();
+    relationReviewAbort.current = null;
+
+    if (snapshot.proposal.relationCandidates.length === 0) {
+      const ready: RelationReviewLoadState = {
+        proposalId: snapshot.proposalId,
+        status: 'READY',
+        candidates: [],
+        error: null,
+      };
+      relationReviewLoadStateRef.current = ready;
+      setRelationReviewLoadState(ready);
+      return;
+    }
+
+    const controller = new AbortController();
+    relationReviewAbort.current = controller;
+    const loading: RelationReviewLoadState = {
+      proposalId: snapshot.proposalId,
+      status: 'LOADING',
+      candidates: null,
+      error: null,
+    };
+    relationReviewLoadStateRef.current = loading;
+    setRelationReviewLoadState(loading);
+
+    try {
+      const candidates = await api.relationReviewCandidates(
+        snapshot.proposalId,
+        snapshot.proposal,
+        controller.signal,
+      );
+      if (controller.signal.aborted || relationReviewRequest.current !== request) return;
+      const ready: RelationReviewLoadState = {
+        proposalId: snapshot.proposalId,
+        status: 'READY',
+        candidates,
+        error: null,
+      };
+      relationReviewLoadStateRef.current = ready;
+      setRelationReviewLoadState(ready);
+    } catch (error) {
+      if (controller.signal.aborted || relationReviewRequest.current !== request) return;
+      const failed: RelationReviewLoadState = {
+        proposalId: snapshot.proposalId,
+        status: 'ERROR',
+        candidates: null,
+        error: errorMessage(error),
+      };
+      relationReviewLoadStateRef.current = failed;
+      setRelationReviewLoadState(failed);
+    } finally {
+      if (relationReviewAbort.current === controller) relationReviewAbort.current = null;
+    }
+  }, []);
+
   const refreshRecovery = useCallback(async () => {
     setRecoveryLoading(true);
     setRecoveryError(null);
@@ -448,6 +532,27 @@ export function useMemoWorkspace(ownerId: string) {
     refreshWorkspace,
   ]);
 
+  const reviewProposalId = review?.proposalId ?? null;
+  const reviewProposal = review?.proposal ?? null;
+
+  useEffect(() => {
+    if (!reviewProposalId || !reviewProposal) {
+      relationReviewRequest.current += 1;
+      relationReviewAbort.current?.abort();
+      relationReviewAbort.current = null;
+      relationReviewLoadStateRef.current = null;
+      setRelationReviewLoadState(null);
+      return;
+    }
+
+    void loadRelationReviewCandidates({ proposalId: reviewProposalId, proposal: reviewProposal });
+    return () => {
+      relationReviewRequest.current += 1;
+      relationReviewAbort.current?.abort();
+      relationReviewAbort.current = null;
+    };
+  }, [loadRelationReviewCandidates, ownerId, reviewProposal, reviewProposalId]);
+
   useEffect(() => {
     if (workspaceLoading || !selectedGraphNode) return;
     const projectedNode = graph.nodes.find((node) => node.id === selectedGraphNode.id);
@@ -463,6 +568,8 @@ export function useMemoWorkspace(ownerId: string) {
     graphDetailAbort.current?.abort();
     graphNeighborhoodRequest.current += 1;
     graphNeighborhoodAbort.current?.abort();
+    relationReviewRequest.current += 1;
+    relationReviewAbort.current?.abort();
   }, []);
 
   useEffect(() => {
@@ -594,6 +701,19 @@ export function useMemoWorkspace(ownerId: string) {
   async function applyReview(snapshot: ReviewDraft) {
     const scope = `apply:${snapshot.proposalId}`;
     clearProposalRetries(snapshot.proposalId, scope);
+    const relationState = relationReviewLoadStateRef.current;
+    const relationCandidates = snapshot.proposal.relationCandidates.length === 0
+      ? []
+      : relationState?.proposalId === snapshot.proposalId && relationState.status === 'READY'
+        ? relationState.candidates
+        : null;
+    if (!isRelationSelectionReady(snapshot, relationCandidates)) {
+      setFeedback({
+        kind: 'error',
+        message: '연결 후보 정보를 확인하거나 사용할 수 없는 연결을 제외한 뒤 다시 승인해 주세요.',
+      });
+      return;
+    }
     const body = buildApplyRequest(snapshot, timeZone.current);
     const fingerprint = JSON.stringify(body);
     const idempotencyKey = retryIdentities.current.keyFor(scope, fingerprint);
@@ -614,7 +734,8 @@ export function useMemoWorkspace(ownerId: string) {
     } catch (error) {
       if (
         error instanceof ApiError &&
-        (error.code === 'STALE_MEMO_REVISION' || error.status === 409)
+        error.code !== undefined &&
+        TERMINAL_APPLY_CONFLICT_CODES.has(error.code)
       ) {
         clearProposalRetries(snapshot.proposalId);
         setFeedback({ kind: 'error', message: errorMessage(error) });
@@ -622,6 +743,9 @@ export function useMemoWorkspace(ownerId: string) {
         await Promise.all([refreshMemos(), refreshRecovery()]);
       } else {
         fail(error, scope, '승인 다시 시도', () => void applyReview(snapshot));
+        if (error instanceof ApiError && error.code === 'RELATION_TARGET_UNAVAILABLE') {
+          void loadRelationReviewCandidates(snapshot);
+        }
       }
     } finally {
       setBusyAction(null);
@@ -974,11 +1098,28 @@ export function useMemoWorkspace(ownerId: string) {
     setRetryAction(null);
   }
 
+  const activeRelationReviewState =
+    review && relationReviewLoadState?.proposalId === review.proposalId
+      ? relationReviewLoadState
+      : null;
+  const hasRelationCandidates = (review?.proposal.relationCandidates.length ?? 0) > 0;
+  const activeRelationReviewCandidates = !hasRelationCandidates
+    ? []
+    : activeRelationReviewState?.status === 'READY'
+      ? activeRelationReviewState.candidates
+      : null;
+
   return {
     connection,
     content,
     hasUnpersistedCapture: content.length > 0 && draftPersistenceFailed,
     review,
+    relationReviewCandidates: activeRelationReviewCandidates,
+    relationReviewLoading:
+      hasRelationCandidates &&
+      (activeRelationReviewState === null || activeRelationReviewState.status === 'LOADING'),
+    relationReviewError:
+      activeRelationReviewState?.status === 'ERROR' ? activeRelationReviewState.error : null,
     hasUnsavedReview,
     postponedReview,
     applicationId,
@@ -1040,6 +1181,9 @@ export function useMemoWorkspace(ownerId: string) {
     changeContent,
     captureMemo,
     changeReview,
+    retryRelationReviewCandidates: () => {
+      if (review) void loadRelationReviewCandidates(review);
+    },
     applyCurrentReview,
     postponeCurrentReview: () => void postponeCurrentReview(),
     rejectCurrentReview: () => void rejectCurrentReview(),

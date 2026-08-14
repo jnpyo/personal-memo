@@ -11,6 +11,7 @@ import local.personalmemo.common.error.DomainException;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 class AnalysisProposalValidatorTest {
@@ -113,6 +114,27 @@ class AnalysisProposalValidatorTest {
     assertInvalidProposal(() -> validator.validate(nonTask, memoId, 1, exactContent.length()));
     assertInvalidProposal(
         () -> validator.validate(imprecise, memoId, 1, approximateContent.length()));
+  }
+
+  @Test
+  void rejectsDuplicateDirectedRelationCandidates() {
+    UUID memoId = UUID.randomUUID();
+    String content = "11.25 OS과제 제출";
+    ObjectNode duplicateRelations = proposal(memoId, 1, content);
+    UUID targetId = UUID.randomUUID();
+    ObjectNode relation =
+        json.createObjectNode()
+            .put("sourceCandidateId", "item-1")
+            .put("targetType", "MEMO")
+            .put("targetId", targetId.toString())
+            .put("relationType", "RELATED_TO")
+            .put("score", 0.9);
+    ArrayNode relations = (ArrayNode) duplicateRelations.path("relationCandidates");
+    relations.add(relation);
+    relations.add(relation.deepCopy().put("score", 0.8));
+
+    assertInvalidProposal(
+        () -> validator.validate(duplicateRelations, memoId, 1, content.length()));
   }
 
   private ObjectNode proposal(UUID memoId, int revision, String content) {

@@ -1,6 +1,7 @@
 package local.personalmemo.analysis.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
@@ -9,6 +10,7 @@ import java.util.List;
 import local.personalmemo.analysis.api.AnalysisDtos.Apply;
 import local.personalmemo.analysis.api.AnalysisDtos.Due;
 import local.personalmemo.analysis.api.AnalysisDtos.Item;
+import local.personalmemo.analysis.api.AnalysisDtos.SelectedRelation;
 import local.personalmemo.common.error.DomainException;
 import local.personalmemo.taxonomy.domain.TagNormalizer;
 import org.junit.jupiter.api.Test;
@@ -63,8 +65,81 @@ class AnalysisApplicationValidatorTest {
         new Due("11.25", "2026-11-25", "DATE_ONLY", "Asia/Seoul", true), "INVALID_DATE_VALUE");
   }
 
+  @Test
+  void preservesOpaqueProposalCandidateIdentityExactly() {
+    String candidateId = " item-1 ";
+
+    var validated =
+        validator.validate(
+            new Apply(
+                1,
+                "TASK",
+                "과제 제출",
+                List.of(),
+                List.of(new Item(candidateId, "TASK", "과제 제출", null)),
+                List.of()));
+
+    assertThat(validated.items().getFirst().proposalCandidateId()).isEqualTo(candidateId);
+  }
+
+  @Test
+  void validatesProposalCandidateIdentityByUnicodeCodePointAndScalarSafety() {
+    String supplementary = "😀";
+    assertThatCode(() -> validator.validate(applyWithCandidateId(supplementary.repeat(100))))
+        .doesNotThrowAnyException();
+
+    assertInvalidCandidateId(supplementary.repeat(101));
+    assertInvalidCandidateId("\uD83D");
+    assertInvalidCandidateId("item\0one");
+  }
+
+  @Test
+  void preservesMissingVersusExplicitEmptyRelationSelection() {
+    assertThat(validator.validate(apply(null)).selectedRelations()).isNull();
+
+    Apply explicitEmpty =
+        new Apply(
+            1, "TASK", "과제 제출", List.of(), List.of(new Item("TASK", "과제 제출", null)), List.of());
+
+    assertThat(validator.validate(explicitEmpty).selectedRelations()).isEmpty();
+  }
+
+  @Test
+  void rejectsDuplicateProposalRelationIndexes() {
+    Apply duplicate =
+        new Apply(
+            1,
+            "TASK",
+            "과제 제출",
+            List.of(),
+            List.of(new Item("item-1", "TASK", "과제 제출", null)),
+            List.of(new SelectedRelation(0), new SelectedRelation(0)));
+
+    assertThatThrownBy(() -> validator.validate(duplicate))
+        .isInstanceOfSatisfying(
+            DomainException.class,
+            exception -> assertThat(exception.code()).isEqualTo("INVALID_RELATION_SELECTION"));
+  }
+
   private Apply apply(Due due) {
     return new Apply(1, "TASK", "과제 제출", List.of(), List.of(new Item("TASK", "과제 제출", due)));
+  }
+
+  private Apply applyWithCandidateId(String candidateId) {
+    return new Apply(
+        1,
+        "TASK",
+        "과제 제출",
+        List.of(),
+        List.of(new Item(candidateId, "TASK", "과제 제출", null)),
+        List.of());
+  }
+
+  private void assertInvalidCandidateId(String candidateId) {
+    assertThatThrownBy(() -> validator.validate(applyWithCandidateId(candidateId)))
+        .isInstanceOfSatisfying(
+            DomainException.class,
+            exception -> assertThat(exception.code()).isEqualTo("INVALID_RELATION_SELECTION"));
   }
 
   private void assertInvalidDate(Due due, String expectedCode) {

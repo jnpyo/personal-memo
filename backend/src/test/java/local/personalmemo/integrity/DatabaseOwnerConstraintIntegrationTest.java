@@ -132,6 +132,27 @@ class DatabaseOwnerConstraintIntegrationTest extends PostgresIntegrationTestSupp
 
     assertRejected(
         () ->
+            insertRelation(
+                ownApplication, 0, ownItem, "MEMO", foreign.memoId(), null, "RELATED_TO", now));
+    assertRejected(
+        () ->
+            insertRelation(
+                ownApplication, 1, ownItem, "TAG", null, foreign.tagId(), "REFERENCES", now));
+    assertRejected(
+        () ->
+            insertRelation(
+                ownApplication, 2, ownItem, "MEMO", ownMemo, ASSIGNMENT_TAG_ID, "DEPENDS_ON", now));
+    assertRejected(
+        () ->
+            insertRelation(
+                ownApplication, 3, foreign.itemId(), "MEMO", ownMemo, null, "CONTINUES", now));
+
+    insertRelation(ownApplication, 4, ownItem, "MEMO", ownMemo, null, "RELATED_TO", now);
+    assertRejected(
+        () -> insertRelation(ownApplication, 5, ownItem, "MEMO", ownMemo, null, "RELATED_TO", now));
+
+    assertRejected(
+        () ->
             db.sql(
                     """
                     insert into tags(
@@ -244,6 +265,51 @@ class DatabaseOwnerConstraintIntegrationTest extends PostgresIntegrationTestSupp
 
   private void assertRejected(Runnable insert) {
     assertThatThrownBy(insert::run).isInstanceOf(DataIntegrityViolationException.class);
+  }
+
+  private void insertRelation(
+      UUID applicationId,
+      int proposalIndex,
+      UUID sourceItemId,
+      String targetType,
+      UUID targetMemoId,
+      UUID targetTagId,
+      String relationType,
+      Timestamp confirmedAt) {
+    db.sql(
+            """
+            insert into memo_item_relations(
+              application_id,
+              proposal_relation_index,
+              owner_id,
+              source_memo_item_id,
+              target_type,
+              target_memo_id,
+              target_tag_id,
+              relation_type,
+              confirmed_at
+            ) values (
+              :applicationId,
+              :proposalIndex,
+              :ownerId,
+              :sourceItemId,
+              :targetType,
+              :targetMemoId,
+              :targetTagId,
+              :relationType,
+              :confirmedAt
+            )
+            """)
+        .param("applicationId", applicationId)
+        .param("proposalIndex", proposalIndex)
+        .param("ownerId", OWNER_ID)
+        .param("sourceItemId", sourceItemId)
+        .param("targetType", targetType)
+        .param("targetMemoId", targetMemoId)
+        .param("targetTagId", targetTagId)
+        .param("relationType", relationType)
+        .param("confirmedAt", confirmedAt)
+        .update();
   }
 
   private record ForeignFlow(

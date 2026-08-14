@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
 import local.personalmemo.analysis.application.AnalysisApplicationService;
+import local.personalmemo.analysis.application.AnalysisRelationReviewService;
 import local.personalmemo.analysis.application.AnalysisService;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
@@ -24,11 +25,15 @@ public class AnalysisController {
 
   private final AnalysisService analysisService;
   private final AnalysisApplicationService applicationService;
+  private final AnalysisRelationReviewService relationReviewService;
 
   public AnalysisController(
-      AnalysisService analysisService, AnalysisApplicationService applicationService) {
+      AnalysisService analysisService,
+      AnalysisApplicationService applicationService,
+      AnalysisRelationReviewService relationReviewService) {
     this.analysisService = analysisService;
     this.applicationService = applicationService;
+    this.relationReviewService = relationReviewService;
   }
 
   @PostMapping("/memos/{id}/analysis-runs")
@@ -62,6 +67,14 @@ public class AnalysisController {
         .cacheControl(CacheControl.noStore())
         .varyBy(PROPOSAL_SCHEMA_VERSION_HEADER)
         .body(body);
+  }
+
+  @GetMapping("/analysis-proposals/{id}/relation-review-candidates")
+  ResponseEntity<List<AnalysisDtos.RelationReviewCandidate>> relationReviewCandidates(
+      @PathVariable UUID id) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(relationReviewService.candidates(id));
   }
 
   @PostMapping("/analysis-proposals/{id}/apply")

@@ -1,6 +1,6 @@
 # Data model — authenticated deterministic-analysis MVP
 
-이 문서는 현재 Flyway `V1`–`V17`이 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다. `V11`은 owner별 proposal의 최신 application을 bounded read로 찾는 review-outcome 조회 인덱스를 추가하고, `V12`는 최신 `APPLIED` selection과 활성 memo item을 사용하는 graph projection에 맞춘 partial lookup index만 추가한다. `V13`은 cloud consent를 정확한 policy와 승인 시각에 고정하고 run에 server-owned cloud evidence를 추가한다. `V14`는 새 run에 호출 권한 확인 시각·실제로 수락한 grant 시각·결정론적 provider-request token을 일관된 실행 snapshot으로 저장하고, 과거 row는 증거를 추정하지 않은 `legacy-v0`로 보존한다. `V15`는 gateway 호출 전에 `durable-v1` run과 1:1 dispatch preparation을 commit하고 immutable binding, validated-local payload/hash, reserved proposal, idempotency evidence, deadline·lease·fence를 보존한다. `V16`은 같은 dispatch에 bounded tag context raw/hash/version/count를 pre-call snapshot으로 추가하고 finalization에서 raw만 scrub한다. 기존 V15 dispatch에는 context가 있었다고 추정하지 않고 `none`/`0`/null raw/null hash를 보존한다. `V17`은 새 dispatch를 `gateway-attempt-v1`로 versioning하고 fence별 owner-scoped attempt ledger를 추가하되, 기존 dispatch는 `none`으로 두고 과거 attempt row를 backfill하지 않는다. V14까지의 기존 row에는 호출 전 준비가 있었다고 추정해 dispatch를 backfill하지 않는다. 이 migration들은 일반 clickstream table을 만들지 않는다.
+이 문서는 현재 Flyway `V1`–`V18`이 만드는 PostgreSQL schema를 설명한다. SQL이 최종 source of truth이며, 후속 아이디어와 현재 table을 섞지 않는다. `V4`는 이전 구현에서 UTC instant로 저장했던 `DATE_ONLY` 값을 원래 local date 표현으로 안전하게 이관한다. `V5`는 하위 table에 명시적인 `owner_id`를 backfill하고 owner-aware composite foreign key로 부모와 자식의 소유권을 데이터베이스에서도 일치시킨다. `V6`는 각 raw revision에 client recorded time과 source IANA time zone을 추가한다. `V7`은 `analysis_runs`에 prompt·local model·embedding model·routing policy version을 추가하고, 비어 있던 기존 analyzer version과 새 version column을 `legacy-v0`으로 backfill해 분석 provenance를 보존한다. `V8`은 local/Google identity와 PostgreSQL-backed server session을 추가하되 기존 개발 owner와 데이터를 그대로 보존한다. `V9`는 legacy unclaimed owner를 제외한 사용자가 email·normalized email·display name을 모두 갖도록 database constraint를 추가한다. `V10`은 fresh private database의 최초 계정을 단 한 번만 만들 수 있는 provisioning gate를 추가한다. `V11`은 owner별 proposal의 최신 application을 bounded read로 찾는 review-outcome 조회 인덱스를 추가하고, `V12`는 최신 `APPLIED` selection과 활성 memo item을 사용하는 graph projection에 맞춘 partial lookup index만 추가한다. `V13`은 cloud consent를 정확한 policy와 승인 시각에 고정하고 run에 server-owned cloud evidence를 추가한다. `V14`는 새 run에 호출 권한 확인 시각·실제로 수락한 grant 시각·결정론적 provider-request token을 일관된 실행 snapshot으로 저장하고, 과거 row는 증거를 추정하지 않은 `legacy-v0`로 보존한다. `V15`는 gateway 호출 전에 `durable-v1` run과 1:1 dispatch preparation을 commit하고 immutable binding, validated-local payload/hash, reserved proposal, idempotency evidence, deadline·lease·fence를 보존한다. `V16`은 같은 dispatch에 bounded tag context raw/hash/version/count를 pre-call snapshot으로 추가하고 finalization에서 raw만 scrub한다. 기존 V15 dispatch에는 context가 있었다고 추정하지 않고 `none`/`0`/null raw/null hash를 보존한다. `V17`은 새 dispatch를 `gateway-attempt-v1`로 versioning하고 fence별 owner-scoped attempt ledger를 추가하되, 기존 dispatch는 `none`으로 두고 과거 attempt row를 backfill하지 않는다. V14까지의 기존 row에는 호출 전 준비가 있었다고 추정해 dispatch를 backfill하지 않는다. `V18`은 사용자가 명시적으로 선택한 proposal relation을 application 소유의 item-scoped directed relation으로 저장하며, owner-aware source/application/target constraint와 application 단위 undo를 강제한다. 이 migration들은 일반 clickstream table을 만들지 않는다.
 
 ## Invariants
 
@@ -438,7 +438,11 @@ FK (memo_id, owner_id) -> memos(id, owner_id)
 FK (memo_id, memo_revision, owner_id) -> memo_revisions(memo_id, revision, owner_id)
 ```
 
-`selection_json`은 model output 전체를 실행 명령으로 보관하는 필드가 아니라, 사용자가 실제로 승인한 selection의 audit/provenance다.
+`selection_json`은 model output 전체를 실행 명령으로 보관하는 필드가 아니라, 사용자가 실제로 승인한 selection의 audit/provenance다. 관계 선택에는 proposal 배열 index, exact source proposal candidate identity, 실제 생성된 source item identity, target identity/type과 relation type을 서버가 잠긴 proposal에서 해소해 기록한다. proposal score는 immutable proposal에만 provenance로 남고 selection이나 canonical relation row에 복제하지 않는다. client는 target/type/score를 실행 권한으로 제출하지 않는다.
+
+V18 전 성공한 Apply의 retry compatibility를 위해 relation field와 item proposal identity가 모두 없는
+request는 기존 request-hash JSON shape로 재투영한다. relation-aware request는 명시적인 hash version을
+포함하므로 새 selection 의미가 과거 idempotency record와 우연히 같아지지 않는다.
 
 Owner-scoped review-outcome summary는 새 canonical data를 저장하지 않고 `analysis_proposals`,
 `analysis_runs`, `analysis_applications`를 read-only로 결합한다. cohort는
@@ -570,7 +574,38 @@ FK (tag_id, owner_id) -> tags(id, owner_id)
 
 review에서 승인된 link만 이 table에 들어간다. model-facing analyzer에는 insert/update 권한이 없다.
 
-## Owner integrity in V5
+### `memo_item_relations` (V18)
+
+명시적으로 선택된 proposal relation을 application이 만든 source item에서 owner의 canonical MEMO 또는
+TAG로 향하는 directed typed relation으로 보존한다. TAG target relation은 membership 의미의
+`item_tags`와 합치지 않는다.
+
+```text
+application_id UUID NOT NULL
+proposal_relation_index SMALLINT NOT NULL
+owner_id UUID NOT NULL
+source_memo_item_id UUID NOT NULL
+target_type MEMO | TAG
+target_memo_id UUID NULL
+target_tag_id UUID NULL
+relation_type RELATED_TO | CONTINUES | DEPENDS_ON | REFERENCES
+confirmed_at TIMESTAMPTZ NOT NULL
+PRIMARY KEY (application_id, proposal_relation_index)
+CHECK (proposal_relation_index BETWEEN 0 AND 9)
+CHECK (target type과 target UUID가 정확히 하나만 일치)
+FK (application_id, owner_id) -> analysis_applications(id, owner_id)
+FK (source_memo_item_id, application_id, owner_id)
+  -> memo_items(id, application_id, owner_id)
+FK (target_memo_id, owner_id) -> memos(id, owner_id)
+FK (target_tag_id, owner_id) -> tags(id, owner_id)
+```
+
+proposal validator와 partial unique index는 같은 source candidate·target type/identity·relation type의
+semantic duplicate를 거절한다. proposal array index는 application 안의 원래 제안 provenance를
+유지하며 별도 relation UUID를 만들지 않는다. Apply는 target row를 owner/`ACTIVE` 조건으로 다시
+잠근 뒤에만 insert하고, relation review label은 이 권한 검사를 대체하지 않는다.
+
+## Owner integrity in V5 and V18
 
 공개 identity는 계속 전역 UUID primary key를 사용한다. V5가 추가한 `(identity, owner_id)` unique key는 API identity를 바꾸기 위한 것이 아니라 PostgreSQL composite foreign key의 target을 만들기 위한 것이다.
 
@@ -583,10 +618,16 @@ memos(owner) ── memo_revisions(owner)
 analysis_applications(owner, memo, revision)
       └──────── memo_items(owner, same memo/revision/application)
                      ├── task_details(owner)
-                     └── item_tags(owner, same application) ── tags(owner)
+                     ├── item_tags(owner, same application) ── tags(owner)
+                     └── memo_item_relations(owner, same application)
+                               ├── target memos(owner)
+                               └── target tags(owner)
 ```
 
-따라서 application, item, task, tag link를 만들 때 application owner와 memo/tag owner가 다르면 service query를 우회하더라도 database constraint가 write를 거절한다. `analysis_proposals`, `memo_revisions`, `task_details`, `item_tags`의 `owner_id`는 V5에서 canonical parent로부터 backfill한 뒤 `NOT NULL`로 강화했다.
+따라서 application, item, task, tag link와 V18 relation을 만들 때 application owner와 source
+item/target memo/tag owner가 다르면 service query를 우회하더라도 database constraint가 write를
+거절한다. `analysis_proposals`, `memo_revisions`, `task_details`, `item_tags`의 `owner_id`는 V5에서
+canonical parent로부터 backfill한 뒤 `NOT NULL`로 강화했다.
 
 ## Apply and undo
 
@@ -595,16 +636,23 @@ Apply transaction은 다음 순서의 무결성을 한 단위로 보장한다.
 ```text
 owner + current memo revision 재검사
 → proposal selection/domain 검증
+→ selected relation index를 잠긴 proposal의 full candidate로 해소
+→ relation source를 exact proposalCandidateId의 적용 item에 1:1 매핑
+→ owner-scoped ACTIVE relation target을 종류/UUID 순으로 잠금
 → analysis_application 생성
 → memo_items / task_details 생성
 → owner-scoped tag 확인 또는 confirmed tag 생성
 → item_tags 연결
+→ memo_item_relations 연결
 → analysis run APPLIED
 ```
 
 검증 또는 write 하나가 실패하면 transaction 전체를 rollback한다.
 
-Undo는 application provenance가 가리키는 `item_tags`, `task_details`, `memo_items`를 제거하고 application을 `UNDONE`으로 표시한다. 해당 application이 만든 tag도 다른 confirmed data가 참조하지 않을 때만 제거한다. `memos`와 `memo_revisions`는 수정하거나 삭제하지 않는다.
+Undo는 application provenance가 가리키는 `memo_item_relations`를 source item보다 먼저 제거한 뒤
+`item_tags`, `task_details`, `memo_items`를 제거하고 application을 `UNDONE`으로 표시한다. 해당
+application이 만든 tag도 다른 confirmed link나 relation target이 참조하지 않을 때만 제거한다.
+relation target memo/tag, source `memos`와 `memo_revisions`는 수정하거나 삭제하지 않는다.
 
 ## Graph projection
 
@@ -617,6 +665,10 @@ memos + current memo_revisions + analysis_applications + memo_items + task_detai
 ```
 
 별도 graph JSON, 화면 좌표, Neo4j가 source of truth가 아니다. frontend React Flow layout은 표시 책임만 가진다.
+V18의 item-scoped typed relation도 canonical source of truth이지만 현재 graph projection input은 아니다.
+ITEM source를 MEMO node로 승격하는 규칙, TAG-target relation과 `MEMO_TAG` membership의 관계, 네 가지
+방향 relation type의 edge mapping과 provenance deduplication을 결정하기 전에는 graph node/edge,
+neighborhood, `projectionVersion`을 바꾸지 않는다.
 node 상세와 pagination cursor도 저장하지 않는다. memo drawer는 현재 raw revision을 다시 읽고,
 별도 full-corpus neighborhood query가 현재 owner의 `ACTIVE` memo/tag, 최신 유효 `APPLIED`
 selection, unarchived item과 confirmed `item_tags`에서 한 hop을 투영한다. MEMO→TAG는
@@ -658,7 +710,7 @@ try {
 }
 ```
 
-이 개인용 10k checkpoint에서는 새 index 효용 근거가 없어 V18을 추가하지 않았다. production
+이 개인용 10k checkpoint에서는 새 graph-neighborhood 전용 migration/index를 추가할 효용 근거가 없었다. production
 분포에서 runner를 다시 측정해 근거가 생기기 전에는 계산된 overdue/due 우선순위만을 위해
 speculative index를 만들지 않는다.
 
@@ -741,7 +793,7 @@ try {
 ```
 
 이 evidence에서는 NFKC/ICU literal substring에 B-tree를 추가할 측정 근거가 없고 canonical join은
-기존 index를 사용했으므로 search용 V18을 추가하지 않았다. 이 slice는 기존 canonical schema만
+기존 index를 사용했으므로 search 전용 migration/index를 추가하지 않았다. 이 slice는 기존 canonical schema만
 사용하며 새 Flyway migration/search index, `pg_trgm`, vector/embedding storage 또는 search service를
 추가하지 않는다. 실제 개인 data 분포나 동시성 측정에서 근거가 달라지기 전에는 SLA나 새 index
 효과를 추정하지 않는다.
@@ -765,6 +817,9 @@ try {
 - `memo_items(owner_id, memo_id, application_id) WHERE archived_at IS NULL` (`V12`, graph의 활성 child item 조회)
 - `task_details(owner_id, status, due_at_utc, due_local_date)`
 - `item_tags(owner_id, tag_id)`
+- `memo_item_relations(source_memo_item_id, application_id, owner_id)`
+- partial `memo_item_relations(target_memo_id, owner_id)` / `(target_tag_id, owner_id)` for non-null targets
+- partial unique directed relation tuples for source item + relation type + MEMO/TAG target
 - owner/operation/key primary key on idempotency records
 - owner-scoped normalized tag and alias unique constraints
 
@@ -777,7 +832,7 @@ try {
 - embedding/pgvector storage
 - automatic tag merge/split proposal
 - graph cluster/compression/layout persistence
-- event detail, rich item/tag relation, fuzzy/dedicated search index
+- event detail, relation-to-graph projection/edge semantics, fuzzy/dedicated search index
 - local email verification and password-reset token/delivery state
 - login abuse/rate-limit audit state if the selected policy requires additional persistence
 - MFA/passkey authenticators and account recovery codes

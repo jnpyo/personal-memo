@@ -124,6 +124,40 @@ class UndoOrphanTagIntegrationTest extends PostgresIntegrationTestSupport {
         .isEqualTo(2);
   }
 
+  @Test
+  void canonicalTagRelationProtectsCreatorTagUntilRelationApplicationIsUndone() throws Exception {
+    UUID creatorApplication =
+        applyWithNewTag("relation-target-tag-creator", "relation target cleanup tag");
+    UUID tagId =
+        db.sql("select id from tags where owner_id=:ownerId and normalized_name=:name")
+            .param("ownerId", OWNER_ID)
+            .param("name", "relation target cleanup tag")
+            .query(UUID.class)
+            .single();
+    UUID relationApplication = applyWithTagRelation("relation-target-reuser", tagId);
+
+    undoApplication(creatorApplication, "relation-target-creator-undo");
+
+    assertThat(tagCount(tagId)).isEqualTo(1);
+    assertThat(
+            db.sql(
+                    """
+                    select count(*)
+                      from memo_item_relations
+                     where owner_id = :ownerId
+                       and target_tag_id = :tagId
+                    """)
+                .param("ownerId", OWNER_ID)
+                .param("tagId", tagId)
+                .query(Long.class)
+                .single())
+        .isEqualTo(1);
+
+    undoApplication(relationApplication, "relation-target-reuser-undo");
+
+    assertThat(tagCount(tagId)).isZero();
+  }
+
   private void acquireOwnerApplicationLock(Connection connection) throws Exception {
     try (PreparedStatement statement =
         connection.prepareStatement("select pg_advisory_xact_lock(hashtextextended(?, 0))")) {
@@ -154,6 +188,60 @@ class UndoOrphanTagIntegrationTest extends PostgresIntegrationTestSupport {
 
   private UUID applyWithExistingTag(String keyPrefix, UUID tagId) throws Exception {
     return apply(keyPrefix, Map.of("existingTagId", tagId));
+  }
+
+  private UUID applyWithTagRelation(String keyPrefix, UUID targetTagId) throws Exception {
+    UUID memoId = UUID.randomUUID();
+    createMemo(memoId, keyPrefix + "-create", "Call supplier tomorrow");
+    UUID proposalId =
+        UUID.fromString(
+            response(startAnalysis(memoId, keyPrefix + "-start", 1)).path("proposalId").asText());
+    Map<String, Object> relation =
+        Map.of(
+            "sourceCandidateId", "item-1",
+            "targetType", "TAG",
+            "targetId", targetTagId,
+            "relationType", "REFERENCES",
+            "score", 0.9);
+    db.sql(
+            """
+            update analysis_proposals
+               set proposal_json = jsonb_set(
+                 proposal_json,
+                 '{relationCandidates}',
+                 cast(:relations as jsonb),
+                 false
+               )
+             where id = :proposalId
+               and owner_id = :ownerId
+            """)
+        .param("relations", json.writeValueAsString(List.of(relation)))
+        .param("proposalId", proposalId)
+        .param("ownerId", OWNER_ID)
+        .update();
+
+    Map<String, Object> item = new LinkedHashMap<>();
+    item.put("proposalCandidateId", "item-1");
+    item.put("kind", "TASK");
+    item.put("title", keyPrefix + " 작업");
+    item.put("due", null);
+    Map<String, Object> selection =
+        Map.of(
+            "expectedMemoRevision",
+            1,
+            "selectedType",
+            "TASK",
+            "title",
+            keyPrefix + " 작업",
+            "selectedTags",
+            List.of(),
+            "items",
+            List.of(item),
+            "selectedRelations",
+            List.of(Map.of("proposalIndex", 0)));
+    var result = applyProposal(proposalId, keyPrefix + "-apply", selection);
+    assertThat(result.getResponse().getStatus()).isEqualTo(200);
+    return UUID.fromString(response(result).path("applicationId").asText());
   }
 
   private UUID apply(String keyPrefix, Map<String, Object> tagSelection) throws Exception {

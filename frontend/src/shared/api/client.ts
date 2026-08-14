@@ -2,6 +2,7 @@ import { toApiError } from './errors';
 import { decodeProposal, decodeProposalSummaries } from './proposalDecoder';
 import type { ExpectedProposalIdentity } from './proposalDecoder';
 import { decodeReviewOutcomeSummary } from './reviewOutcomeDecoder';
+import { decodeRelationReviewCandidates } from './relationReviewDecoder';
 import {
   assertGraphNeighborhoodExpectedCenter,
   decodeGraphNeighborhoodPage,
@@ -23,6 +24,8 @@ import type {
   MemoSearchRequest,
   MemoView,
   MemoStatus,
+  Proposal,
+  RelationReviewCandidate,
   ReviewDispositionResult,
   Task,
   TaskStatus,
@@ -451,6 +454,18 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
         ),
         status,
       ),
+
+    relationReviewCandidates: async (
+      proposalId: string,
+      proposal: Proposal,
+      signal?: AbortSignal,
+    ): Promise<RelationReviewCandidate[]> => decodeRelationReviewCandidates(
+      await request<unknown>(
+        `/api/v1/analysis-proposals/${encodeURIComponent(proposalId)}/relation-review-candidates`,
+        { cache: 'no-store', signal },
+      ),
+      proposal,
+    ),
 
     latestApplication: () =>
       request<LatestApplication>('/api/v1/analysis-applications/latest'),

@@ -2,7 +2,7 @@ openapi: 3.1.0
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 info:
   title: Personal Memo API
-  version: 0.6.0
+  version: 0.7.0
   description: >-
     Server-session 인증, Milestone 1의 AI-free vertical slice, 외부 모델 없는 결정론적 분석,
     Milestone 5의 privacy-first exact lexical memo-search 계약입니다.
@@ -598,6 +598,47 @@ paths:
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
+  /analysis-proposals/{proposalId}/relation-review-candidates:
+    parameters:
+      - $ref: "#/components/parameters/ProposalId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Analysis]
+      operationId: listRelationReviewCandidates
+      summary: Resolve owner-visible labels for relation review
+      description: >-
+        Returns one bounded entry for every stored relationCandidates element, in proposal-array
+        order. The proposal index is the only selector later accepted by Apply; the client never
+        resubmits target/type/score as authority. An ACTIVE owner target receives a bounded current
+        raw-memo preview or canonical tag name. A missing, foreign, trashed, or inactive target is
+        returned as unavailable with no label, and Apply rechecks every selected target while
+        holding the canonical row. This read creates no canonical data and does not imply that the
+        untrusted proposal has been approved.
+      responses:
+        "200":
+          description: Ordered, owner-scoped relation review labels for the proposal.
+          headers:
+            Cache-Control:
+              description: Relation review labels are private and are never stored by caches.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 10
+                items:
+                  $ref: "#/components/schemas/RelationReviewCandidateView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
   /analysis-proposals:
     parameters:
       - $ref: "#/components/parameters/ExpectedOwnerId"
@@ -660,13 +701,19 @@ paths:
       operationId: applyAnalysisProposal
       summary: Apply only the user's reviewed selection
       description: >-
-        Validates owner, current memo revision, tags, items, and due values, then
-        creates the application and all currently supported derived records in one transaction.
+        Validates owner, current memo revision, tags, items, due values, and the user's explicit
+        relation-candidate indexes, then creates the application and all selected derived records
+        in one transaction.
         The due timeZone request field is compatibility input only; persisted task source time zones
         are canonicalized from the locked immutable memo revision.
-        A proposal with a non-empty relationCandidates array fails closed with
-        PROPOSAL_RELATIONS_UNSUPPORTED until explicit relation selection, canonical relation
-        persistence, and application-scoped undo are implemented. No partial application occurs.
+        For each selected proposal index the server resolves the full relation from the locked
+        stored proposal, requires its sourceCandidateId to map to exactly one applied item, and
+        re-locks the owner-owned ACTIVE MEMO or TAG target. The request cannot choose a target,
+        relation type, or score. An explicit empty selectedRelations array rejects every relation
+        candidate while applying the other reviewed fields. Legacy omission is accepted only when
+        the proposal itself has no relation candidates. Confirmed item-scoped relations are
+        application-owned and undo removes them before their source items. They are intentionally
+        not projected into the current MEMO_TAG graph until a separate edge-semantics decision.
       parameters:
         - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -1418,10 +1465,9 @@ components:
                 correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
     ApplyConflict:
       description: >-
-        The owner snapshot, revision, proposal lifecycle, tag identity, or idempotency state
-        conflicts with the request. A validated proposal with non-empty relationCandidates also
-        returns PROPOSAL_RELATIONS_UNSUPPORTED until explicit relation selection, persistence, and
-        undo are supported; no application or derived record is created.
+        The owner snapshot, revision, proposal lifecycle, tag/relation target identity, or
+        idempotency state conflicts with the request. No partial application or derived record is
+        committed.
       content:
         application/json:
           schema:
@@ -1433,10 +1479,10 @@ components:
                 message: The authenticated account changed before this request was sent.
                 fieldErrors: []
                 correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
-            relationsUnsupported:
+            relationTargetUnavailable:
               value:
-                code: PROPOSAL_RELATIONS_UNSUPPORTED
-                message: Relation candidates require explicit relation selection, which is not supported yet.
+                code: RELATION_TARGET_UNAVAILABLE
+                message: A selected relation target is no longer available.
                 fieldErrors: []
                 correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
     Forbidden:
@@ -1820,6 +1866,17 @@ components:
       additionalProperties: false
       required: [kind, title]
       properties:
+        proposalCandidateId:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 100
+            - type: "null"
+          description: >-
+            Exact opaque itemCandidates[].candidateId copied from the stored proposal, or null for
+            a user-added item. It is never trimmed or normalized. A selected relation can be bound
+            only when its sourceCandidateId maps to exactly one applied item. Older clients may
+            omit this field, which is treated as null.
         kind:
           $ref: "#/components/schemas/ItemKind"
         title:
@@ -1830,6 +1887,68 @@ components:
           oneOf:
             - $ref: "#/components/schemas/DueSelection"
             - type: "null"
+    SelectedRelation:
+      type: object
+      additionalProperties: false
+      required: [proposalIndex]
+      properties:
+        proposalIndex:
+          type: integer
+          minimum: 0
+          maximum: 9
+          description: >-
+            Index into the locked stored proposal's relationCandidates array. Target identity,
+            relation type, and score are intentionally not accepted from the client.
+    RelationReviewCandidateView:
+      type: object
+      additionalProperties: false
+      required: [proposalIndex, targetType, targetId, targetLabel, available]
+      allOf:
+        - if:
+            properties:
+              available:
+                const: true
+          then:
+            properties:
+              targetLabel:
+                type: string
+                minLength: 1
+                maxLength: 240
+          else:
+            properties:
+              targetLabel:
+                type: "null"
+                const: null
+        - if:
+            properties:
+              targetType:
+                const: TAG
+          then:
+            properties:
+              targetLabel:
+                maxLength: 100
+      properties:
+        proposalIndex:
+          type: integer
+          minimum: 0
+          maximum: 9
+        targetType:
+          type: string
+          enum: [MEMO, TAG]
+        targetId:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          description: Canonical lowercase UUID serialized by the server.
+        targetLabel:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 240
+          description: >-
+            Current raw memo preview bounded to 240 Unicode code points, or the ACTIVE canonical
+            tag name bounded to 100 Unicode code points. Null when the target is unavailable.
+        available:
+          type: boolean
     ApplyProposalRequest:
       type: object
       additionalProperties: false
@@ -1855,6 +1974,17 @@ components:
           maxItems: 3
           items:
             $ref: "#/components/schemas/ApplyItem"
+        selectedRelations:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          description: >-
+            Explicit subset of stored proposal relation indexes. The current PWA always sends this
+            field, including [] to reject every candidate. A legacy omission is accepted only when
+            the stored proposal has no relation candidates; otherwise Apply returns
+            RELATION_SELECTION_REQUIRED without writing canonical data.
+          items:
+            $ref: "#/components/schemas/SelectedRelation"
     ApplicationView:
       type: object
       additionalProperties: false
@@ -1970,8 +2100,9 @@ components:
         Comparison of the latest stored selection for every proposal with an application. EXACT,
         CORRECTED, USER_RESOLVED, and UNCLASSIFIABLE sum to proposals.withApplication and are
         independent of current run state and APPLIED/UNDONE state. EXACT means unchanged selection,
-        not AI correctness. A non-empty relation proposal is UNCLASSIFIABLE because relations are
-        outside the current apply contract.
+        not AI correctness. A non-empty relation proposal is UNCLASSIFIABLE because
+        review-default-v3 has no adjudicated relation-selection comparison target, even though Apply
+        can now persist an explicitly selected relation.
       required: [exact, corrected, userResolved, unclassifiable, correctedFields]
       properties:
         exact:

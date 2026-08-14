@@ -7,7 +7,7 @@ import {
   SessionScopeChangedError,
 } from './client';
 import { ReviewOutcomeContractError } from './reviewOutcomeDecoder';
-import type { ApplyProposalRequest, MemoView } from './types';
+import type { ApplyProposalRequest, MemoView, Proposal } from './types';
 
 const memo: MemoView = {
   id: 'memo-1',
@@ -413,6 +413,7 @@ describe('memo API client', () => {
       selectedTags: [],
       items: [
         {
+          proposalCandidateId: ' item-1 ',
           kind: 'TASK',
           title: '운영체제 과제',
           due: {
@@ -424,6 +425,7 @@ describe('memo API client', () => {
           },
         },
       ],
+      selectedRelations: [{ proposalIndex: 0 }],
     };
 
     await client.apply('proposal-1', body, 'stable-apply-key');
@@ -442,7 +444,48 @@ describe('memo API client', () => {
         body: JSON.stringify(body),
       },
     );
-    expect(applicationFetch.mock.calls[0]?.[1]?.body).not.toContain('candidateId');
+    expect(applicationFetch.mock.calls[0]?.[1]?.body).toContain('proposalCandidateId');
+    expect(applicationFetch.mock.calls[0]?.[1]?.body).toContain('selectedRelations');
+  });
+
+  it('loads strict relation labels through an uncached owner-scoped abortable read', async () => {
+    const targetId = '1bb89795-60a0-40b0-b88e-76eecab89b7f';
+    const proposal = {
+      ...validProposalV2(),
+      relationCandidates: [{
+        sourceCandidateId: 'item-1',
+        targetType: 'TAG',
+        targetId,
+        relationType: 'RELATED_TO',
+        score: 0.8,
+      }],
+    } as Proposal;
+    const { client, applicationFetch } = testClient([{
+      proposalIndex: 0,
+      targetType: 'TAG',
+      targetId,
+      targetLabel: '운영체제',
+      available: true,
+    }]);
+    client.setSessionOwner('owner-1');
+    const controller = new AbortController();
+
+    await expect(
+      client.relationReviewCandidates('proposal/1', proposal, controller.signal),
+    ).resolves.toEqual([expect.objectContaining({ targetLabel: '운영체제', available: true })]);
+
+    expect(applicationFetch).toHaveBeenCalledWith(
+      '/api/v1/analysis-proposals/proposal%2F1/relation-review-candidates',
+      {
+        credentials: 'same-origin',
+        signal: expect.any(AbortSignal),
+        cache: 'no-store',
+        headers: {
+          'Content-Type': 'application/json',
+          [EXPECTED_OWNER_ID_HEADER]: 'owner-1',
+        },
+      },
+    );
   });
 
   it('bounds the recent memo list to the server-supported maximum', async () => {

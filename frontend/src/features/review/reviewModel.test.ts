@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { Proposal } from '../../shared/api/types';
+import type { Proposal, RelationReviewCandidate } from '../../shared/api/types';
 import {
   addManualItem,
   buildApplyRequest,
   changeItemDue,
   changeItemDueValue,
   changeItemTitle,
+  changeRelationSelection,
   changeSelectedType,
   changeReviewTitle,
   createCustomDateOnly,
@@ -14,6 +15,7 @@ import {
   isValidIsoDate,
   isValidOffsetDateTime,
   isValidReviewDraft,
+  isRelationSelectionReady,
   preferredItemKind,
   removeReviewItem,
   requiresExplicitDateMapping,
@@ -321,8 +323,9 @@ describe('review model', () => {
     expect(request.title).toBe('대표 제목');
     expect(request.selectedTags[0]).toEqual({ existingTagId: null, newCanonicalName: '운영체제' });
     expect(request.items).toEqual([
-      { kind: 'TASK', title: '대표 제목', due: null },
+      { proposalCandidateId: 'item-1', kind: 'TASK', title: '대표 제목', due: null },
       {
+        proposalCandidateId: 'item-2',
         kind: 'TASK',
         title: '둘째 할 일',
         due: {
@@ -336,7 +339,7 @@ describe('review model', () => {
     ]);
   });
 
-  it('strips v2 candidate identities from the canonical apply body', () => {
+  it('preserves only the exact proposal item source identity in the apply body', () => {
     const draft = createReviewDraft('proposal-explicit-apply', explicitBindingProposal());
 
     const request = buildApplyRequest(draft, 'Asia/Seoul');
@@ -344,6 +347,7 @@ describe('review model', () => {
 
     expect(request.items).toEqual([
       {
+        proposalCandidateId: 'item-report',
         kind: 'TASK',
         title: '보고서 제출',
         due: {
@@ -355,6 +359,7 @@ describe('review model', () => {
         },
       },
       {
+        proposalCandidateId: 'item-presentation',
         kind: 'TASK',
         title: '발표 준비',
         due: {
@@ -366,7 +371,9 @@ describe('review model', () => {
         },
       },
     ]);
-    expect(serialized).not.toContain('candidateId');
+    expect(serialized).toContain('proposalCandidateId');
+    expect(serialized).toContain('item-report');
+    expect(serialized).toContain('item-presentation');
     expect(serialized).not.toContain('date-report');
     expect(serialized).not.toContain('date-presentation');
   });
@@ -426,7 +433,8 @@ describe('review model', () => {
     expect(buildApplyRequest(draft, 'Asia/Seoul')).toMatchObject({
       selectedType: 'TASK',
       title: '운영체제 과제',
-      items: [{ kind: 'TASK', title: '운영체제 과제', due: null }],
+      items: [{ proposalCandidateId: null, kind: 'TASK', title: '운영체제 과제', due: null }],
+      selectedRelations: [],
     });
   });
 
@@ -472,6 +480,7 @@ describe('review model', () => {
     expect(isValidReviewDraft(draft)).toBe(true);
     expect(buildApplyRequest(draft, 'Asia/Seoul').items).toEqual([
       {
+        proposalCandidateId: 'item-1',
         kind: 'TASK',
         title: '운영체제 과제',
         due: null,
@@ -544,8 +553,91 @@ describe('review model', () => {
     expect(draft.title).toBe('시험 메모와 과제');
     expect(isValidReviewDraft(draft)).toBe(true);
     expect(buildApplyRequest(draft, 'Asia/Seoul').items).toEqual([
-      { kind: 'INFORMATION', title: '시험 메모와 과제', due: null },
+      {
+        proposalCandidateId: 'info-1',
+        kind: 'INFORMATION',
+        title: '시험 메모와 과제',
+        due: null,
+      },
     ]);
+  });
+
+  it('defaults every relation to unchecked and maps only explicit selections', () => {
+    const exactSourceId = '  source-😀  ';
+    const related: Proposal = {
+      ...proposal,
+      itemCandidates: [
+        proposalItem(exactSourceId, 'TASK', '연결할 과제'),
+        proposalItem('keep-item', 'INFORMATION', '남길 메모'),
+      ],
+      relationCandidates: [
+        {
+          sourceCandidateId: exactSourceId,
+          targetType: 'TAG',
+          targetId: '2472db10-4f83-4ec5-aebc-42ef81894eaf',
+          relationType: 'RELATED_TO',
+          score: 0.81,
+        },
+      ],
+    };
+    const candidates: RelationReviewCandidate[] = [
+      {
+        proposalIndex: 0,
+        targetType: 'TAG',
+        targetId: '2472db10-4f83-4ec5-aebc-42ef81894eaf',
+        targetLabel: '운영체제',
+        available: true,
+      },
+    ];
+
+    let draft = createReviewDraft('proposal-relations', related);
+    expect(draft.selectedRelationIndexes).toEqual([]);
+    expect(draft.items[0]?.proposalCandidateId).toBe(exactSourceId);
+    expect(isRelationSelectionReady(draft, candidates)).toBe(true);
+    expect(buildApplyRequest(draft, 'Asia/Seoul').selectedRelations).toEqual([]);
+
+    draft = changeRelationSelection(draft, 0, true);
+    const request = buildApplyRequest(draft, 'Asia/Seoul');
+    expect(request.items[0]?.proposalCandidateId).toBe(exactSourceId);
+    expect(request.selectedRelations).toEqual([{ proposalIndex: 0 }]);
+    expect(request.selectedTags).toEqual([
+      { existingTagId: null, newCanonicalName: '운영체제' },
+    ]);
+
+    draft = removeReviewItem(draft, 0);
+    expect(draft.selectedRelationIndexes).toEqual([]);
+  });
+
+  it('keeps a 100-supplementary-code-point proposal identity exact and blocks unavailable selections', () => {
+    const boundaryIdentity = '😀'.repeat(100);
+    const related: Proposal = {
+      ...proposal,
+      itemCandidates: [proposalItem(boundaryIdentity, 'TASK', '경계 항목')],
+      relationCandidates: [
+        {
+          sourceCandidateId: boundaryIdentity,
+          targetType: 'MEMO',
+          targetId: 'd4b26246-0bbb-403a-98e0-424920514df7',
+          relationType: 'REFERENCES',
+          score: 0.7,
+        },
+      ],
+    };
+    const unavailable: RelationReviewCandidate[] = [
+      {
+        proposalIndex: 0,
+        targetType: 'MEMO',
+        targetId: 'd4b26246-0bbb-403a-98e0-424920514df7',
+        targetLabel: null,
+        available: false,
+      },
+    ];
+    let draft = createReviewDraft('proposal-boundary-relation', related);
+    draft = changeRelationSelection(draft, 0, true);
+
+    expect(buildApplyRequest(draft, 'Asia/Seoul').items[0]?.proposalCandidateId)
+      .toBe(boundaryIdentity);
+    expect(isRelationSelectionReady(draft, unavailable)).toBe(false);
   });
 
   it('caps manual items at three and allows manual items to be removed', () => {

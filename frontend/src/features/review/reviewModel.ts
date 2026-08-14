@@ -4,6 +4,7 @@ import type {
   ItemCandidate,
   ItemKind,
   Proposal,
+  RelationReviewCandidate,
   TagCandidate,
 } from '../../shared/api/types';
 import {
@@ -36,6 +37,7 @@ export function preferredItemKind(proposal: Proposal): ItemKind | null {
 }
 
 export type ReviewItemDraft = ItemCandidate & {
+  proposalCandidateId: string | null;
   due: DateCandidate | null;
 };
 
@@ -46,6 +48,7 @@ export type ReviewDraft = {
   selectedType: ItemKind | null;
   tags: TagCandidate[];
   items: ReviewItemDraft[];
+  selectedRelationIndexes: number[];
 };
 
 type ApplicableReviewDraft = ReviewDraft & {
@@ -129,11 +132,13 @@ export function createReviewDraft(proposalId: string, proposal: Proposal): Revie
     items: validItems.map((item, index) => {
       return {
         ...item,
+        proposalCandidateId: item.candidateId ?? null,
         title: index === 0 ? proposal.suggestedTitle.value : item.title,
         sourceSpan: item.sourceSpan ? { ...item.sourceSpan } : item.sourceSpan,
         due: null,
       };
     }),
+    selectedRelationIndexes: [],
   };
   const projectedDraft = selectedType ? changeSelectedType(baseDraft, selectedType) : baseDraft;
   const usableDates = usableDateCandidates(proposal);
@@ -258,6 +263,7 @@ export function addManualItem(review: ReviewDraft): ReviewDraft {
   const isFirstItem = review.items.length === 0;
   const item: ReviewItemDraft = {
     candidateId: `manual-${suffix}`,
+    proposalCandidateId: null,
     kind: review.selectedType,
     title: isFirstItem ? review.title : '',
     sourceSpan: null,
@@ -276,12 +282,71 @@ export function removeReviewItem(review: ReviewDraft, itemIndex: number): Review
     review.selectedType && items.some((item) => item.kind === review.selectedType)
       ? review.selectedType
       : (items[0]?.kind ?? review.selectedType);
+  const remainingProposalCandidateIds = new Set(
+    items
+      .map((item) => item.proposalCandidateId)
+      .filter((candidateId): candidateId is string => candidateId !== null),
+  );
   return {
     ...review,
     selectedType,
     title: itemIndex === 0 && items[0] ? items[0].title : review.title,
     items,
+    selectedRelationIndexes: review.selectedRelationIndexes.filter((proposalIndex) => {
+      const relation = review.proposal.relationCandidates[proposalIndex];
+      return relation !== undefined && remainingProposalCandidateIds.has(relation.sourceCandidateId);
+    }),
   };
+}
+
+export function isRelationSourceApplied(
+  review: ReviewDraft,
+  proposalIndex: number,
+): boolean {
+  const relation = review.proposal.relationCandidates[proposalIndex];
+  if (!relation) return false;
+  return review.items.filter(
+    (item) => item.proposalCandidateId === relation.sourceCandidateId,
+  ).length === 1;
+}
+
+export function changeRelationSelection(
+  review: ReviewDraft,
+  proposalIndex: number,
+  selected: boolean,
+): ReviewDraft {
+  if (
+    !Number.isSafeInteger(proposalIndex) ||
+    proposalIndex < 0 ||
+    proposalIndex >= review.proposal.relationCandidates.length
+  ) {
+    return review;
+  }
+
+  const currentlySelected = review.selectedRelationIndexes.includes(proposalIndex);
+  if (currentlySelected === selected) return review;
+  if (selected && !isRelationSourceApplied(review, proposalIndex)) return review;
+
+  return {
+    ...review,
+    selectedRelationIndexes: selected
+      ? [...review.selectedRelationIndexes, proposalIndex].sort((left, right) => left - right)
+      : review.selectedRelationIndexes.filter((index) => index !== proposalIndex),
+  };
+}
+
+export function isRelationSelectionReady(
+  review: ReviewDraft,
+  candidates: RelationReviewCandidate[] | null,
+): boolean {
+  if (review.proposal.relationCandidates.length === 0) return true;
+  if (!candidates || candidates.length !== review.proposal.relationCandidates.length) return false;
+  return review.selectedRelationIndexes.every((proposalIndex) => {
+    const candidate = candidates[proposalIndex];
+    return candidate?.proposalIndex === proposalIndex &&
+      candidate.available &&
+      isRelationSourceApplied(review, proposalIndex);
+  });
 }
 
 export function changeItemDue(
@@ -312,6 +377,22 @@ export function changeItemDueValue(
 }
 
 export function isValidReviewDraft(review: ReviewDraft): review is ApplicableReviewDraft {
+  const proposalCandidateIds = new Set(
+    review.proposal.itemCandidates.map((item) => item.candidateId),
+  );
+  const appliedProposalCandidateIds = review.items
+    .map((item) => item.proposalCandidateId)
+    .filter((candidateId): candidateId is string => candidateId !== null);
+  const relationIndexesAreValid =
+    review.selectedRelationIndexes.length <= review.proposal.relationCandidates.length &&
+    review.selectedRelationIndexes.every(
+      (proposalIndex, index) =>
+        Number.isSafeInteger(proposalIndex) &&
+        proposalIndex >= 0 &&
+        proposalIndex < review.proposal.relationCandidates.length &&
+        (index === 0 || proposalIndex > review.selectedRelationIndexes[index - 1]!) &&
+        isRelationSourceApplied(review, proposalIndex),
+    );
   return (
     review.selectedType !== null &&
     review.title.trim().length > 0 &&
@@ -319,6 +400,9 @@ export function isValidReviewDraft(review: ReviewDraft): review is ApplicableRev
     review.items.length <= 3 &&
     review.items[0].title.trim() === review.title.trim() &&
     review.items.some((item) => item.kind === review.selectedType) &&
+    appliedProposalCandidateIds.every((candidateId) => proposalCandidateIds.has(candidateId)) &&
+    new Set(appliedProposalCandidateIds).size === appliedProposalCandidateIds.length &&
+    relationIndexesAreValid &&
     review.items.every(
       (item) =>
         item.title.trim().length > 0 &&
@@ -340,6 +424,7 @@ export function buildApplyRequest(review: ReviewDraft, timeZone: string): ApplyP
       newCanonicalName: tag.existingTagId ? null : tag.canonicalName.trim(),
     })),
     items: review.items.map((item) => ({
+      proposalCandidateId: item.proposalCandidateId,
       kind: item.kind,
       title: item.title.trim(),
       due:
@@ -353,5 +438,6 @@ export function buildApplyRequest(review: ReviewDraft, timeZone: string): ApplyP
             }
           : null,
     })),
+    selectedRelations: review.selectedRelationIndexes.map((proposalIndex) => ({ proposalIndex })),
   };
 }

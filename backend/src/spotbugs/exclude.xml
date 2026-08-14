@@ -47,6 +47,11 @@
   </Match>
   <Match>
     <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.analysis.application.AnalysisRelationReviewService"/>
+    <Field name="json"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
     <Class name="local.personalmemo.analysis.infrastructure.FakeAnalyzer"/>
     <Field name="json"/>
   </Match>

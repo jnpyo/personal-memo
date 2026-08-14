@@ -8,7 +8,10 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
 
 - Milestone 0: complete.
 - Milestone 1: complete, including memo lifecycle/recovery, bounded hard-priority graph home,
-  accessible node detail/pin interaction, production PWA packaging, and mobile E2E coverage.
+  accessible node detail/pin interaction, explicit relation review/application/undo, production PWA
+  packaging, and mobile E2E coverage. V18 stores selected item-scoped directed MEMO/TAG relations
+  with owner-aware constraints; graph projection of those typed relations remains a separate product
+  decision rather than an implied part of Milestone 1.
 - Milestone 5 has two read-only vertical slices. The first is an independently bounded, owner-scoped
   full-corpus MEMO_TAG neighborhood endpoint and drawer navigation from a home tag to an off-home
   memo's current raw detail. The second is privacy-first exact lexical memo search over the current
@@ -148,10 +151,12 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
 - memo identity and immutable revision migrations
 - analysis run/proposal/application migrations
 - tags, aliases, memo items, task details, and applied links
+- V18 application-owned item-to-MEMO/TAG typed relation persistence with owner-aware targets
 - memo CRUD with idempotent create
 - deterministic `FakeAnalyzer`
 - proposal review endpoints
 - transactional apply and undo
+- bounded owner-visible relation labels, default-unchecked manual selection, and relation-aware undo
 - bounded graph home endpoint with canonical pin/overdue/TODO/due/revision priority, deterministic
   memo/tag budget reservation, and stable tag connectivity ordering
 - idempotent owner-scoped active-memo pin mutation
@@ -163,6 +168,7 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
 - quick-capture input
 - pending/saved/error state
 - review chips for type, title, tags, and date
+- relation review choices with unavailable-target handling and explicit reject-all selection
 - partial apply and reject
 - task side panel/list
 - keyboard/touch graph memo/tag rendering, direct-neighbor highlight, and mobile node detail drawer
@@ -176,6 +182,8 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
 - owner isolation
 - graph pin replay/mismatch, priority ordering, no-store detail, focus restoration, and current-home
   neighborhood bounds
+- relation source mapping, owner/ACTIVE target races, semantic duplicate rejection, application
+  rollback/undo, target-tag orphan protection, and label privacy
 
 ### Exit criteria
 
