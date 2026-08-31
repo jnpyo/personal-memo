@@ -14,7 +14,7 @@ RUN npm run lint
 RUN npm run test
 RUN npm run build
 
-FROM nginxinc/nginx-unprivileged:1.29-alpine AS runtime
+FROM nginxinc/nginx-unprivileged:1.31-alpine AS runtime
 
 ENV API_PROXY_TARGET=http://backend:8080 \
     NGINX_ENVSUBST_FILTER=^API_PROXY_TARGET$
