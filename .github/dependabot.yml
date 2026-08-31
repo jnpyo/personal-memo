@@ -92,3 +92,22 @@ updates:
           - '*'
         update-types:
           - patch
+
+  # Keep the shared Nginx base image aligned across both public edge Dockerfiles.
+  - package-ecosystem: docker
+    directories:
+      - /app-edge
+      - /calendar-edge
+    schedule:
+      interval: weekly
+      day: monday
+      time: '10:00'
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 3
+    groups:
+      edge-image-patches:
+        group-by: dependency-name
+        patterns:
+          - '*'
+        update-types:
+          - patch
