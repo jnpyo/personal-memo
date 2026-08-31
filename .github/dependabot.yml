@@ -93,6 +93,7 @@ updates:
         update-types:
           - patch
 
+  # Keep the shared Nginx base image aligned across both public edge Dockerfiles.
   - package-ecosystem: docker
     directories:
       - /app-edge
