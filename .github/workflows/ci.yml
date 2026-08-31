@@ -117,7 +117,7 @@ jobs:
         env:
           RUN_POSTGRES_INTEGRATION_TESTS: 'true'
       - name: Upload deterministic evaluation report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: deterministic-evaluation-${{ github.run_id }}-${{ github.run_attempt }}
           path: backend/target/evaluation/deterministic-baseline.json
@@ -125,7 +125,7 @@ jobs:
           retention-days: 14
       - name: Upload backend test reports
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-test-reports-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -219,7 +219,7 @@ jobs:
             2>&1 | tee artifacts/compose.log || true
       - name: Upload E2E diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
