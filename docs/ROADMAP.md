@@ -76,8 +76,11 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
   contract and no browser control over Windows services, Docker, Cloudflare, connector metrics, or
   secrets. Frontend lint, TypeScript, 472 unit tests and the production PWA build pass. A
   backend-free synthetic Chrome smoke passes the 384×854 and 854×384 Today-first shell and overflow
-  checks. The full disposable-backend primary flow remains unexecuted because Docker Desktop is
-  stopped; no deployed acceptance is claimed yet.
+  checks. GitHub Actions runs `33358387450` (push) and `33358390766` (pull request) also pass the
+  disposable Ubuntu production-like stack, readiness probes, and all 26 primary/OAuth-state E2E
+  tests at commit `19ce1fbc49744ba9c6dbefbc313e48b36e5c81e6`. Status is
+  `SOURCE_QUALIFIED_LINUX_FULL_E2E_PASS_DEPLOYMENT_PENDING`; no personal Windows deployment or device
+  acceptance is claimed.
 - This is an explicit interim ordering exception, not a claim that Milestones 2–4 are complete. The
   remaining Milestone 2 gates require two independent human reviews and later provider/privacy/cost
   decisions, while Milestones 3–4 require account-delivery or Web Push product choices. The read-only,
@@ -967,14 +970,19 @@ test, and a fail-closed server-owned public-origin capability.
 - add no API, JSON Schema, Flyway migration, canonical mutation, automatic Apply, or host operations
   endpoint. Starting or stopping `PersonalMemoAppCloudflareTunnel`, `app-public-edge`, Docker, or
   Ollama remains outside the browser application and follows the reviewed operator scripts
-- status: `SOURCE_QUALIFIED_SYNTHETIC_MOBILE_PASS_FULL_E2E_PENDING`. Frontend lint, TypeScript,
+- status: `SOURCE_QUALIFIED_LINUX_FULL_E2E_PASS_DEPLOYMENT_PENDING`. Frontend lint, TypeScript,
   472 unit tests and the production PWA build pass. A backend-free synthetic Chrome test passes at
-  384×854 and 854×384 without personal data. The full disposable-backend primary flow remains
-  unexecuted while Docker Desktop is stopped; explicit deployment/update acceptance is still required
+  384×854 and 854×384 without personal data. GitHub Actions runs `33358387450` (push) and
+  `33358390766` (pull request) pass API/OpenAPI, production Compose, Windows PowerShell source
+  contracts, frontend, backend, and the disposable Ubuntu production-like stack with all 26
+  primary/OAuth-state E2E tests at commit `19ce1fbc49744ba9c6dbefbc313e48b36e5c81e6`
 - 2026-08-31 requalification repeated this bounded slice with Node 24.19.0: ESLint 9.39.2 passed,
   Vitest 4.1.10 passed 48 files/472 tests, TypeScript 5.9.3 and Vite 7.3.6 production PWA build passed,
   and Playwright 1.60.0 with local Edge passed the 384×854/854×384 synthetic shell with zero horizontal
-  overflow. This does not promote the Docker-backed primary flow or deployment acceptance to PASS
+  overflow. The later GitHub-hosted Linux result proves only a disposable source/product flow. It
+  does not prove the Windows Docker Desktop defect fixed, a personal V23 rebuild/update, deployed PWA
+  acceptance, Cloudflare runtime state, owner data behavior, physical-device behavior, or model
+  quality. M7.1 remains `SOLO_PROVISIONAL/REPORT_ONLY`
 
 ## Initial issue order
 

@@ -33,7 +33,7 @@
 - `MILESTONE_6E_QUALIFICATION_STATUS`: `LIVE_OWNER_BETA` / `SOLO_PROVISIONAL` / `REPORT_ONLY`
 - `MILESTONE_6E_CURRENT_RUNTIME`: `STOPPED_AFTER_REBOOT` / `MANUAL_RESTART_REQUIRED`
 - `MILESTONE_6E_UNAUTH_ME_AND_PROVIDER_LOG_SENTINELS`: `UNVERIFIED`
-- `MILESTONE_7_1_TODAY_FIRST_MOBILE_HOME`: `SOURCE_QUALIFIED_SYNTHETIC_MOBILE_PASS_FULL_E2E_PENDING`
+- `MILESTONE_7_1_TODAY_FIRST_MOBILE_HOME`: `SOURCE_QUALIFIED_LINUX_FULL_E2E_PASS_DEPLOYMENT_PENDING`
 - LiquidAI evidence: `SOLO_PROVISIONAL` / `REPORT_ONLY` / `NO_GO`
 - Personal AI-preferred proposal path: `SOLO_PROVISIONAL` / `REPORT_ONLY`; owner-authorized V18→V20
   deployment, V20→V22 and V22→V23 backup/restore rehearsal/migration/rebuild/private-route smoke completed;
@@ -579,12 +579,14 @@ loading/error state만 읽어 원문 저장 가능, 원문만 저장 가능, 일
 
 M7.1은 API/OpenAPI/JSON Schema/Flyway/canonical 계약을 바꾸지 않고 automatic Apply를 추가하지 않는다.
 Browser에 Windows service, Docker, Cloudflare connector/metrics, token 시작·중지 제어도 넣지 않는다.
-현재 상태는 `SOURCE_QUALIFIED_SYNTHETIC_MOBILE_PASS_FULL_E2E_PENDING`이다. Frontend lint,
+현재 상태는 `SOURCE_QUALIFIED_LINUX_FULL_E2E_PASS_DEPLOYMENT_PENDING`이다. Frontend lint,
 TypeScript, 48 files/472 unit tests와 production PWA build는 통과했다. Production PWA를 임시
 loopback에서 열고 synthetic API만 사용한 Chrome test도 384×854/854×384 Today-first shell, 기존
 capture/connection 표시와 horizontal overflow 0을 통과했다. 임시 preview와 Playwright artifact는
-종료·제거했다. Docker Desktop이 stopped라 disposable-backend 전체 primary flow는 실행하지 않았으며,
-앱 내 화면 업데이트 확인 전에는 배포 acceptance를 주장하지 않는다.
+종료·제거했다. 이어서 commit `19ce1fbc49744ba9c6dbefbc313e48b36e5c81e6`의 GitHub Actions push
+run `33358387450`와 pull-request run `33358390766`이 API/OpenAPI, production Compose, Windows
+PowerShell source contracts, frontend, backend와 disposable Ubuntu production-like stack을 통과했다.
+Stack readiness 뒤 primary/OAuth-state E2E 26건이 통과했고 exact stack cleanup도 통과했다.
 
 2026-08-31 bounded requalification에서 Node 24.19.0, ESLint 9.39.2, Vitest 4.1.10,
 TypeScript 5.9.3, Vite 7.3.6, Playwright 1.60.0을 사용했다. Lint 0 error, 48 files/472 tests,
@@ -593,5 +595,7 @@ production PWA build, Edge synthetic 384×854/854×384 1/1과 horizontal overflo
 PostgreSQL, canonical data, 실제 API, Apply, Docker는 사용하지 않았고 임시 preview는 종료했다.
 검증된 M7.1 code/test 파일 8개는 owner-only 로컬 source checkpoint로 별도 보존했으며,
 압축파일 SHA-256은 `DEB5C332820417BDEC22C9BD76EF1BEE52C8AF82E65EC557A11579D87C13F563`이다.
-이 checkout은 여전히 unrelated dirty changes와 섞여 있으므로 이 checkpoint는 Git commit이나
-배포 승인을 대체하지 않는다.
+그 뒤 source-only commit과 Draft PR로 선별돼 checkout/head/upstream 일치와 전체 CI 통과를
+확인했다. 이는 Windows Docker Desktop defect 해결, 개인 V23 backup/rebuild/update, owner session이나
+canonical data 동작, Cloudflare runtime, 실제 S24 UI 또는 모델 품질 증거가 아니다. 앱 내 화면
+업데이트 확인 전에는 배포 acceptance를 주장하지 않으며 상태는 `SOLO_PROVISIONAL/REPORT_ONLY`다.

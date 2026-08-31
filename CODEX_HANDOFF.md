@@ -833,9 +833,12 @@ public activation, real-feed qualification과 Google·Apple smoke는 final gate 
   48 files/472 unit tests와 production PWA build가 통과했다. Backend-free synthetic Chrome smoke도
   production PWA의 384×854/854×384 Today-first shell, 기존 capture/connection 표시와 horizontal
   overflow 0을 통과했고 임시 preview/artifact를 제거했다. 상태는
-  `SOURCE_QUALIFIED_SYNTHETIC_MOBILE_PASS_FULL_E2E_PENDING`이다. Docker Desktop/disposable E2E
-  backend가 stopped라 전체 primary flow는 실행하지 않았고, 앱 내 화면 업데이트 확인 전에는 배포
-  acceptance를 주장하지 않는다.
+  `SOURCE_QUALIFIED_LINUX_FULL_E2E_PASS_DEPLOYMENT_PENDING`이다. Commit
+  `19ce1fbc49744ba9c6dbefbc313e48b36e5c81e6`의 GitHub Actions push run `33358387450`와 pull-request
+  run `33358390766`이 API/OpenAPI, production Compose, Windows PowerShell source contracts,
+  frontend, backend와 disposable Ubuntu production-like stack을 통과했다. Stack readiness 뒤
+  primary/OAuth-state E2E 26건과 exact stack cleanup도 통과했다. 앱 내 화면 업데이트 확인 전에는
+  배포 acceptance를 주장하지 않는다.
 - 2026-08-31 M7.1 bounded requalification은 Node 24.19.0 / ESLint 9.39.2 / Vitest 4.1.10 /
   TypeScript 5.9.3 / Vite 7.3.6 / Playwright 1.60.0 + Edge로 lint, 48 files/472 tests,
   production PWA build, 384×854/854×384 synthetic shell 1/1과 horizontal overflow 0을 모두 다시
@@ -847,5 +850,6 @@ public activation, real-feed qualification과 Google·Apple smoke는 final gate 
   reset, clean/purge, volume/VHDX 삭제는 하지 않았고 Docker는 stopped로 두었다. 로컬 진단 묶음은
   private ACL로 생성했지만 열어보거나 외부로 업로드하지 않았다. 2026-08-31 기준 동일
   Docker tracker issue는 open이고, Windows build 26200.9168에 pending update/reboot은 없으며,
-  WSL 2.7.12 release note에도 해당 수정은 없어 설치하지 않았다. 이 blocker가 해결되기 전에
-  personal V23 rebuild, disposable primary E2E, deployment acceptance를 진행하지 말 것.
+  WSL 2.7.12 release note에도 해당 수정은 없어 설치하지 않았다. GitHub-hosted Linux의 disposable
+  full E2E 통과는 이 Windows host defect를 해결했다는 뜻이 아니다. 이 blocker가 해결되기 전에
+  personal V23 rebuild나 Windows-host deployment acceptance를 진행하지 말 것.
