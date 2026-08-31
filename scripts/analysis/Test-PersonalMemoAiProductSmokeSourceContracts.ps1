@@ -695,7 +695,9 @@ function Assert-PowerShellSources {
         Assert-TextMatches -Text $orchestrator -Pattern $required.Pattern -Message $required.Message
     }
 
-    $composeInvocationLines = @([regex]::Matches($orchestrator, '(?im)^[^\r\n]*["'']compose["''][^\r\n]*$'))
+    # Fresh checkouts normalize PowerShell sources to CRLF; consume the optional
+    # carriage return so the bounded-line contract is identical for LF and CRLF.
+    $composeInvocationLines = @([regex]::Matches($orchestrator, '(?im)^[^\r\n]*["'']compose["''][^\r\n]*\r?$'))
     if ($composeInvocationLines.Count -eq 0) {
         Stop-ContractValidation 'orchestrator must contain a bounded Compose invocation.'
     }
