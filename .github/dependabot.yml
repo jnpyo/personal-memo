@@ -92,3 +92,21 @@ updates:
           - '*'
         update-types:
           - patch
+
+  - package-ecosystem: docker
+    directories:
+      - /app-edge
+      - /calendar-edge
+    schedule:
+      interval: weekly
+      day: monday
+      time: '10:00'
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 3
+    groups:
+      edge-image-patches:
+        group-by: dependency-name
+        patterns:
+          - '*'
+        update-types:
+          - patch
