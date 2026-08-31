@@ -1,0 +1,40 @@
+name: personal-memo-integration-test
+
+services:
+  test-postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: personal_memo_test
+      POSTGRES_USER: personal_memo
+      POSTGRES_PASSWORD: test-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U personal_memo -d personal_memo_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  backend-integration:
+    image: maven:3.9.11-eclipse-temurin-21
+    working_dir: /workspace/backend
+    environment:
+      RUN_POSTGRES_INTEGRATION_TESTS: "true"
+      TEST_DATABASE_URL: jdbc:postgresql://test-postgres:5432/personal_memo_test
+      TEST_DATABASE_USERNAME: personal_memo
+      TEST_DATABASE_PASSWORD: test-only
+    command: ["mvn", "-B", "test"]
+    depends_on:
+      test-postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend/pom.xml:/workspace/backend/pom.xml:ro
+      - ./backend/src:/workspace/backend/src:ro
+      - ./contracts:/workspace/contracts:ro
+      - ./fixtures:/workspace/fixtures:ro
+      - backend-test-target:/workspace/backend/target
+      - maven-test-cache:/root/.m2
+
+volumes:
+  backend-test-target:
+  maven-test-cache:

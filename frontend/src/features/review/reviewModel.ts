@@ -1,0 +1,443 @@
+import type {
+  ApplyProposalRequest,
+  DateCandidate,
+  ItemCandidate,
+  ItemKind,
+  Proposal,
+  RelationReviewCandidate,
+  TagCandidate,
+} from '../../shared/api/types';
+import {
+  isValidIsoDate,
+  isValidOffsetDateTime,
+} from '../../shared/validation/dateTime';
+
+export { isValidIsoDate, isValidOffsetDateTime } from '../../shared/validation/dateTime';
+
+export const ITEM_KINDS: ItemKind[] = ['TASK', 'EVENT', 'INFORMATION', 'IDEA', 'RECORD'];
+
+export function isItemKind(value: unknown): value is ItemKind {
+  return typeof value === 'string' && (ITEM_KINDS as readonly string[]).includes(value);
+}
+
+export function preferredItemKind(proposal: Proposal): ItemKind | null {
+  const topCandidate = proposal.typeCandidates.reduce<Proposal['typeCandidates'][number] | null>(
+    (top, candidate) => (top === null || candidate.score > top.score ? candidate : top),
+    null,
+  );
+  if (
+    topCandidate &&
+    proposal.typeCandidates.some(
+      (candidate) => candidate.value !== topCandidate.value && candidate.score === topCandidate.score,
+    )
+  ) {
+    return null;
+  }
+  return isItemKind(topCandidate?.value) ? topCandidate.value : null;
+}
+
+export type ReviewItemDraft = ItemCandidate & {
+  proposalCandidateId: string | null;
+  due: DateCandidate | null;
+};
+
+export type ReviewDraft = {
+  proposalId: string;
+  proposal: Proposal;
+  title: string;
+  selectedType: ItemKind | null;
+  tags: TagCandidate[];
+  items: ReviewItemDraft[];
+  selectedRelationIndexes: number[];
+};
+
+type ApplicableReviewDraft = ReviewDraft & {
+  selectedType: ItemKind;
+};
+
+function cloneDate(candidate: DateCandidate): DateCandidate {
+  return {
+    ...candidate,
+    ambiguityReasons: candidate.ambiguityReasons ? [...candidate.ambiguityReasons] : undefined,
+  };
+}
+
+export function isValidDue(due: DateCandidate | null): boolean {
+  if (!due || !due.surfaceText.trim()) return false;
+
+  if (due.precision === 'DATE_ONLY') {
+    return !due.timeSpecified && isValidIsoDate(due.value);
+  }
+  if (due.precision === 'EXACT_TIME' || due.precision === 'RELATIVE_EXACT') {
+    return due.timeSpecified && isValidOffsetDateTime(due.value);
+  }
+  return !due.timeSpecified && (!due.value || !due.value.trim());
+}
+
+export function usableDateCandidates(proposal: Proposal): DateCandidate[] {
+  return proposal.dateCandidates
+    .filter(
+      (candidate) =>
+        isValidDue(candidate) &&
+        (candidate.precision === 'DATE_ONLY' ||
+          candidate.precision === 'EXACT_TIME' ||
+          candidate.precision === 'RELATIVE_EXACT'),
+    )
+    .map(cloneDate)
+    .sort((left, right) => {
+      if (left.precision === right.precision) return 0;
+      if (left.precision === 'DATE_ONLY') return -1;
+      if (right.precision === 'DATE_ONLY') return 1;
+      return 0;
+    });
+}
+
+export function sameDateCandidate(left: DateCandidate, right: DateCandidate): boolean {
+  if (
+    left.candidateId !== undefined &&
+    left.candidateId !== null &&
+    right.candidateId !== undefined &&
+    right.candidateId !== null &&
+    left.candidateId !== right.candidateId
+  ) {
+    return false;
+  }
+  return (
+    left.surfaceText === right.surfaceText &&
+    left.value === right.value &&
+    left.precision === right.precision &&
+    left.timeSpecified === right.timeSpecified
+  );
+}
+
+export function createCustomDateOnly(): DateCandidate {
+  return {
+    surfaceText: '사용자 지정 날짜',
+    value: '',
+    precision: 'DATE_ONLY',
+    timeSpecified: false,
+  };
+}
+
+export function createReviewDraft(proposalId: string, proposal: Proposal): ReviewDraft {
+  const selectedType = preferredItemKind(proposal);
+  const validItems = proposal.itemCandidates.filter((item) => isItemKind(item.kind));
+
+  const baseDraft: ReviewDraft = {
+    proposalId,
+    proposal,
+    title: proposal.suggestedTitle.value,
+    selectedType,
+    tags: proposal.tagCandidates.map((tag) => ({ ...tag })),
+    items: validItems.map((item, index) => {
+      return {
+        ...item,
+        proposalCandidateId: item.candidateId ?? null,
+        title: index === 0 ? proposal.suggestedTitle.value : item.title,
+        sourceSpan: item.sourceSpan ? { ...item.sourceSpan } : item.sourceSpan,
+        due: null,
+      };
+    }),
+    selectedRelationIndexes: [],
+  };
+  const projectedDraft = selectedType ? changeSelectedType(baseDraft, selectedType) : baseDraft;
+  const usableDates = usableDateCandidates(proposal);
+  const unambiguousLegacyDue =
+    proposal.schemaVersion === '1' &&
+    projectedDraft.items.length === 1 &&
+    projectedDraft.items[0].kind === 'TASK' &&
+    usableDates.length === 1
+      ? usableDates[0]
+      : null;
+  return {
+    ...projectedDraft,
+    items: projectedDraft.items.map((item) => {
+      let due: DateCandidate | null = null;
+      if (item.kind === 'TASK') {
+        if (proposal.schemaVersion === '2' && item.dueDateCandidateId) {
+          const explicitDue = usableDates.find(
+            (candidate) => candidate.candidateId === item.dueDateCandidateId,
+          );
+          due = explicitDue ? cloneDate(explicitDue) : null;
+        } else if (unambiguousLegacyDue) {
+          due = cloneDate(unambiguousLegacyDue);
+        }
+      }
+      return { ...item, due };
+    }),
+  };
+}
+
+export function requiresExplicitDateMapping(review: ReviewDraft): boolean {
+  const dates = usableDateCandidates(review.proposal);
+  if (review.proposal.dateCandidates.length === 0) return false;
+  if (dates.length !== review.proposal.dateCandidates.length) return true;
+
+  if (review.proposal.schemaVersion === '1') {
+    if (review.items.length !== 1 || review.items[0].kind !== 'TASK' || dates.length !== 1) {
+      return true;
+    }
+    return review.items[0].due === null || !sameDateCandidate(review.items[0].due, dates[0]);
+  }
+
+  const referencedDateIds = new Set<string>();
+  for (const proposedItem of review.proposal.itemCandidates) {
+    const dueDateCandidateId = proposedItem.dueDateCandidateId;
+    if (!dueDateCandidateId) continue;
+    const expectedDate = dates.find((candidate) => candidate.candidateId === dueDateCandidateId);
+    const draftItem = review.items.find((item) => item.candidateId === proposedItem.candidateId);
+    if (
+      !expectedDate ||
+      !draftItem ||
+      draftItem.kind !== 'TASK' ||
+      !draftItem.due ||
+      !sameDateCandidate(draftItem.due, expectedDate)
+    ) {
+      return true;
+    }
+    referencedDateIds.add(dueDateCandidateId);
+  }
+
+  return dates.some(
+    (candidate) => !candidate.candidateId || !referencedDateIds.has(candidate.candidateId),
+  );
+}
+
+export function changeSelectedType(review: ReviewDraft, selectedType: ItemKind): ReviewDraft {
+  if (review.items.some((item) => item.kind === selectedType) || review.items.length === 0) {
+    return { ...review, selectedType };
+  }
+
+  return {
+    ...review,
+    selectedType,
+    items: review.items.map((item, index) =>
+      index === 0
+        ? { ...item, kind: selectedType, due: selectedType === 'TASK' ? item.due : null }
+        : item,
+    ),
+  };
+}
+
+export function changeReviewTitle(review: ReviewDraft, title: string): ReviewDraft {
+  return {
+    ...review,
+    title,
+    items: review.items.map((item, index) => (index === 0 ? { ...item, title } : item)),
+  };
+}
+
+export function changeItemTitle(
+  review: ReviewDraft,
+  itemIndex: number,
+  title: string,
+): ReviewDraft {
+  return {
+    ...review,
+    title: itemIndex === 0 ? title : review.title,
+    items: review.items.map((item, index) => (index === itemIndex ? { ...item, title } : item)),
+  };
+}
+
+export function changeItemKind(
+  review: ReviewDraft,
+  itemIndex: number,
+  kind: ItemKind,
+): ReviewDraft {
+  const items = review.items.map((item, index) =>
+    index === itemIndex ? { ...item, kind, due: kind === 'TASK' ? item.due : null } : item,
+  );
+  const selectedType = review.selectedType && items.some((item) => item.kind === review.selectedType)
+    ? review.selectedType
+    : kind;
+  return { ...review, selectedType, items };
+}
+
+export function addManualItem(review: ReviewDraft): ReviewDraft {
+  if (!review.selectedType || review.items.length >= 3) return review;
+
+  let suffix = 1;
+  while (review.items.some((item) => item.candidateId === `manual-${suffix}`)) {
+    suffix += 1;
+  }
+  const isFirstItem = review.items.length === 0;
+  const item: ReviewItemDraft = {
+    candidateId: `manual-${suffix}`,
+    proposalCandidateId: null,
+    kind: review.selectedType,
+    title: isFirstItem ? review.title : '',
+    sourceSpan: null,
+    action: null,
+    object: null,
+    due: null,
+  };
+  return { ...review, items: [...review.items, item] };
+}
+
+export function removeReviewItem(review: ReviewDraft, itemIndex: number): ReviewDraft {
+  if (itemIndex < 0 || itemIndex >= review.items.length) return review;
+
+  const items = review.items.filter((_, index) => index !== itemIndex);
+  const selectedType =
+    review.selectedType && items.some((item) => item.kind === review.selectedType)
+      ? review.selectedType
+      : (items[0]?.kind ?? review.selectedType);
+  const remainingProposalCandidateIds = new Set(
+    items
+      .map((item) => item.proposalCandidateId)
+      .filter((candidateId): candidateId is string => candidateId !== null),
+  );
+  return {
+    ...review,
+    selectedType,
+    title: itemIndex === 0 && items[0] ? items[0].title : review.title,
+    items,
+    selectedRelationIndexes: review.selectedRelationIndexes.filter((proposalIndex) => {
+      const relation = review.proposal.relationCandidates[proposalIndex];
+      return relation !== undefined && remainingProposalCandidateIds.has(relation.sourceCandidateId);
+    }),
+  };
+}
+
+export function isRelationSourceApplied(
+  review: ReviewDraft,
+  proposalIndex: number,
+): boolean {
+  const relation = review.proposal.relationCandidates[proposalIndex];
+  if (!relation) return false;
+  return review.items.filter(
+    (item) => item.proposalCandidateId === relation.sourceCandidateId,
+  ).length === 1;
+}
+
+export function changeRelationSelection(
+  review: ReviewDraft,
+  proposalIndex: number,
+  selected: boolean,
+): ReviewDraft {
+  if (
+    !Number.isSafeInteger(proposalIndex) ||
+    proposalIndex < 0 ||
+    proposalIndex >= review.proposal.relationCandidates.length
+  ) {
+    return review;
+  }
+
+  const currentlySelected = review.selectedRelationIndexes.includes(proposalIndex);
+  if (currentlySelected === selected) return review;
+  if (selected && !isRelationSourceApplied(review, proposalIndex)) return review;
+
+  return {
+    ...review,
+    selectedRelationIndexes: selected
+      ? [...review.selectedRelationIndexes, proposalIndex].sort((left, right) => left - right)
+      : review.selectedRelationIndexes.filter((index) => index !== proposalIndex),
+  };
+}
+
+export function isRelationSelectionReady(
+  review: ReviewDraft,
+  candidates: RelationReviewCandidate[] | null,
+): boolean {
+  if (review.proposal.relationCandidates.length === 0) return true;
+  if (!candidates || candidates.length !== review.proposal.relationCandidates.length) return false;
+  return review.selectedRelationIndexes.every((proposalIndex) => {
+    const candidate = candidates[proposalIndex];
+    return candidate?.proposalIndex === proposalIndex &&
+      candidate.available &&
+      isRelationSourceApplied(review, proposalIndex);
+  });
+}
+
+export function changeItemDue(
+  review: ReviewDraft,
+  itemIndex: number,
+  due: DateCandidate | null,
+): ReviewDraft {
+  return {
+    ...review,
+    items: review.items.map((item, index) =>
+      index === itemIndex ? { ...item, due: due ? cloneDate(due) : null } : item,
+    ),
+  };
+}
+
+export function changeItemDueValue(
+  review: ReviewDraft,
+  itemIndex: number,
+  value: string,
+): ReviewDraft {
+  return {
+    ...review,
+    items: review.items.map((item, index) => {
+      if (index !== itemIndex || !item.due) return item;
+      return { ...item, due: { ...item.due, value } };
+    }),
+  };
+}
+
+export function isValidReviewDraft(review: ReviewDraft): review is ApplicableReviewDraft {
+  const proposalCandidateIds = new Set(
+    review.proposal.itemCandidates.map((item) => item.candidateId),
+  );
+  const appliedProposalCandidateIds = review.items
+    .map((item) => item.proposalCandidateId)
+    .filter((candidateId): candidateId is string => candidateId !== null);
+  const relationIndexesAreValid =
+    review.selectedRelationIndexes.length <= review.proposal.relationCandidates.length &&
+    review.selectedRelationIndexes.every(
+      (proposalIndex, index) =>
+        Number.isSafeInteger(proposalIndex) &&
+        proposalIndex >= 0 &&
+        proposalIndex < review.proposal.relationCandidates.length &&
+        (index === 0 || proposalIndex > review.selectedRelationIndexes[index - 1]!) &&
+        isRelationSourceApplied(review, proposalIndex),
+    );
+  return (
+    review.selectedType !== null &&
+    review.title.trim().length > 0 &&
+    review.items.length > 0 &&
+    review.items.length <= 3 &&
+    review.items[0].title.trim() === review.title.trim() &&
+    review.items.some((item) => item.kind === review.selectedType) &&
+    appliedProposalCandidateIds.every((candidateId) => proposalCandidateIds.has(candidateId)) &&
+    new Set(appliedProposalCandidateIds).size === appliedProposalCandidateIds.length &&
+    relationIndexesAreValid &&
+    review.items.every(
+      (item) =>
+        item.title.trim().length > 0 &&
+        (item.kind !== 'TASK' || item.due === null || isValidDue(item.due)),
+    )
+  );
+}
+
+export function buildApplyRequest(review: ReviewDraft, timeZone: string): ApplyProposalRequest {
+  if (!isValidReviewDraft(review)) {
+    throw new Error('검토 제안은 적용 전에 유형, 제목, 항목을 확인해야 합니다.');
+  }
+  return {
+    expectedMemoRevision: review.proposal.memoRevision,
+    selectedType: review.selectedType,
+    title: review.title.trim(),
+    selectedTags: review.tags.map((tag) => ({
+      existingTagId: tag.existingTagId,
+      newCanonicalName: tag.existingTagId ? null : tag.canonicalName.trim(),
+    })),
+    items: review.items.map((item) => ({
+      proposalCandidateId: item.proposalCandidateId,
+      kind: item.kind,
+      title: item.title.trim(),
+      due:
+        item.kind === 'TASK' && item.due
+          ? {
+              surfaceText: item.due.surfaceText,
+              value: item.due.value,
+              precision: item.due.precision,
+              timeZone,
+              timeSpecified: item.due.timeSpecified,
+            }
+          : null,
+    })),
+    selectedRelations: review.selectedRelationIndexes.map((proposalIndex) => ({ proposalIndex })),
+  };
+}

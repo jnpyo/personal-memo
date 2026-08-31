@@ -1,0 +1,31 @@
+services:
+  backend:
+    environment:
+      AUTH_REGISTRATION_ENABLED: "false"
+      GOOGLE_AUTH_ENABLED: "false"
+      GOOGLE_REGISTRATION_ENABLED: "false"
+      GOOGLE_CLIENT_ID: ""
+      GOOGLE_CLIENT_SECRET: ""
+      GOOGLE_REDIRECT_URI: ""
+      PERSONAL_MEMO_BOOTSTRAP_EMAIL: ${PERSONAL_MEMO_BOOTSTRAP_EMAIL:-}
+      PERSONAL_MEMO_BOOTSTRAP_DISPLAY_NAME: ${PERSONAL_MEMO_BOOTSTRAP_DISPLAY_NAME:-}
+      PERSONAL_MEMO_BOOTSTRAP_TIME_ZONE: ${PERSONAL_MEMO_BOOTSTRAP_TIME_ZONE:-Asia/Seoul}
+
+  frontend:
+    ports:
+      # The Nginx listener and forwarded-port contract are intentionally fixed to 8443 at this
+      # checkpoint. Personal scripts additionally reject any different environment value.
+      - "${PERSONAL_MEMO_HTTPS_BIND_ADDRESS:?Run scripts/personal/Initialize-PersonalMemo.ps1}:8443:8443"
+    volumes:
+      - type: bind
+        source: ./frontend/nginx/personal-tls-listener.conf
+        target: /etc/nginx/personal-listeners/personal-tls.conf
+        read_only: true
+      - type: bind
+        source: ${PERSONAL_MEMO_TLS_CERT_FILE:?Run scripts/personal/Initialize-PersonalMemo.ps1}
+        target: /run/personal-memo/tls/server-cert.pem
+        read_only: true
+      - type: bind
+        source: ${PERSONAL_MEMO_TLS_KEY_FILE:?Run scripts/personal/Initialize-PersonalMemo.ps1}
+        target: /run/personal-memo/tls/server-key.pem
+        read_only: true

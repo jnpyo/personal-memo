@@ -5,18 +5,32 @@ spring:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/personal_memo}
     username: ${SPRING_DATASOURCE_USERNAME:personal_memo}
     password: ${SPRING_DATASOURCE_PASSWORD:local-development-only}
-  jpa:
-    open-in-view: false
-    hibernate:
-      ddl-auto: validate
   flyway:
     enabled: true
+  session:
+    jdbc:
+      initialize-schema: never
+    timeout: 30m
 management:
   endpoints:
     web:
       exposure:
         include: health
 server:
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${SESSION_COOKIE_SECURE:false}
   error:
     include-message: never
-
+app:
+  auth:
+    registration-enabled: ${AUTH_REGISTRATION_ENABLED:true}
+    google:
+      enabled: ${GOOGLE_AUTH_ENABLED:false}
+      registration-enabled: ${GOOGLE_REGISTRATION_ENABLED:false}
+      client-id: ${GOOGLE_CLIENT_ID:}
+      client-secret: ${GOOGLE_CLIENT_SECRET:}
+      redirect-uri: ${GOOGLE_REDIRECT_URI:{baseUrl}/login/oauth2/code/{registrationId}}

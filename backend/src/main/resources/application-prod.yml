@@ -1,0 +1,23 @@
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+
+server:
+  forward-headers-strategy: framework
+  servlet:
+    session:
+      cookie:
+        secure: true
+
+app:
+  analysis:
+    dispatch-recovery:
+      enabled: true
+      batch-size: 25
+      fixed-delay: 30s
+  auth:
+    registration-enabled: false
+    google:
+      registration-enabled: false

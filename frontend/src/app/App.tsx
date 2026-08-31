@@ -1,11 +1,452 @@
-import { FormEvent, useEffect, useState } from 'react';
-import { api, Proposal } from '../shared/api/client';
-export function App(){
- const[health,setHealth]=useState('연결 확인 중');const[content,setContent]=useState('');const[proposal,setProposal]=useState<Proposal|null>(null);const[proposalId,setProposalId]=useState('');const[title,setTitle]=useState('');const[tags,setTags]=useState<Proposal['tagCandidates']>([]);const[tasks,setTasks]=useState<any[]>([]);const[graph,setGraph]=useState<any>({nodes:[]});const[applicationId,setApplicationId]=useState('');const[message,setMessage]=useState('메모를 입력해 주세요.');
- useEffect(()=>{fetch('/api/v1/health').then(r=>r.ok?r.json():Promise.reject()).then(()=>setHealth('서버 연결됨')).catch(()=>setHealth('서버 연결 필요'))},[]);
- const refresh=async()=>{setTasks(await api.tasks());setGraph(await api.graph())};
- const capture=async(e:FormEvent)=>{e.preventDefault();try{setMessage('원문 저장 중…');const memo=await api.createMemo(content);setMessage('Fake 분석 후보 생성 중…');const run=await api.analyze(memo.id,memo.currentRevision);const p=await api.proposal(run.proposalId);setProposal(p);setProposalId(run.proposalId);setTitle(p.suggestedTitle.value);setTags(p.tagCandidates);setMessage('후보를 수정하거나 승인하세요.')}catch{setMessage('저장 또는 분석에 실패했습니다.')}};
- const apply=async()=>{if(!proposal)return;const r=await api.apply(proposalId,proposal,title,tags);setApplicationId(r.applicationId);setProposal(null);setContent('');setMessage('승인한 항목만 적용했습니다.');await refresh()};
- const undo=async()=>{await api.undo(applicationId);setApplicationId('');setMessage('파생 항목만 되돌렸습니다. 원문은 보존됩니다.');await refresh()};
- return <main><header><span className="eyebrow">PERSONAL MEMO</span><h1>생각을 먼저 적으세요.</h1><p>정리는 승인한 뒤에만 적용됩니다.</p><span className="status">● {health}</span></header><section className="canvas" aria-label="그래프 홈">{graph.nodes.length===0?<div className="empty">승인된 메모와 태그가 여기에 표시됩니다.</div>:graph.nodes.map((n:any)=><div key={n.id} className={`node ${n.kind.toLowerCase()}`}>{n.kind==='MEMO'?'메모 · ':''}{n.label}</div>)}</section><section className="tasks"><h2>할 일</h2>{tasks.length===0?<p>승인된 할 일이 없습니다.</p>:tasks.map(t=><article key={t.id}><span>{t.title}</span><strong>{t.overdue?'기한 초과':t.status}</strong></article>)}{applicationId&&<button className="undo" onClick={undo}>마지막 적용 되돌리기</button>}</section>{proposal&&<section className="review"><span className="eyebrow">REVIEW REQUIRED</span><h2>적용 전 확인</h2><label>제목<input value={title} onChange={e=>setTitle(e.target.value)}/></label><div className="chips">{tags.map((t,i)=><button key={t.canonicalName} onClick={()=>setTags(tags.filter((_,x)=>x!==i))}>{t.canonicalName} ×</button>)}</div>{proposal.dateCandidates[0]&&<p>날짜: {proposal.dateCandidates[0].surfaceText} → {proposal.dateCandidates[0].value} ({proposal.dateCandidates[0].precision})</p>}<button className="approve" onClick={apply}>선택 항목 승인</button><button className="reject" onClick={()=>setProposal(null)}>지금은 적용하지 않기</button></section>}<form className="capture" onSubmit={capture}><label htmlFor="memo">{message}</label><textarea id="memo" value={content} onChange={e=>setContent(e.target.value)} required placeholder="예: 11.25 OS과제 제출"/><button>원문 저장 후 분석</button></form></main>
+import { useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
+import { AccountPanel } from '../features/auth/AccountPanel';
+import { AuthScreen } from '../features/auth/AuthScreen';
+import type { LocalAuthInput } from '../features/auth/authModel';
+import { authNoticeReducer, createAuthNotices } from '../features/auth/authNotices';
+import { useAuthSession } from '../features/auth/useAuthSession';
+import { MemoCapture } from '../features/capture/MemoCapture';
+import {
+  canSubmitMemo,
+  LOCAL_DRAFT_STORAGE_FAILED_PROMPT,
+  OFFLINE_CAPTURE_PROMPT,
+} from '../features/capture/captureAvailability';
+import { MemoTagGraph } from '../features/graph/MemoTagGraph';
+import { ConnectionStatus } from '../features/health/ConnectionStatus';
+import { MemoLibrary } from '../features/memos/MemoLibrary';
+import { PwaUpdateManager } from '../features/pwa/PwaUpdateManager';
+import { PostponedReview } from '../features/review/PostponedReview';
+import { ProposalReview } from '../features/review/ProposalReview';
+import { ReviewOutcomeSummary } from '../features/review/ReviewOutcomeSummary';
+import { MemoSearch } from '../features/search/MemoSearch';
+import {
+  confirmReviewDiscard,
+  hasUnsavedWorkspaceChanges,
+  SOURCE_CHANGE_DISCARDS_REVIEW_MESSAGE,
+  UNSAVED_REVIEW_NAVIGATION_MESSAGE,
+  UNSAVED_REVIEW_POSTPONE_MESSAGE,
+  UNSAVED_WORKSPACE_NAVIGATION_MESSAGE,
+} from '../features/review/unsavedReviewGuard';
+import { TaskList } from '../features/tasks/TaskList';
+import { FeedbackBanner } from '../shared/ui/FeedbackBanner';
+import { useMemoWorkspace } from './useMemoWorkspace';
+import { hasPendingServerOperation } from './workspaceOperationState';
+
+export function App() {
+  const auth = useAuthSession();
+  const [notices, dispatchNotice] = useReducer(
+    authNoticeReducer,
+    window.location.search,
+    createAuthNotices,
+  );
+  const previousUserId = useRef<string | null>(null);
+
+  useEffect(() => {
+    const currentUserId = auth.session?.userId ?? null;
+    dispatchNotice({
+      type: 'SESSION_TRANSITION',
+      previousUserId: previousUserId.current,
+      currentUserId,
+    });
+    previousUserId.current = currentUserId;
+  }, [auth.session?.userId]);
+
+  useEffect(() => {
+    if (!auth.session || (!notices.googleLinked && !notices.redirectError)) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('linked');
+    url.searchParams.delete('error');
+    if (url.pathname === '/login') url.pathname = '/';
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  }, [auth.session, notices.googleLinked, notices.redirectError]);
+
+  function clearAuthNotices() {
+    auth.clearError();
+    dispatchNotice({ type: 'CLEAR' });
+    const url = new URL(window.location.href);
+    url.searchParams.delete('linked');
+    url.searchParams.delete('error');
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  async function login(input: Pick<LocalAuthInput, 'email' | 'password'>) {
+    clearAuthNotices();
+    await auth.login(input);
+  }
+
+  async function register(input: LocalAuthInput) {
+    clearAuthNotices();
+    await auth.register(input);
+  }
+
+  function logout() {
+    clearAuthNotices();
+    auth.logout();
+  }
+
+  function linkGoogle() {
+    clearAuthNotices();
+    auth.linkGoogle();
+  }
+
+  function unlinkGoogle() {
+    clearAuthNotices();
+    auth.unlinkGoogle();
+  }
+
+  const logoutPending = auth.status === 'LOGOUT_PENDING';
+  const canRetainWorkspace = auth.session !== null &&
+    (auth.status === 'AUTHENTICATED' || logoutPending);
+
+  if (!canRetainWorkspace || !auth.session) {
+    return (
+      <>
+        <PwaUpdateManager
+          hasUnsavedChanges={false}
+          operationPending={auth.pending !== null}
+        />
+        <AuthScreen
+          capabilities={auth.capabilities}
+          connection={auth.connection}
+          pending={auth.pending}
+          logoutPending={logoutPending}
+          error={auth.error}
+          redirectError={notices.redirectError}
+          onLogin={login}
+          onRegister={register}
+          onRetry={auth.retryBootstrap}
+          onClearError={clearAuthNotices}
+        />
+      </>
+    );
+  }
+
+  const workspaceAccount: WorkspaceAccountProps = {
+    session: auth.session,
+    capabilities: auth.capabilities,
+    pending: auth.pending,
+    error: auth.error ?? notices.redirectError,
+    googleLinked: notices.googleLinked,
+    onLinkGoogle: linkGoogle,
+    onUnlinkGoogle: unlinkGoogle,
+    onLogout: logout,
+    onClearError: clearAuthNotices,
+  };
+
+  return (
+    <>
+      <div hidden={logoutPending} aria-hidden={logoutPending}>
+        <WorkspaceApp key={auth.session.userId} account={workspaceAccount} />
+      </div>
+      {logoutPending && (
+        <AuthScreen
+          capabilities={auth.capabilities}
+          connection={auth.connection}
+          pending={auth.pending}
+          logoutPending
+          error={auth.error}
+          redirectError={notices.redirectError}
+          onLogin={login}
+          onRegister={register}
+          onRetry={auth.retryBootstrap}
+          onClearError={clearAuthNotices}
+        />
+      )}
+    </>
+  );
+}
+
+type WorkspaceAccountProps = ComponentProps<typeof AccountPanel>;
+
+function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
+  const workspace = useMemoWorkspace(account.session.userId);
+  const [memoEditDirty, setMemoEditDirty] = useState(false);
+  const [transientReviewDirty, setTransientReviewDirty] = useState(false);
+  const [pwaUpdating, setPwaUpdating] = useState(false);
+  const [navigationApproved, setNavigationApproved] = useState(false);
+  const reviewExitFeedbackRef = useRef<HTMLDivElement>(null);
+  const reviewWasOpen = useRef(false);
+  const hasUnsavedProposal = workspace.hasUnsavedReview || transientReviewDirty;
+  const hasUnsavedChanges = hasUnsavedWorkspaceChanges({
+    reviewEdited: workspace.hasUnsavedReview,
+    transientReviewInput: transientReviewDirty,
+    memoEdit: memoEditDirty,
+    unpersistedCapture: workspace.hasUnpersistedCapture,
+  });
+  const serverOperationPending = hasPendingServerOperation({
+    workspaceBusy: workspace.busy,
+    pendingTaskId: workspace.pendingTaskId,
+    authOperation: account.pending,
+  });
+  const interactionLocked = serverOperationPending || pwaUpdating;
+
+  useEffect(() => {
+    if (workspace.review) {
+      reviewWasOpen.current = true;
+      return;
+    }
+    if (!reviewWasOpen.current || interactionLocked) return;
+
+    reviewWasOpen.current = false;
+    const frame = window.requestAnimationFrame(() => {
+      reviewExitFeedbackRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [interactionLocked, workspace.review]);
+
+  useEffect(() => {
+    if (account.pending === null) setNavigationApproved(false);
+  }, [account.pending]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges || navigationApproved) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [hasUnsavedChanges, navigationApproved]);
+
+  function confirmWorkspaceDeparture(): boolean {
+    return confirmReviewDiscard(
+      hasUnsavedChanges,
+      hasUnsavedProposal && !memoEditDirty && !workspace.hasUnpersistedCapture
+        ? UNSAVED_REVIEW_NAVIGATION_MESSAGE
+        : UNSAVED_WORKSPACE_NAVIGATION_MESSAGE,
+    );
+  }
+
+  function confirmSourceChange(): boolean {
+    return confirmReviewDiscard(
+      hasUnsavedProposal,
+      SOURCE_CHANGE_DISCARDS_REVIEW_MESSAGE,
+    );
+  }
+
+  const guardedAccount: WorkspaceAccountProps = {
+    ...account,
+    interactionDisabled: pwaUpdating,
+    onLinkGoogle: () => {
+      if (!confirmWorkspaceDeparture()) return;
+      setNavigationApproved(true);
+      account.onLinkGoogle();
+    },
+    onLogout: () => {
+      if (confirmWorkspaceDeparture()) account.onLogout();
+    },
+  };
+
+  const capturePrompt = workspace.hasUnpersistedCapture
+    ? LOCAL_DRAFT_STORAGE_FAILED_PROMPT
+    : workspace.connection === 'offline'
+    ? OFFLINE_CAPTURE_PROMPT
+    : workspace.recoveryLoading
+    ? '서버에 저장된 검토 상태를 복원하고 있습니다.'
+    : workspace.recoveryError
+      ? '원문은 지금 저장할 수 있습니다. 제안 분석은 검토 상태를 복구한 뒤 시작합니다.'
+      : workspace.review
+        ? '현재 제안을 먼저 승인·보류·거절해 주세요.'
+        : workspace.postponedReview
+          ? '보류한 제안을 먼저 검토해 주세요.'
+          : '메모 원문은 AI 결과와 별도로 먼저 저장됩니다.';
+  const retryFeedback = workspace.retryAction
+    ? () => {
+        const scope = workspace.retryAction?.scope ?? '';
+        const mayDiscardReview =
+          scope.startsWith('update:') ||
+          scope.startsWith('trash:') ||
+          scope.startsWith('undo:');
+        if (!mayDiscardReview || confirmSourceChange()) workspace.retry();
+      }
+    : undefined;
+
+  return (
+    <main>
+      <PwaUpdateManager
+        hasUnsavedChanges={hasUnsavedChanges}
+        operationPending={serverOperationPending}
+        onUpdatingChange={setPwaUpdating}
+      />
+      <header className="hero">
+        <div>
+          <span className="eyebrow">PERSONAL MEMO</span>
+          <h1>생각을 먼저 적으세요.</h1>
+          <p>분석은 제안만 만듭니다. 수정하고 승인한 내용만 실제 항목이 됩니다.</p>
+        </div>
+        <div className="hero-actions">
+          <ConnectionStatus status={workspace.connection} onRetry={workspace.checkConnection} />
+          <AccountPanel {...guardedAccount} />
+        </div>
+      </header>
+
+      <div
+        ref={reviewExitFeedbackRef}
+        className="review-exit-feedback"
+        tabIndex={-1}
+        aria-label="작업 결과"
+      >
+        <FeedbackBanner
+          feedback={workspace.feedback}
+          retryLabel={workspace.review ? undefined : workspace.retryAction?.label}
+          onRetry={workspace.review ? undefined : retryFeedback}
+          onDismiss={workspace.dismissFeedback}
+        />
+      </div>
+
+      {workspace.recoveryLoading && (
+        <p className="recovery-state" role="status" aria-live="polite">
+          마지막 적용과 검토 중·보류한 제안을 불러오는 중입니다…
+        </p>
+      )}
+
+      {workspace.recoveryError && (
+        <aside className="recovery-state recovery-state--error" role="alert">
+          <p>저장된 검토 상태를 불러오지 못했습니다. 원문 저장은 가능하지만 제안 분석은 잠시 보류됩니다.</p>
+          <button type="button" className="secondary-button" onClick={workspace.refreshRecovery}>
+            검토 상태 다시 불러오기
+          </button>
+        </aside>
+      )}
+
+      <MemoSearch />
+
+      <MemoLibrary
+        activeMemos={workspace.activeMemos}
+        trashedMemos={workspace.trashedMemos}
+        loading={workspace.memosLoading}
+        error={workspace.memosError}
+        busy={interactionLocked}
+        pendingScope={workspace.pendingMemoScope}
+        analysisBlocked={
+          workspace.recoveryLoading ||
+          workspace.recoveryError !== null ||
+          workspace.review !== null ||
+          workspace.postponedReview !== null
+        }
+        onRetry={workspace.refreshMemos}
+        onUpdate={(memo, content) =>
+          confirmSourceChange() ? workspace.updateMemo(memo, content) : Promise.resolve(false)
+        }
+        onTrash={(memo) => {
+          if (confirmSourceChange()) workspace.trashMemo(memo);
+        }}
+        onRestore={workspace.restoreMemo}
+        onAnalyze={workspace.analyzeMemo}
+        onDirtyChange={setMemoEditDirty}
+      />
+
+      <MemoTagGraph
+        projection={workspace.graph}
+        loading={workspace.workspaceLoading}
+        error={workspace.workspaceError}
+        selectedNode={workspace.selectedGraphNode}
+        selectionProjectionVersion={workspace.selectedGraphProjectionVersion}
+        activeMemoNode={workspace.activeGraphMemoNode}
+        memoDetail={workspace.selectedGraphMemo}
+        detailLoading={workspace.graphDetailLoading}
+        detailError={workspace.graphDetailError}
+        neighborhood={workspace.graphNeighborhood}
+        neighborhoodLoading={workspace.graphNeighborhoodLoading}
+        neighborhoodLoadingMore={workspace.graphNeighborhoodLoadingMore}
+        neighborhoodError={workspace.graphNeighborhoodError}
+        neighborhoodRestartRequired={workspace.graphNeighborhoodRestartRequired}
+        pinPending={workspace.pinPending}
+        pinError={workspace.graphPinError}
+        interactionDisabled={interactionLocked}
+        onRetry={workspace.refreshWorkspace}
+        onSelectNode={workspace.selectGraphNode}
+        onCloseDetail={workspace.closeGraphNode}
+        onRetryDetail={workspace.retryGraphNodeDetail}
+        onRetryNeighborhood={workspace.retryGraphNeighborhood}
+        onLoadMoreNeighborhood={workspace.loadMoreGraphNeighborhood}
+        onOpenNeighborhoodMemo={workspace.openGraphNeighborhoodMemo}
+        onBackToNeighborhood={workspace.backToGraphNeighborhood}
+        onSetPinned={workspace.setMemoPinned}
+        onRetryPin={workspace.retryGraphPin}
+      />
+
+      <TaskList
+        tasks={workspace.tasks}
+        loading={workspace.workspaceLoading}
+        error={workspace.workspaceError}
+        busy={interactionLocked}
+        pendingTaskId={workspace.pendingTaskId}
+        onRetry={workspace.refreshWorkspace}
+        onStatusChange={workspace.updateTaskStatus}
+      />
+
+      <ReviewOutcomeSummary
+        summary={workspace.reviewOutcomeSummary}
+        loading={workspace.reviewOutcomeLoading}
+        error={workspace.reviewOutcomeError}
+        onRetry={workspace.refreshReviewOutcomes}
+      />
+
+      {workspace.applicationId && (
+        <aside className="undo-card">
+          <div>
+            <strong>마지막 적용을 되돌릴 수 있습니다.</strong>
+            <p>적용으로 생성된 태그 연결과 할 일만 제거하고 원문 메모는 보존합니다.</p>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={interactionLocked}
+            onClick={() => {
+              if (confirmSourceChange()) workspace.undoApplication();
+            }}
+          >
+            {interactionLocked ? '처리 중…' : '마지막 적용 되돌리기'}
+          </button>
+        </aside>
+      )}
+
+      {workspace.postponedReview && (
+        <PostponedReview
+          title={workspace.postponedReview.title}
+          onResume={workspace.resumePostponedReview}
+        />
+      )}
+
+      {workspace.review && (
+        <ProposalReview
+          key={workspace.review.proposalId}
+          review={workspace.review}
+          relationReviewCandidates={workspace.relationReviewCandidates}
+          relationReviewLoading={workspace.relationReviewLoading}
+          relationReviewError={workspace.relationReviewError}
+          busy={interactionLocked}
+          onChange={workspace.changeReview}
+          onApply={workspace.applyCurrentReview}
+          onPostpone={() => {
+            if (
+              confirmReviewDiscard(
+                hasUnsavedProposal,
+                UNSAVED_REVIEW_POSTPONE_MESSAGE,
+              )
+            ) workspace.postponeCurrentReview();
+          }}
+          onReject={workspace.rejectCurrentReview}
+          onRetryRelationReview={workspace.retryRelationReviewCandidates}
+          onTransientDirtyChange={setTransientReviewDirty}
+          feedback={workspace.feedback?.kind === 'error' ? workspace.feedback : null}
+          retryScope={workspace.retryAction?.scope}
+          retryLabel={workspace.retryAction?.label}
+          onRetry={retryFeedback}
+          onDismissFeedback={workspace.dismissFeedback}
+        />
+      )}
+
+      <MemoCapture
+        content={workspace.content}
+        disabled={workspace.captureLocked || interactionLocked}
+        submissionDisabled={!canSubmitMemo(workspace.connection)}
+        submitting={workspace.captureSubmitting}
+        rawOnly={workspace.recoveryError !== null}
+        prompt={capturePrompt}
+        onContentChange={workspace.changeContent}
+        onSubmit={workspace.captureMemo}
+      />
+    </main>
+  );
 }

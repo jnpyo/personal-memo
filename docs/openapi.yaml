@@ -1,0 +1,2689 @@
+openapi: 3.1.0
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+info:
+  title: Personal Memo API
+  version: 0.7.0
+  description: >-
+    Server-session 인증, Milestone 1의 AI-free vertical slice, 외부 모델 없는 결정론적 분석,
+    Milestone 5의 privacy-first exact lexical memo-search 계약입니다.
+    분석 결과는 제안이며, canonical 태그와 할 일은 사용자 승인 endpoint를
+    통해서만 생성됩니다. Cookie-authenticated mutation은 CSRF header가 필요합니다.
+    Owner-scoped 요청은 선택적인 X-Expected-Owner-Id client snapshot guard를 지원하지만,
+    권한과 실제 owner는 항상 authenticated server principal에서 결정됩니다.
+servers:
+  - url: /api/v1
+security:
+  - sessionCookie: []
+tags:
+  - name: Health
+  - name: Authentication
+  - name: Memos
+  - name: Analysis
+  - name: Tasks
+  - name: Graph
+  - name: Search
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getApiHealth
+      summary: Check frontend-to-backend connectivity
+      security: []
+      responses:
+        "200":
+          description: API is reachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /auth/capabilities:
+    get:
+      tags: [Authentication]
+      operationId: getAuthCapabilities
+      summary: Discover enabled sign-in and registration methods
+      security: []
+      responses:
+        "200":
+          description: Public authentication capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthCapabilities"
+
+  /auth/csrf:
+    get:
+      tags: [Authentication]
+      operationId: getCsrfToken
+      summary: Obtain the current browser-session CSRF token
+      security: []
+      responses:
+        "200":
+          description: Token and the server-selected request names.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CsrfToken"
+
+  /auth/register:
+    post:
+      tags: [Authentication]
+      operationId: registerLocalAccount
+      summary: Create a local account and authenticated server session
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Local account created and session established.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /auth/login:
+    post:
+      tags: [Authentication]
+      operationId: loginWithLocalCredentials
+      summary: Establish a server session with local credentials
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /auth/me:
+    get:
+      tags: [Authentication]
+      operationId: getCurrentAuthSession
+      summary: Read the current authenticated internal user
+      responses:
+        "200":
+          description: Current session and usable login methods.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      operationId: logout
+      summary: Idempotently invalidate the current server session
+      description: >-
+        A server session is optional so a client can safely repeat logout after expiry or a
+        successful earlier call. A current CSRF token remains mandatory. When an authenticated
+        principal is present, X-Expected-Owner-Id is checked before LogoutFilter invalidates the
+        session.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ExpectedOwnerId"
+      responses:
+        "204":
+          description: Session invalidated, or no authenticated session remained.
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+
+  /auth/google/link-intent:
+    post:
+      tags: [Authentication]
+      operationId: createGoogleLinkIntent
+      summary: Start an explicit Google identity-link operation
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ExpectedOwnerId"
+      responses:
+        "200":
+          description: Short-lived link intent created in the authenticated session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleLinkIntent"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+
+  /auth/identities/google:
+    delete:
+      tags: [Authentication]
+      operationId: unlinkGoogleIdentity
+      summary: Remove Google while preserving another usable login method
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ExpectedOwnerId"
+      responses:
+        "200":
+          description: Updated session after unlinking.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+
+  /memos:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Memos]
+      operationId: listMemos
+      summary: List current raw memo revisions by lifecycle status
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/MemoStatus"
+            default: ACTIVE
+        - name: limit
+          in: query
+          required: false
+          description: Requested result bound; the server clamps it to 1–100.
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Owner-scoped memo views ordered by most recently updated first.
+          headers:
+            Cache-Control:
+              description: Raw memo views are never reusable from an HTTP cache.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 100
+                items:
+                  $ref: "#/components/schemas/MemoView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+    post:
+      tags: [Memos]
+      operationId: createMemo
+      summary: Save the first immutable raw memo revision
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMemoRequest"
+      responses:
+        "201":
+          description: Memo and revision 1 were created.
+          headers:
+            Location:
+              description: URI of the created memo.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /memos/{memoId}:
+    parameters:
+      - $ref: "#/components/parameters/MemoId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Memos]
+      operationId: getMemo
+      summary: Read the current raw memo revision
+      responses:
+        "200":
+          description: Current memo view.
+          headers:
+            Cache-Control:
+              description: Raw memo content is never reusable from an HTTP cache.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+    patch:
+      tags: [Memos]
+      operationId: updateMemo
+      summary: Append a new immutable raw memo revision
+      description: >-
+        expectedRevision provides optimistic concurrency. A successful content edit
+        increments currentRevision and marks older unapplied analysis runs STALE.
+        clientUpdatedAt and timeZone are an optional pair; the PWA always sends both,
+        and retries reuse the original body snapshot and idempotency key.
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMemoRequest"
+      responses:
+        "200":
+          description: Updated current memo view.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+    delete:
+      tags: [Memos]
+      operationId: trashMemo
+      summary: Soft-delete a memo while preserving raw revisions
+      description: >-
+        Marks the memo TRASHED and pending review runs STALE. Derived records remain
+        stored but are hidden from active task and graph projections.
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Current TRASHED memo view.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /memos/{memoId}/pin:
+    parameters:
+      - $ref: "#/components/parameters/MemoId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    patch:
+      tags: [Memos]
+      operationId: updateMemoPin
+      summary: Pin or unpin an active memo for graph-home priority
+      description: >-
+        Updates memo metadata without creating a raw revision or changing any analysis proposal.
+        The authenticated owner row is locked before the ACTIVE-state check, and the
+        Idempotency-Key is bound to the memo ID and requested pinned value.
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PinMemoRequest"
+      responses:
+        "200":
+          description: Pin state and whether this request changed it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PinMemoView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+  /memos/{memoId}/restore:
+    parameters:
+      - $ref: "#/components/parameters/MemoId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    post:
+      tags: [Memos]
+      operationId: restoreMemo
+      summary: Restore a soft-deleted memo to ACTIVE
+      description: Restoring a memo does not revive analysis runs already marked STALE.
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Current ACTIVE memo view.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /memos/{memoId}/analysis-runs:
+    parameters:
+      - $ref: "#/components/parameters/MemoId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    post:
+      tags: [Analysis]
+      operationId: startAnalysis
+      summary: Create a deterministically routed, reviewable analysis proposal
+      description: >-
+        This operation never creates canonical tags, tasks, or graph relations. Date
+        interpretation uses client_recorded_at and source_time_zone from the referenced
+        immutable memo revision, rather than request time or mutable user settings. A
+        Draft 2020-12 and domain-validated local proposal is assessed by a versioned,
+        field-level server policy. A clear proposal is persisted with route LOCAL and
+        NOT_REQUIRED cloud evidence. For critical ambiguity, the configured gateway returns one
+        immutable binding containing an executor identity and a server-owned descriptor with
+        transfer mode and gateway, provider, model, and consent-policy versions. The current
+        NO_NETWORK Fake adapter needs no consent. An EXTERNAL_MEMO_CONTENT adapter is not called
+        unless the authenticated owner's consent pins the exact policy version and a grant
+        timestamp no later than the authorization-check instant; future-dated consent also makes
+        zero gateway calls. Otherwise the validated local proposal is persisted with route HYBRID,
+        status REVIEW_REQUIRED, and outcome CONSENT_REQUIRED. Typed gateway failures, exceptions,
+        and invalid enriched proposals also persist a revalidated local fallback with a bounded
+        server-owned outcome and never expose provider error text. HYBRID proposal metadata is
+        overwritten with the same transfer/gateway/provider/model/policy/outcome evidence, zero
+        tool and mutation calls, and the received routing policy/reasons. No path creates canonical
+        data before approval. Every new LOCAL, cloud-success, and fallback proposal rebuilds
+        providerMetadata from the same bounded server allow-list, including server-matching
+        analyzer, prompt, local-model, embedding-model, and routing-policy versions (1–64 characters
+        each) plus a required tool-call count from 0 through 100. Compact proposal JSON is limited
+        to 65,536 UTF-8 bytes and providerMetadata to 8,192 UTF-8 bytes. Before a gateway call, V16
+        examines at most 10 proposal tag candidates and 20 distinct normalized canonical-name/alias
+        terms. It queries only the authenticated owner's ACTIVE tags and aliases by exact normalized
+        equality, resolves uniqueness from the complete result, and deterministically retains at most
+        K=8 candidates as an internal hint. Final owner/reference validation remains authoritative.
+        This retrieval reads no raw or related memo and uses no fuzzy/vector search or embedding.
+        V15 commits a durable-v1 QUEUED/PENDING run and its PREPARED dispatch before an authorized
+        gateway call. The dispatch reserves the proposal identity and stores the idempotency/request
+        hashes, exact validated local proposal and hash, immutable executor binding identity, timeout,
+        maximum attempts, and deadline. V16 adds the serialized context, SHA-256 hash, version, and
+        candidate count to that pre-call snapshot. Existing V15 dispatches remain none/0/null
+        raw/null hash rather than receiving invented context. V17 marks new dispatches
+        gateway-attempt-v1 and records one internal owner-scoped row per claimed fence, up to the
+        persisted maximum attempts. Historical dispatches remain attempt_history_version=none and
+        receive no backfilled rows. A short claim transaction compares the
+        current binding identity and exact
+        descriptor, rechecks authorization, and acquires a deadline-clipped lease with a new fence.
+        The bounded gateway invocation then runs outside every database transaction. Finalization
+        locks and rechecks memo ownership, active state, revision, and dispatch fence, then
+        atomically stores the proposal, final run evidence, finalized dispatch, and idempotency
+        response. It scrubs the serialized context while retaining its hash, version, and candidate
+        count. A revision change is committed as STALE before this operation returns 409
+        STALE_MEMO_REVISION; stale detected before a provider attempt uses the internal
+        CANCELLED_STALE outcome and makes zero gateway calls. The endpoint remains synchronous and
+        never returns its internal QUEUED, RUNNING, or PENDING states. A same-key live lease or call
+        that exceeds the coordination window returns 409 ANALYSIS_IN_PROGRESS; the caller retries
+        with the same idempotency key and identical body. Caller-driven expired-lease recovery
+        remains available. In the production profile, a bounded scheduler also runs with a 30-second
+        initial/fixed delay and selects at most 25 PREPARED or expired-lease RUNNING dispatches per
+        cycle. Owner and the existing raw idempotency key come only from owner-consistent database
+        rows; each candidate reuses the owner+operation+raw-key advisory transaction lock and live
+        leases are skipped. Recovery after restart therefore reuses the persisted binding, deadline,
+        attempt count, lease/fence, exact V16 database context snapshot, bounded out-of-transaction
+        Fake call, V17 fence observation, revision-rechecking finalization, and the same
+        provider-request token. Any gateway result is STARTED. Executor rejection proves
+        NOT_STARTED and is distinct from a gateway-returned UNAVAILABLE. After submission, timeout,
+        caller interruption, or unexpected local termination is STARTED when start was observed and
+        otherwise UNKNOWN, never NOT_STARTED. Those terminations and process loss leave remote result
+        truth UNKNOWN. An
+        obsolete-fence completion records only the result actually observed and cannot overwrite the
+        run. Observed local elapsed uses a monotonic clock; process-loss duration is unknown.
+        A local termination observation for the no-model Fake keeps model-token/cost evidence
+        NOT_APPLICABLE with null numbers even when start is uncertain, while observation-free
+        process-loss evidence is UNKNOWN. A future real-model attempt is NOT_APPLICABLE only when
+        definitively NOT_STARTED, UNKNOWN when execution or remote completion is uncertain, and
+        NOT_REPORTED after an observed result until usage/cost reporting is wired; missing evidence is
+        never replaced by zero. Retrieval is not
+        rerun, so the same token cannot be retried with different context. This is an
+        at-least-once transport boundary, not exactly-once, so a real provider must honor that token
+        idempotently. Internal authorization/grant evidence, raw recovery key, provider token,
+        prepared payload/context, context hash/version/count, attempt ledger, dispatch binding,
+        queued/running state, lease, and fence are never returned in RunView, proposal JSON,
+        providerMetadata, UI, evaluation reports, recovery responses, ordinary logs, browser storage,
+        or service-worker caches. Attempt rows store no provider text or identifier, request token,
+        raw memo, or retrieval context and follow current run-data retention until an approved purge
+        policy; V17 adds no arbitrary TTL. The public POST and every response schema remain unchanged
+        and synchronous. Numeric real-model usage/cost reporting and aggregation, related-memo
+        retrieval, fuzzy/vector search, embeddings, and a configured real provider or Ollama/LiquidAI
+        adapter remain absent.
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartAnalysisRequest"
+      responses:
+        "200":
+          description: Synchronous analysis finalized and returned a review-required run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisRunView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /analysis-proposals/{proposalId}:
+    parameters:
+      - $ref: "#/components/parameters/ProposalId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Analysis]
+      operationId: getAnalysisProposal
+      summary: Read an untrusted, non-canonical analysis proposal
+      parameters:
+        - $ref: "#/components/parameters/AnalysisProposalSchemaVersion"
+      responses:
+        "200":
+          description: >-
+            Negotiated structured proposal. Omitting X-Analysis-Proposal-Schema-Version or
+            requesting 1 returns a strict version-1 projection. Requesting 2 returns the stored
+            version: new Fake analyses are version 2 with explicit TASK-to-due-date candidate
+            references, while historical version-1 proposals remain version 1.
+          headers:
+            Cache-Control:
+              description: Proposal responses are owner-scoped and are never stored by caches.
+              schema:
+                type: string
+                const: no-store
+            Vary:
+              description: Caches must keep proposal schema representations separate.
+              schema:
+                type: string
+                const: X-Analysis-Proposal-Schema-Version
+          content:
+            application/json:
+              schema:
+                $ref: ../contracts/analysis-proposal.schema.json
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /analysis-proposals/{proposalId}/relation-review-candidates:
+    parameters:
+      - $ref: "#/components/parameters/ProposalId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Analysis]
+      operationId: listRelationReviewCandidates
+      summary: Resolve owner-visible labels for relation review
+      description: >-
+        Returns one bounded entry for every stored relationCandidates element, in proposal-array
+        order. The proposal index is the only selector later accepted by Apply; the client never
+        resubmits target/type/score as authority. An ACTIVE owner target receives a bounded current
+        raw-memo preview or canonical tag name. A missing, foreign, trashed, or inactive target is
+        returned as unavailable with no label, and Apply rechecks every selected target while
+        holding the canonical row. This read creates no canonical data and does not imply that the
+        untrusted proposal has been approved.
+      responses:
+        "200":
+          description: Ordered, owner-scoped relation review labels for the proposal.
+          headers:
+            Cache-Control:
+              description: Relation review labels are private and are never stored by caches.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 10
+                items:
+                  $ref: "#/components/schemas/RelationReviewCandidateView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /analysis-proposals:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Analysis]
+      operationId: listRecoverableAnalysisProposals
+      summary: List recoverable proposals awaiting review
+      parameters:
+        - $ref: "#/components/parameters/AnalysisProposalSchemaVersion"
+        - name: status
+          in: query
+          required: true
+          schema:
+            enum: [REVIEW_REQUIRED, POSTPONED]
+        - name: limit
+          in: query
+          required: false
+          description: Requested result bound; the server clamps it to 1–100.
+          schema:
+            type: integer
+            default: 1
+      responses:
+        "200":
+          description: >-
+            Newest owner-scoped proposals in the requested review state whose memo is
+            ACTIVE and whose analyzed revision is still current. Omitting
+            X-Analysis-Proposal-Schema-Version or requesting 1 returns strict version-1
+            projections; requesting 2 preserves each stored version.
+          headers:
+            Cache-Control:
+              description: Proposal recovery responses are owner-scoped and are never cached.
+              schema:
+                type: string
+                const: no-store
+            Vary:
+              description: Caches must keep proposal schema representations separate.
+              schema:
+                type: string
+                const: X-Analysis-Proposal-Schema-Version
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 100
+                items:
+                  $ref: "#/components/schemas/ProposalRecoveryView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /analysis-proposals/{proposalId}/apply:
+    parameters:
+      - $ref: "#/components/parameters/ProposalId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    post:
+      tags: [Analysis]
+      operationId: applyAnalysisProposal
+      summary: Apply only the user's reviewed selection
+      description: >-
+        Validates owner, current memo revision, tags, items, due values, and the user's explicit
+        relation-candidate indexes, then creates the application and all selected derived records
+        in one transaction.
+        The due timeZone request field is compatibility input only; persisted task source time zones
+        are canonicalized from the locked immutable memo revision.
+        For each selected proposal index the server resolves the full relation from the locked
+        stored proposal, requires its sourceCandidateId to map to exactly one applied item, and
+        re-locks the owner-owned ACTIVE MEMO or TAG target. The request cannot choose a target,
+        relation type, or score. An explicit empty selectedRelations array rejects every relation
+        candidate while applying the other reviewed fields. Legacy omission is accepted only when
+        the proposal itself has no relation candidates. Confirmed item-scoped relations are
+        application-owned and undo removes them before their source items. They are intentionally
+        not projected into the current MEMO_TAG graph until a separate edge-semantics decision.
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplyProposalRequest"
+      responses:
+        "200":
+          description: Reviewed selection was applied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationView"
+              examples:
+                applied:
+                  value:
+                    applicationId: 1b49505a-7615-4250-a82e-254525465baf
+                    status: APPLIED
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/ApplyConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /analysis-proposals/{proposalId}/reject:
+    parameters:
+      - $ref: "#/components/parameters/ProposalId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    post:
+      tags: [Analysis]
+      operationId: rejectAnalysisProposal
+      summary: Reject a proposal without creating canonical data
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Proposal was rejected; raw memo remains unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewDispositionView"
+              examples:
+                rejected:
+                  value:
+                    proposalId: 6b41133d-e81a-4751-b4b0-623b8c794bf3
+                    status: REJECTED
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /analysis-proposals/{proposalId}/postpone:
+    parameters:
+      - $ref: "#/components/parameters/ProposalId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    post:
+      tags: [Analysis]
+      operationId: postponeAnalysisProposal
+      summary: Postpone a proposal without creating canonical data
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Proposal is marked POSTPONED and can be reviewed later.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewDispositionView"
+              examples:
+                postponed:
+                  value:
+                    proposalId: 6b41133d-e81a-4751-b4b0-623b8c794bf3
+                    status: POSTPONED
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /analysis-applications/{applicationId}/undo:
+    parameters:
+      - $ref: "#/components/parameters/ApplicationId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    post:
+      tags: [Analysis]
+      operationId: undoAnalysisApplication
+      summary: Remove derived records while preserving raw memo revisions
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Application is now UNDONE.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationView"
+              examples:
+                undone:
+                  value:
+                    applicationId: 1b49505a-7615-4250-a82e-254525465baf
+                    status: UNDONE
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /analysis-applications/latest:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Analysis]
+      operationId: getLatestAnalysisApplication
+      summary: Recover the latest application state for undo UI
+      responses:
+        "200":
+          description: >-
+            Latest owner-scoped application, or an explicit NONE state when the owner
+            has no application.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationRecoveryView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+
+  /analysis-review-outcomes/summary:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Analysis]
+      operationId: getAnalysisReviewOutcomeSummary
+      summary: Read an owner-scoped aggregate of recent proposal review outcomes
+      description: >-
+        Returns aggregate counters only for proposals owned by the authenticated server principal.
+        The rolling cohort is selected by analysis_proposals.created_at in the half-open interval
+        [fromInclusive, toExclusive). The server reads at most 1,001 rows to enforce a hard 1,000
+        proposal cap and returns 422 rather than a partial summary when the cap is exceeded. Current
+        run state, latest application state, and comparison of the latest stored selection are
+        independent dimensions. EXACT means only that the user applied the reconstructed default
+        review selection without a semantic edit; it is not an AI correctness or accuracy label.
+        The response never contains memo text, titles, proposal/application identifiers, raw
+        proposal JSON, or selection JSON. This endpoint is read-only and does not collect a general
+        clickstream.
+      parameters:
+        - name: days
+          in: query
+          required: false
+          description: Rolling number of 24-hour periods ending at the server's current instant.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 90
+            default: 14
+      responses:
+        "200":
+          description: Owner-scoped, raw-content-free review outcome aggregate.
+          headers:
+            Cache-Control:
+              description: Prevents storage or reuse of this owner-specific aggregate.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisReviewOutcomeSummary"
+              examples:
+                recentReviewOutcomes:
+                  value:
+                    schemaVersion: "1"
+                    comparisonPolicyVersion: review-default-v3
+                    cohort:
+                      basis: PROPOSAL_CREATED_AT
+                      days: 14
+                      fromInclusive: 2026-07-25T03:00:00Z
+                      toExclusive: 2026-08-08T03:00:00Z
+                      maxProposals: 1000
+                    proposals:
+                      total: 4
+                      withApplication: 3
+                      currentStates:
+                        queued: 0
+                        running: 0
+                        reviewRequired: 1
+                        currentPostponed: 1
+                        failed: 0
+                        stale: 0
+                        applied: 2
+                        rejected: 0
+                        other: 0
+                    latestApplications:
+                      none: 1
+                      applied: 2
+                      undone: 1
+                    outcomes:
+                      exact: 1
+                      corrected: 1
+                      userResolved: 1
+                      unclassifiable: 0
+                      correctedFields:
+                        type: 0
+                        title: 1
+                        tags: 0
+                        items: 0
+                        due: 0
+                    byAnalysisVersion:
+                      - route: LOCAL
+                        analyzerVersion: fake-v6
+                        promptVersion: none
+                        localModelVersion: none
+                        embeddingModelVersion: none
+                        routingPolicyVersion: field-policy-v1
+                        proposals:
+                          total: 4
+                          withApplication: 3
+                          currentStates:
+                            queued: 0
+                            running: 0
+                            reviewRequired: 1
+                            currentPostponed: 1
+                            failed: 0
+                            stale: 0
+                            applied: 2
+                            rejected: 0
+                            other: 0
+                        latestApplications:
+                          none: 1
+                          applied: 2
+                          undone: 1
+                        outcomes:
+                          exact: 1
+                          corrected: 1
+                          userResolved: 1
+                          unclassifiable: 0
+                          correctedFields:
+                            type: 0
+                            title: 1
+                            tags: 0
+                            items: 0
+                            due: 0
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          description: >-
+            days is not an integer or is outside 1 through 90, or the selected owner/time window
+            contains more than 1,000 proposals. The latter returns
+            REVIEW_OUTCOME_WINDOW_TOO_LARGE and no partial aggregate.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidDays:
+                  value:
+                    code: VALIDATION_FAILED
+                    message: One or more request fields are invalid.
+                    fieldErrors:
+                      - field: summary.days
+                        message: must be greater than or equal to 1
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+                malformedDays:
+                  value:
+                    code: VALIDATION_FAILED
+                    message: One or more request fields are invalid.
+                    fieldErrors:
+                      - field: days
+                        message: must be a valid value
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+                proposalCapExceeded:
+                  value:
+                    code: REVIEW_OUTCOME_WINDOW_TOO_LARGE
+                    message: The selected window contains more than 1000 analysis proposals.
+                    fieldErrors: []
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+
+  /tasks:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Tasks]
+      operationId: listTasks
+      summary: List confirmed task facets for the authenticated owner
+      responses:
+        "200":
+          description: Tasks with derived overdue state.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TaskView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+
+  /tasks/{taskId}:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    patch:
+      tags: [Tasks]
+      operationId: updateTaskStatus
+      summary: Change a task's persisted source status
+      description: OVERDUE is derived and cannot be written as a source status.
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTaskRequest"
+      responses:
+        "200":
+          description: Task status result. updated is false when no source-state change was needed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskUpdateView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /search/memos:
+    post:
+      tags: [Search]
+      operationId: searchMemos
+      summary: Search canonical owner-scoped memo views by exact lexical rules
+      description: >-
+        A read-only POST keeps the private query in a JSON body instead of a URL. It creates no
+        canonical or idempotency row but requires the current CSRF token because it is a
+        cookie-authenticated POST. BODY is the current immutable raw revision; TITLE is the latest
+        valid APPLIED selection and can belong to an older canonicalRevision. The server rejects
+        U+0000 and malformed UTF-16, then creates the query operand with Java NFKC, strip, and Locale.ROOT
+        lowercase. PostgreSQL applies NFKC and lower under the und-x-icu collation to stored
+        BODY/TITLE before literal-substring comparison; no broader collation equivalence is
+        promised, and SQL wildcard characters have no special meaning. TAG/ALIAS use TagNormalizer
+        exact normalized equality against only the authenticated owner's ACTIVE canonical tags
+        linked through APPLIED, unarchived items.
+        Proposal data, UNDONE applications, archived items, and inactive tags are excluded.
+        Lifecycle, aggregate task state, snapshot-derived overdue, inclusive revisedFrom, and
+        exclusive revisedBefore filters apply to the current revision. Results order by current raw
+        revision time descending and memo UUID ascending. Cursor version 1 contains only hashes,
+        identities, sort shape, and a bounded snapshot; it never contains the query or a display/raw
+        value and never grants access. Continuation recomputes the full visible result digest and
+        returns INVALID_SEARCH_CURSOR when membership, order, or display state changed. The PWA
+        preserves that list as stale and explicitly restarts without a cursor. Search responses and
+        current-raw detail reads are no-store, are not persisted in browser/service-worker storage,
+        do not inject nodes into React Flow, and do not implement fuzzy, pg_trgm, vector, embedding,
+        provider, or related-memo retrieval.
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ExpectedOwnerId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoSearchRequest"
+            examples:
+              activeTaskSearch:
+                value:
+                  query: OS 과제
+                  lifecycleStatus: ACTIVE
+                  taskState: TODO
+                  overdue: false
+                  revisedFrom: 2026-08-01T00:00:00Z
+                  revisedBefore: 2026-09-01T00:00:00Z
+                  limit: 20
+              firstPageMinimal:
+                value:
+                  query: 운영체제
+      responses:
+        "200":
+          description: One stable, owner-scoped exact lexical page.
+          headers:
+            Cache-Control:
+              description: Search results are private and are never reusable from an HTTP cache.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoSearchPage"
+              examples:
+                finalPage:
+                  value:
+                    items:
+                      - memoId: 61c6c3e8-846a-4472-a58a-321920001868
+                        currentRevision: 3
+                        canonicalRevision: 2
+                        title: OS 과제 제출
+                        preview: 11.26 OS 과제 수정본 제출
+                        lifecycleStatus: ACTIVE
+                        canonicalTags:
+                          - id: 10000000-0000-0000-0000-000000000001
+                            name: 운영체제
+                        taskState: TODO
+                        overdue: false
+                        pinned: true
+                        revisedAt: 2026-08-11T10:00:00Z
+                        matchedFields: [TITLE, BODY, ALIAS]
+                    nextCursor: null
+                    truncated: false
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          description: >-
+            Malformed JSON/field types, a blank, U+0000, malformed-UTF-16, or out-of-bound raw/normalized
+            query, unsupported or contradictory filters, an out-of-supported-range or
+            non-increasing revision interval, a
+            limit outside 1–50, or a malformed, expired, mismatched, missing-last-result, or
+            visible-state-stale cursor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                malformedJson:
+                  value:
+                    code: MALFORMED_JSON
+                    message: The request body is not valid JSON.
+                    fieldErrors: []
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+                invalidQuery:
+                  value:
+                    code: INVALID_SEARCH_QUERY
+                    message: query must contain between 1 and 200 characters.
+                    fieldErrors: []
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+                invalidFilters:
+                  value:
+                    code: INVALID_SEARCH_FILTERS
+                    message: The search filters are invalid.
+                    fieldErrors: []
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+                invalidDateRange:
+                  value:
+                    code: INVALID_SEARCH_DATE_RANGE
+                    message: >-
+                      Search dates must be between 0001-01-01T00:00:00Z and
+                      9999-12-31T23:59:59.999999Z, and revisedFrom must be earlier than
+                      revisedBefore.
+                    fieldErrors: []
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+                invalidLimit:
+                  value:
+                    code: INVALID_SEARCH_LIMIT
+                    message: limit must be between 1 and 50.
+                    fieldErrors: []
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+                staleCursor:
+                  value:
+                    code: INVALID_SEARCH_CURSOR
+                    message: The memo search cursor is invalid.
+                    fieldErrors: []
+                    correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+
+  /graph/home:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Graph]
+      operationId: getGraphHome
+      summary: Project a bounded memo-tag graph from canonical data
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Requested node bound; the server clamps it to 1–100.
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: >-
+            Canonical memo/tag projection. Memo candidates use pinned, overdue, unfinished,
+            next-due, current-revision recency, and UUID hard priorities; tag candidates use
+            current-projection connectivity and stable name ordering. When limit is greater than
+            one, max(1, floor(limit / 5)) of the node budget is initially reserved for tags. Unused
+            tag slots are backfilled only with a final-memo-set tag recheck; omitted memo or tag
+            candidates set truncated, and an unsafe backfill underfills instead. System type remains
+            node metadata.
+          headers:
+            Cache-Control:
+              description: Time-sensitive owner graph projections are never reusable from an HTTP cache.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphProjection"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+
+  /graph/nodes/{kind}/{id}/neighborhood:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+      - name: kind
+        in: path
+        required: true
+        description: Exact graph center kind.
+        schema:
+          type: string
+          enum: [MEMO, TAG]
+      - name: id
+        in: path
+        required: true
+        description: Center entity UUID without the graph-node prefix.
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Graph]
+      operationId: getGraphNeighborhood
+      summary: Page one owner-scoped canonical MEMO_TAG hop from the full corpus
+      description: >-
+        Verifies the requested ACTIVE center before inspecting the cursor. MEMO centers page ACTIVE
+        tags by normalized name and UUID; TAG centers page eligible ACTIVE memos by the graph-home
+        pin, overdue, TODO, next-due, current-revision, and UUID priority. The version-2 cursor
+        contains owner/center/last-neighbor identities, a bounded snapshot instant, and a lowercase
+        SHA-256 neighborhoodDigest used only as an opaque change token. It is not an authorization
+        credential, and no raw memo, label, task, due, proposal, or alias value is stored in it. A
+        visible center, membership, value, or order change invalidates continuation with 422. This
+        read does not change or expand the current home projection.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Strict per-page neighbor and edge bound. Values outside 1–20 return 422.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          description: >-
+            Canonical opaque URL-safe cursor returned by the preceding page. Cursors expire after 24
+            hours, allow at most one minute of clock skew, and are bound to owner, center, sort shape,
+            and a version-2 lowercase SHA-256 digest of the visible neighborhood state. A digest
+            mismatch returns INVALID_GRAPH_CURSOR; the digest does not grant access.
+          schema:
+            $ref: "#/components/schemas/GraphNeighborhoodCursor"
+      responses:
+        "200":
+          description: One independently bounded full-corpus neighborhood page.
+          headers:
+            Cache-Control:
+              description: Owner graph neighborhoods are never reusable from an HTTP cache.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphNeighborhood"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: SESSION
+      description: Opaque, revocable server session. The cookie is HttpOnly in the browser.
+
+  parameters:
+    ExpectedOwnerId:
+      name: X-Expected-Owner-Id
+      in: header
+      required: false
+      description: >-
+        Authenticated user ID captured by the client when this request starts. This is
+        only a cross-tab/session-race guard and never selects an owner or grants access;
+        the server principal remains the sole authorization source. When an authenticated
+        principal exists, a malformed UUID or a different value returns 409
+        SESSION_OWNER_CHANGED before the endpoint mutates domain or idempotency state.
+        Anonymous idempotent logout has no owner to compare. Omitting the header is allowed.
+      schema:
+        type: string
+        format: uuid
+    AnalysisProposalSchemaVersion:
+      name: X-Analysis-Proposal-Schema-Version
+      in: header
+      required: false
+      description: >-
+        Maximum proposal schema understood by the client. Omission and value 1 return a strict
+        version-1 representation for forward compatibility with an installed older PWA. Value 2
+        allows a stored version-2 proposal; a historical stored version-1 proposal remains version
+        1. Any other or combined value returns 422 UNSUPPORTED_PROPOSAL_SCHEMA_VERSION.
+      schema:
+        type: string
+        enum: ["1", "2"]
+        default: "1"
+    CsrfHeader:
+      name: X-XSRF-TOKEN
+      in: header
+      required: true
+      description: Value returned by `GET /auth/csrf`; required for cookie-authenticated mutations.
+      schema:
+        type: string
+        minLength: 1
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        1–128 character retry identity. Replaying the same operation and request returns
+        the stored response; reusing the key for a different request returns 409.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    MemoId:
+      name: memoId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ProposalId:
+      name: proposalId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ApplicationId:
+      name: applicationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    Unauthorized:
+      description: >-
+        No valid authenticated server session exists, or the account was disabled.
+        Typical codes are AUTHENTICATION_REQUIRED and ACCOUNT_DISABLED.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            authenticationRequired:
+              value:
+                code: AUTHENTICATION_REQUIRED
+                message: Authentication is required.
+                fieldErrors: []
+                correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+    CsrfForbidden:
+      description: >-
+        The cookie-authenticated mutation did not include the current CSRF token.
+        The response code is CSRF_TOKEN_INVALID and no domain mutation occurs.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            invalidCsrf:
+              value:
+                code: CSRF_TOKEN_INVALID
+                message: A valid CSRF token is required.
+                fieldErrors: []
+                correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+    OwnerOrDomainConflict:
+      description: >-
+        When an authenticated principal exists on an endpoint carrying X-Expected-Owner-Id,
+        a malformed value or a different owner returns SESSION_OWNER_CHANGED before domain
+        or idempotency state changes. Anonymous idempotent logout has no owner to compare.
+        The endpoint may also return its documented revision, lifecycle, identity, or
+        idempotency conflict code.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            sessionOwnerChanged:
+              value:
+                code: SESSION_OWNER_CHANGED
+                message: The authenticated account changed before this request was sent.
+                fieldErrors: []
+                correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+    ApplyConflict:
+      description: >-
+        The owner snapshot, revision, proposal lifecycle, tag/relation target identity, or
+        idempotency state conflicts with the request. No partial application or derived record is
+        committed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            sessionOwnerChanged:
+              value:
+                code: SESSION_OWNER_CHANGED
+                message: The authenticated account changed before this request was sent.
+                fieldErrors: []
+                correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+            relationTargetUnavailable:
+              value:
+                code: RELATION_TARGET_UNAVAILABLE
+                message: A selected relation target is no longer available.
+                fieldErrors: []
+                correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
+    Forbidden:
+      description: CSRF validation or another authenticated access rule failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: The resource is absent or outside the current owner scope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Revision, proposal state, resource identity, or idempotency conflict.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    UnprocessableEntity:
+      description: JSON, header, bean, schema, or domain validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    LoginMethod:
+      type: string
+      enum: [LOCAL, GOOGLE]
+
+    AuthCapabilities:
+      type: object
+      additionalProperties: false
+      required: [registrationEnabled, googleEnabled, googleRegistrationEnabled]
+      properties:
+        registrationEnabled:
+          type: boolean
+        googleEnabled:
+          type: boolean
+          description: >-
+            True only when Google authentication is explicitly enabled and the server
+            started with non-blank client credential settings. It does not prove that
+            Google has accepted those credentials. Existing linked identities and explicit
+            linking remain available when this is true. Google authentication itself is false
+            by default.
+        googleRegistrationEnabled:
+          type: boolean
+          description: >-
+            True only when googleEnabled is true and the separate Google account-creation policy
+            is enabled. It tells a client whether an unseen Google identity may create a new
+            internal user before starting OAuth. The default and production value is false;
+            attempts are then rejected with GOOGLE_REGISTRATION_DISABLED while existing linked
+            identities and explicit linking remain available.
+
+    CsrfToken:
+      type: object
+      additionalProperties: false
+      required: [headerName, parameterName, token]
+      properties:
+        headerName:
+          type: string
+        parameterName:
+          type: string
+        token:
+          type: string
+
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password, displayName, timeZone]
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+        password:
+          type: string
+          format: password
+          minLength: 12
+          maxLength: 128
+          description: Also limited to the configured password encoder's safe UTF-8 byte length.
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        timeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          examples: [Asia/Seoul]
+
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 128
+
+    AuthSession:
+      type: object
+      additionalProperties: false
+      required: [userId, email, displayName, loginMethods]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        loginMethods:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/LoginMethod"
+
+    GoogleLinkIntent:
+      type: object
+      additionalProperties: false
+      required: [authorizationUrl]
+      properties:
+        authorizationUrl:
+          type: string
+          description: Same-origin server endpoint for starting Google authorization.
+          examples: [/oauth2/authorization/google]
+
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          const: UP
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [code, message, fieldErrors, correlationId]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        fieldErrors:
+          type: array
+          items:
+            $ref: "#/components/schemas/FieldError"
+        correlationId:
+          type: string
+          format: uuid
+    FieldError:
+      type: object
+      additionalProperties: false
+      required: [field, message]
+      properties:
+        field:
+          type: string
+        message:
+          type: string
+
+    CreateMemoRequest:
+      type: object
+      additionalProperties: false
+      required: [id, content, clientCreatedAt, timeZone]
+      properties:
+        id:
+          type: string
+          format: uuid
+        content:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        clientCreatedAt:
+          type: string
+          format: date-time
+        timeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          examples: [Asia/Seoul]
+    UpdateMemoRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, content]
+      dependentRequired:
+        clientUpdatedAt: [timeZone]
+        timeZone: [clientUpdatedAt]
+      properties:
+        expectedRevision:
+          type: integer
+          minimum: 1
+        content:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        clientUpdatedAt:
+          type: string
+          format: date-time
+          description: Client-recorded time for this immutable revision.
+        timeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          examples: [Asia/Seoul]
+          description: IANA time zone captured with clientUpdatedAt.
+    PinMemoRequest:
+      type: object
+      additionalProperties: false
+      required: [pinned]
+      properties:
+        pinned:
+          type: boolean
+    PinMemoView:
+      type: object
+      additionalProperties: false
+      required: [id, pinned, updated]
+      properties:
+        id:
+          type: string
+          format: uuid
+        pinned:
+          type: boolean
+        updated:
+          type: boolean
+    MemoStatus:
+      enum: [ACTIVE, TRASHED]
+    MemoView:
+      type: object
+      additionalProperties: false
+      required: [id, currentRevision, content, status, analysisState, createdAt, pinned]
+      properties:
+        id:
+          type: string
+          format: uuid
+        currentRevision:
+          type: integer
+          minimum: 1
+        content:
+          type: string
+        status:
+          $ref: "#/components/schemas/MemoStatus"
+        analysisState:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        pinned:
+          type: boolean
+
+    StartAnalysisRequest:
+      type: object
+      additionalProperties: false
+      required: [memoRevision, policy]
+      properties:
+        memoRevision:
+          type: integer
+          minimum: 1
+        policy:
+          const: AUTO
+    AnalysisRunView:
+      type: object
+      additionalProperties: false
+      required: [id, memoId, memoRevision, status, proposalId]
+      properties:
+        id:
+          type: string
+          format: uuid
+        memoId:
+          type: string
+          format: uuid
+        memoRevision:
+          type: integer
+          minimum: 1
+        status:
+          const: REVIEW_REQUIRED
+        proposalId:
+          type: string
+          format: uuid
+    ProposalRecoveryView:
+      type: object
+      additionalProperties: false
+      required: [proposalId, status, createdAt, proposal]
+      properties:
+        proposalId:
+          type: string
+          format: uuid
+        status:
+          enum: [REVIEW_REQUIRED, POSTPONED]
+        createdAt:
+          type: string
+          format: date-time
+        proposal:
+          $ref: ../contracts/analysis-proposal.schema.json
+
+    ItemKind:
+      enum: [TASK, EVENT, INFORMATION, IDEA, RECORD]
+    DatePrecision:
+      enum: [EXACT_TIME, DATE_ONLY, RELATIVE_EXACT, APPROXIMATE, UNKNOWN]
+    SelectedTag:
+      type: object
+      additionalProperties: false
+      properties:
+        existingTagId:
+          type: [string, "null"]
+          format: uuid
+        newCanonicalName:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 100
+          description: >-
+            New canonical tag input. The server rejects U+0000 and malformed UTF-16, then requires
+            the raw, NFKC/whitespace-normalized canonical, and Locale.ROOT-lowercase forms to each
+            contain 1–100 Unicode code points.
+      oneOf:
+        - required: [existingTagId]
+          properties:
+            existingTagId:
+              type: string
+              format: uuid
+            newCanonicalName:
+              type: "null"
+        - required: [newCanonicalName]
+          properties:
+            existingTagId:
+              type: "null"
+            newCanonicalName:
+              type: string
+              minLength: 1
+              maxLength: 100
+              description: >-
+                Must be well-formed UTF-16 without U+0000 and remain within 1–100 Unicode code
+                points after server normalization; invalid input returns INVALID_TAG_NAME.
+    DueSelection:
+      type: object
+      additionalProperties: false
+      required: [surfaceText, value, precision, timeZone, timeSpecified]
+      description: >-
+        DATE_ONLY uses an ISO date with timeSpecified=false. EXACT_TIME and
+        RELATIVE_EXACT use an offset timestamp with timeSpecified=true.
+        APPROXIMATE and UNKNOWN require a null value and are never coerced to an instant. The
+        timeZone field remains a validated compatibility input, but the server replaces it with
+        the immutable memo revision's source time zone before persisting task_details.
+      properties:
+        surfaceText:
+          type: string
+          minLength: 1
+          maxLength: 100
+        value:
+          type: [string, "null"]
+          maxLength: 100
+        precision:
+          $ref: "#/components/schemas/DatePrecision"
+        timeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: >-
+            Recognized IANA compatibility input. It cannot select the canonical persisted zone;
+            task_details.source_time_zone comes from the immutable analyzed memo revision.
+        timeSpecified:
+          type: boolean
+    ApplyItem:
+      type: object
+      additionalProperties: false
+      required: [kind, title]
+      properties:
+        proposalCandidateId:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 100
+            - type: "null"
+          description: >-
+            Exact opaque itemCandidates[].candidateId copied from the stored proposal, or null for
+            a user-added item. It is never trimmed or normalized. A selected relation can be bound
+            only when its sourceCandidateId maps to exactly one applied item. Older clients may
+            omit this field, which is treated as null.
+        kind:
+          $ref: "#/components/schemas/ItemKind"
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        due:
+          oneOf:
+            - $ref: "#/components/schemas/DueSelection"
+            - type: "null"
+    SelectedRelation:
+      type: object
+      additionalProperties: false
+      required: [proposalIndex]
+      properties:
+        proposalIndex:
+          type: integer
+          minimum: 0
+          maximum: 9
+          description: >-
+            Index into the locked stored proposal's relationCandidates array. Target identity,
+            relation type, and score are intentionally not accepted from the client.
+    RelationReviewCandidateView:
+      type: object
+      additionalProperties: false
+      required: [proposalIndex, targetType, targetId, targetLabel, available]
+      allOf:
+        - if:
+            properties:
+              available:
+                const: true
+          then:
+            properties:
+              targetLabel:
+                type: string
+                minLength: 1
+                maxLength: 240
+          else:
+            properties:
+              targetLabel:
+                type: "null"
+                const: null
+        - if:
+            properties:
+              targetType:
+                const: TAG
+          then:
+            properties:
+              targetLabel:
+                maxLength: 100
+      properties:
+        proposalIndex:
+          type: integer
+          minimum: 0
+          maximum: 9
+        targetType:
+          type: string
+          enum: [MEMO, TAG]
+        targetId:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          description: Canonical lowercase UUID serialized by the server.
+        targetLabel:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 240
+          description: >-
+            Current raw memo preview bounded to 240 Unicode code points, or the ACTIVE canonical
+            tag name bounded to 100 Unicode code points. Null when the target is unavailable.
+        available:
+          type: boolean
+    ApplyProposalRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedMemoRevision, selectedType, title, selectedTags, items]
+      properties:
+        expectedMemoRevision:
+          type: integer
+          minimum: 1
+        selectedType:
+          $ref: "#/components/schemas/ItemKind"
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        selectedTags:
+          type: array
+          maxItems: 10
+          items:
+            $ref: "#/components/schemas/SelectedTag"
+        items:
+          type: array
+          minItems: 1
+          maxItems: 3
+          items:
+            $ref: "#/components/schemas/ApplyItem"
+        selectedRelations:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          description: >-
+            Explicit subset of stored proposal relation indexes. The current PWA always sends this
+            field, including [] to reject every candidate. A legacy omission is accepted only when
+            the stored proposal has no relation candidates; otherwise Apply returns
+            RELATION_SELECTION_REQUIRED without writing canonical data.
+          items:
+            $ref: "#/components/schemas/SelectedRelation"
+    ApplicationView:
+      type: object
+      additionalProperties: false
+      required: [applicationId, status]
+      properties:
+        applicationId:
+          type: string
+          format: uuid
+        status:
+          enum: [APPLIED, UNDONE]
+    ApplicationRecoveryView:
+      type: object
+      additionalProperties: false
+      required: [applicationId, status]
+      properties:
+        applicationId:
+          type: [string, "null"]
+          format: uuid
+        status:
+          enum: [NONE, APPLIED, UNDONE]
+      oneOf:
+        - properties:
+            applicationId:
+              type: "null"
+            status:
+              const: NONE
+        - properties:
+            applicationId:
+              type: string
+              format: uuid
+            status:
+              enum: [APPLIED, UNDONE]
+    ReviewOutcomeCount:
+      type: integer
+      minimum: 0
+      maximum: 1000
+    ReviewOutcomeCurrentStates:
+      type: object
+      additionalProperties: false
+      description: >-
+        Current mutable analysis_runs states. These counters sum to proposals.total.
+        currentPostponed is only the current POSTPONED state; a proposal later applied or rejected
+        does not preserve an earlier postponement event in this schema.
+      required:
+        [queued, running, reviewRequired, currentPostponed, failed, stale, applied, rejected, other]
+      properties:
+        queued:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        running:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        reviewRequired:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        currentPostponed:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        failed:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        stale:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        applied:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        rejected:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        other:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+    ReviewOutcomeProposalCounters:
+      type: object
+      additionalProperties: false
+      required: [total, withApplication, currentStates]
+      properties:
+        total:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        withApplication:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        currentStates:
+          $ref: "#/components/schemas/ReviewOutcomeCurrentStates"
+    ReviewOutcomeLatestApplications:
+      type: object
+      additionalProperties: false
+      description: >-
+        For each proposal, the latest analysis_application ordered by applied_at DESC then id DESC.
+        none, applied, and undone sum to proposals.total. Undo followed by a new application uses
+        the newer application; this is not a count of every apply or undo event.
+      required: [none, applied, undone]
+      properties:
+        none:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        applied:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        undone:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+    ReviewOutcomeCorrectedFields:
+      type: object
+      additionalProperties: false
+      description: >-
+        Non-exclusive field counters within CORRECTED outcomes. Each value is less than or equal to
+        outcomes.corrected, and one corrected selection may increment multiple fields.
+      required: [type, title, tags, items, due]
+      properties:
+        type:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        title:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        tags:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        items:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        due:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+    ReviewOutcomeCounters:
+      type: object
+      additionalProperties: false
+      description: >-
+        Comparison of the latest stored selection for every proposal with an application. EXACT,
+        CORRECTED, USER_RESOLVED, and UNCLASSIFIABLE sum to proposals.withApplication and are
+        independent of current run state and APPLIED/UNDONE state. EXACT means unchanged selection,
+        not AI correctness. A non-empty relation proposal is UNCLASSIFIABLE because
+        review-default-v3 has no adjudicated relation-selection comparison target, even though Apply
+        can now persist an explicitly selected relation.
+      required: [exact, corrected, userResolved, unclassifiable, correctedFields]
+      properties:
+        exact:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        corrected:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        userResolved:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        unclassifiable:
+          $ref: "#/components/schemas/ReviewOutcomeCount"
+        correctedFields:
+          $ref: "#/components/schemas/ReviewOutcomeCorrectedFields"
+    ReviewOutcomeCohort:
+      type: object
+      additionalProperties: false
+      description: Rolling proposal-created-at cohort represented as a half-open UTC interval.
+      required: [basis, days, fromInclusive, toExclusive, maxProposals]
+      properties:
+        basis:
+          const: PROPOSAL_CREATED_AT
+        days:
+          type: integer
+          minimum: 1
+          maximum: 90
+        fromInclusive:
+          type: string
+          format: date-time
+        toExclusive:
+          type: string
+          format: date-time
+        maxProposals:
+          type: integer
+          const: 1000
+    ReviewOutcomeAnalysisVersion:
+      type: object
+      additionalProperties: false
+      description: >-
+        Counters grouped only by server-owned run route and provenance. Summing each counter across
+        this array reproduces the corresponding top-level counter.
+      required:
+        - route
+        - analyzerVersion
+        - promptVersion
+        - localModelVersion
+        - embeddingModelVersion
+        - routingPolicyVersion
+        - proposals
+        - latestApplications
+        - outcomes
+      properties:
+        route:
+          type: string
+          enum: [MOCK, LOCAL, CLOUD, HYBRID]
+        analyzerVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+        promptVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+        localModelVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+        embeddingModelVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+        routingPolicyVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+        proposals:
+          $ref: "#/components/schemas/ReviewOutcomeProposalCounters"
+        latestApplications:
+          $ref: "#/components/schemas/ReviewOutcomeLatestApplications"
+        outcomes:
+          $ref: "#/components/schemas/ReviewOutcomeCounters"
+    AnalysisReviewOutcomeSummary:
+      type: object
+      additionalProperties: false
+      description: >-
+        Owner-scoped aggregate only. It contains no raw memo/proposal/selection content and no memo,
+        proposal, application, task, tag, or relation identifiers. The three counter dimensions are
+        intentionally independent and must not be presented as an AI accuracy score.
+      required:
+        - schemaVersion
+        - comparisonPolicyVersion
+        - cohort
+        - proposals
+        - latestApplications
+        - outcomes
+        - byAnalysisVersion
+      properties:
+        schemaVersion:
+          const: "1"
+        comparisonPolicyVersion:
+          const: review-default-v3
+          description: >-
+            Reconstructs explicit version-2 TASK due references while retaining the former
+            conservative single-task/single-date projection only for historical version-1
+            proposals.
+        cohort:
+          $ref: "#/components/schemas/ReviewOutcomeCohort"
+        proposals:
+          $ref: "#/components/schemas/ReviewOutcomeProposalCounters"
+        latestApplications:
+          $ref: "#/components/schemas/ReviewOutcomeLatestApplications"
+        outcomes:
+          $ref: "#/components/schemas/ReviewOutcomeCounters"
+        byAnalysisVersion:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/ReviewOutcomeAnalysisVersion"
+    ReviewDispositionView:
+      type: object
+      additionalProperties: false
+      required: [proposalId, status]
+      properties:
+        proposalId:
+          type: string
+          format: uuid
+        status:
+          enum: [REJECTED, POSTPONED]
+
+    TaskStatus:
+      enum: [TODO, DONE, CANCELLED]
+    TaskView:
+      type: object
+      additionalProperties: false
+      required: [id, title, status, dueAt, dueDate, overdue]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+        dueAt:
+          type: [string, "null"]
+          format: date-time
+        dueDate:
+          type: [string, "null"]
+          format: date
+        overdue:
+          type: boolean
+          readOnly: true
+          description: Derived from TODO, the relevant due representation, now, and source time zone.
+    UpdateTaskRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+    TaskUpdateView:
+      type: object
+      additionalProperties: false
+      required: [id, status, updated]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+        updated:
+          type: boolean
+
+    MemoSearchLifecycleStatus:
+      type: string
+      enum: [ACTIVE, TRASHED]
+    MemoSearchTaskState:
+      type: string
+      enum: [NONE, TODO, DONE, CANCELLED]
+    MemoSearchMatchedField:
+      type: string
+      enum: [TITLE, BODY, TAG, ALIAS]
+    MemoSearchCursor:
+      type: string
+      minLength: 1
+      maxLength: 1024
+      pattern: "^[A-Za-z0-9_-]+$"
+      description: >-
+        Canonical unpadded URL-safe Base64 version-1 cursor. It binds the authenticated owner,
+        normalized-query and canonical-filter SHA-256 digests, CURRENT_REVISION_RECENCY_V1 sort
+        shape, a canonical UTC snapshot no older than 24 hours and no more than one minute in the
+        future, the full-visible-result change digest, and the last memo UUID. It contains no query,
+        raw body, title, preview, tag/alias value, or authority.
+    MemoSearchRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      description: >-
+        Private search input. query must exclude U+0000, be well-formed UTF-16, and its raw value
+        must contain at most 200 UTF-16 code units. After Java NFKC, strip, and Locale.ROOT lowercase, it must contain
+        1–200 UTF-16 code units and 1–200 Unicode code points. These server checks are stricter for
+        supplementary characters than JSON Schema maxLength alone. A literal substring is used for
+        BODY/TITLE; wildcard-looking characters remain ordinary. Each revision bound must be within
+        0001-01-01T00:00:00Z through 9999-12-31T23:59:59.999999Z. When both bounds are present,
+        revisedFrom must be earlier than revisedBefore. overdue=true is compatible only with
+        omitted taskState or TODO because overdue is derived only for TODO.
+      allOf:
+        - not:
+            required: [overdue, taskState]
+            properties:
+              overdue:
+                const: true
+              taskState:
+                enum: [NONE, DONE, CANCELLED]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >-
+            Private literal query. U+0000, lone high/low surrogates, normalized blank input, and
+            either raw or normalized input above 200 UTF-16 code units return INVALID_SEARCH_QUERY.
+        lifecycleStatus:
+          allOf:
+            - $ref: "#/components/schemas/MemoSearchLifecycleStatus"
+          default: ACTIVE
+        taskState:
+          $ref: "#/components/schemas/MemoSearchTaskState"
+        overdue:
+          type: boolean
+          description: Snapshot-derived filter; never a persisted source state.
+        revisedFrom:
+          type: string
+          format: date-time
+          description: >-
+            Inclusive lower bound over the current raw revision's server-created instant. Must be
+            between 0001-01-01T00:00:00Z and 9999-12-31T23:59:59.999999Z inclusive.
+        revisedBefore:
+          type: string
+          format: date-time
+          description: >-
+            Exclusive upper bound over the current raw revision's server-created instant. Must be
+            between 0001-01-01T00:00:00Z and 9999-12-31T23:59:59.999999Z inclusive.
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 20
+        cursor:
+          oneOf:
+            - $ref: "#/components/schemas/MemoSearchCursor"
+            - type: "null"
+    MemoSearchCanonicalTag:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+    MemoSearchItem:
+      type: object
+      additionalProperties: false
+      required:
+        - memoId
+        - currentRevision
+        - canonicalRevision
+        - title
+        - preview
+        - lifecycleStatus
+        - canonicalTags
+        - taskState
+        - overdue
+        - pinned
+        - revisedAt
+        - matchedFields
+      description: >-
+        A bounded canonical search projection. canonicalRevision/title are both null or both present;
+        a present canonicalRevision may be older than currentRevision. preview always comes from the
+        current raw revision and the result detail must re-read that current revision.
+      allOf:
+        - oneOf:
+            - type: object
+              required: [canonicalRevision, title]
+              properties:
+                canonicalRevision:
+                  type: integer
+                  minimum: 1
+                  maximum: 2147483647
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+            - type: object
+              required: [canonicalRevision, title]
+              properties:
+                canonicalRevision:
+                  type: "null"
+                  const: null
+                title:
+                  type: "null"
+                  const: null
+        - not:
+            required: [overdue, taskState]
+            properties:
+              overdue:
+                const: true
+              taskState:
+                enum: [NONE, DONE, CANCELLED]
+        - if:
+            properties:
+              matchedFields:
+                contains:
+                  enum: [TAG, ALIAS]
+                minContains: 1
+          then:
+            properties:
+              canonicalTags:
+                minItems: 1
+      properties:
+        memoId:
+          type: string
+          format: uuid
+        currentRevision:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+        canonicalRevision:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 2147483647
+          description: Null with title, otherwise no greater than currentRevision.
+        title:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 200
+        preview:
+          type: string
+          minLength: 1
+          maxLength: 240
+          description: >-
+            Current raw content bounded to 240 Unicode code points; when truncated its last returned
+            code point is an ellipsis.
+        lifecycleStatus:
+          $ref: "#/components/schemas/MemoSearchLifecycleStatus"
+        canonicalTags:
+          type: array
+          maxItems: 8
+          uniqueItems: true
+          description: >-
+            Current ACTIVE canonical tags with unique IDs, ordered by exact query match, exact alias
+            match, normalized name, then UUID. A TAG or ALIAS match always exposes its matching tag.
+          items:
+            $ref: "#/components/schemas/MemoSearchCanonicalTag"
+        taskState:
+          $ref: "#/components/schemas/MemoSearchTaskState"
+        overdue:
+          type: boolean
+          readOnly: true
+          description: Derived at the page snapshot and true only for an unfinished TODO task.
+        pinned:
+          type: boolean
+          readOnly: true
+        revisedAt:
+          type: string
+          format: date-time
+          description: Server-created instant of the current immutable raw revision.
+        matchedFields:
+          type: array
+          minItems: 1
+          maxItems: 4
+          uniqueItems: true
+          description: Present matches in fixed TITLE, BODY, TAG, ALIAS order.
+          items:
+            $ref: "#/components/schemas/MemoSearchMatchedField"
+    MemoSearchPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, truncated]
+      allOf:
+        - oneOf:
+            - type: object
+              required: [truncated, nextCursor]
+              properties:
+                truncated:
+                  const: true
+                nextCursor:
+                  $ref: "#/components/schemas/MemoSearchCursor"
+                items:
+                  type: array
+                  minItems: 1
+            - type: object
+              required: [truncated, nextCursor]
+              properties:
+                truncated:
+                  const: false
+                nextCursor:
+                  type: "null"
+                  const: null
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/MemoSearchItem"
+        nextCursor:
+          oneOf:
+            - $ref: "#/components/schemas/MemoSearchCursor"
+            - type: "null"
+        truncated:
+          type: boolean
+          description: True exactly when nextCursor is non-null.
+
+    GraphMemoNode:
+      type: object
+      additionalProperties: false
+      required: [id, kind, label, memoType, taskState, overdue, pinned]
+      properties:
+        id:
+          type: string
+          pattern: "^memo:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        kind:
+          type: string
+          const: MEMO
+        label:
+          type: string
+          minLength: 1
+          maxLength: 200
+        memoType:
+          $ref: "#/components/schemas/ItemKind"
+        taskState:
+          type: string
+          enum: [NONE, TODO, DONE, CANCELLED]
+        overdue:
+          type: boolean
+          readOnly: true
+        pinned:
+          type: boolean
+          readOnly: true
+          description: Reflects canonical memo metadata.
+    GraphTagNode:
+      type: object
+      additionalProperties: false
+      required: [id, kind, label, memoType, taskState, overdue, pinned]
+      properties:
+        id:
+          type: string
+          pattern: "^tag:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        kind:
+          type: string
+          const: TAG
+        label:
+          type: string
+          minLength: 1
+          maxLength: 100
+        memoType:
+          type: "null"
+          const: null
+        taskState:
+          type: "null"
+          const: null
+        overdue:
+          type: boolean
+          const: false
+          readOnly: true
+        pinned:
+          type: boolean
+          const: false
+          readOnly: true
+    GraphNode:
+      oneOf:
+        - $ref: "#/components/schemas/GraphMemoNode"
+        - $ref: "#/components/schemas/GraphTagNode"
+    GraphEdge:
+      type: object
+      additionalProperties: false
+      description: >-
+        Canonical oriented MEMO_TAG edge. source is the memo node, target is the tag node, and id is
+        exactly memo-tag:{source UUID}:{target UUID}; neighborhood responses return one per neighbor.
+      required: [id, source, target, kind]
+      properties:
+        id:
+          type: string
+          pattern: "^memo-tag:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        source:
+          type: string
+          pattern: "^memo:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        target:
+          type: string
+          pattern: "^tag:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        kind:
+          type: string
+          const: MEMO_TAG
+    GraphProjection:
+      type: object
+      additionalProperties: false
+      required: [nodes, edges, truncated, projectionVersion]
+      properties:
+        nodes:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/GraphNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphEdge"
+        truncated:
+          type: boolean
+        projectionVersion:
+          type: string
+          format: uuid
+
+    GraphNeighborhood:
+      type: object
+      additionalProperties: false
+      required: [center, neighbors, edges, truncated, nextCursor]
+      allOf:
+        - oneOf:
+            - type: object
+              properties:
+                truncated:
+                  const: true
+                nextCursor:
+                  $ref: "#/components/schemas/GraphNeighborhoodCursor"
+            - type: object
+              properties:
+                truncated:
+                  const: false
+                nextCursor:
+                  type: "null"
+        - oneOf:
+            - type: object
+              properties:
+                center:
+                  $ref: "#/components/schemas/GraphMemoNode"
+                neighbors:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/GraphTagNode"
+            - type: object
+              properties:
+                center:
+                  $ref: "#/components/schemas/GraphTagNode"
+                neighbors:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/GraphMemoNode"
+      properties:
+        center:
+          $ref: "#/components/schemas/GraphNode"
+        neighbors:
+          type: array
+          maxItems: 20
+          uniqueItems: true
+          description: Opposite-kind canonical nodes in the endpoint's deterministic keyset order.
+          items:
+            $ref: "#/components/schemas/GraphNode"
+        edges:
+          type: array
+          maxItems: 20
+          uniqueItems: true
+          description: Exactly one oriented MEMO_TAG edge for each returned neighbor.
+          items:
+            $ref: "#/components/schemas/GraphEdge"
+        truncated:
+          type: boolean
+          description: True exactly when nextCursor is non-null.
+        nextCursor:
+          oneOf:
+            - $ref: "#/components/schemas/GraphNeighborhoodCursor"
+            - type: "null"
+    GraphNeighborhoodCursor:
+      type: string
+      minLength: 1
+      maxLength: 1024
+      pattern: "^[A-Za-z0-9_-]+$"
+      description: >-
+        Canonical unpadded URL-safe Base64 version-2 cursor containing owner/center/last-neighbor
+        identities, snapshot, sort shape, and an opaque lowercase SHA-256 neighborhood change token;
+        never an authorization credential and never a container for raw or display values.

@@ -1,0 +1,222 @@
+package local.personalmemo.common.idempotency;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Clock;
+import java.time.Instant;
+import java.util.Optional;
+import java.util.UUID;
+import local.personalmemo.common.auth.CurrentIdentity;
+import local.personalmemo.common.error.DomainException;
+import local.personalmemo.common.security.Hashing;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+
+@Service
+public class IdempotencyService {
+  private static final int MAX_KEY_LENGTH = 128;
+
+  private final JdbcClient db;
+  private final CurrentIdentity identity;
+  private final ObjectMapper json;
+  private final Clock clock;
+
+  public IdempotencyService(JdbcClient db, CurrentIdentity identity, ObjectMapper json) {
+    this.db = db;
+    this.identity = identity;
+    this.json = json;
+    this.clock = Clock.systemUTC();
+  }
+
+  /** Must be called inside the transaction that performs the protected mutation. */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<StoredResult> find(String operation, String key, String requestHash) {
+    return find(identity.ownerId(), operation, key, requestHash);
+  }
+
+  /** Owner-explicit variant for trusted background work without a request identity. */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<StoredResult> find(
+      UUID ownerId, String operation, String key, String requestHash) {
+    String validatedKey = validateKey(key);
+    acquireTransactionLock(ownerId, operation, validatedKey);
+
+    Optional<StoredRecord> stored =
+        db.sql(
+                """
+                select request_hash, resource_id, response_json::text
+                  from idempotency_records
+                 where owner_id = :ownerId
+                   and operation = :operation
+                   and idempotency_key = :key
+                """)
+            .param("ownerId", ownerId)
+            .param("operation", operation)
+            .param("key", validatedKey)
+            .query(this::mapStoredRecord)
+            .optional();
+
+    if (stored.isEmpty()) {
+      return Optional.empty();
+    }
+    if (!stored.get().requestHash().equals(requestHash)) {
+      throw DomainException.conflict(
+          "IDEMPOTENCY_KEY_REUSED",
+          "The Idempotency-Key was already used with a different request.");
+    }
+
+    return Optional.of(
+        new StoredResult(stored.get().resourceId(), parse(stored.get().responseJson())));
+  }
+
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void store(
+      String operation, String key, String requestHash, UUID resourceId, Object response) {
+    store(identity.ownerId(), operation, key, requestHash, resourceId, response);
+  }
+
+  /** Owner-explicit variant for trusted background work without a request identity. */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void store(
+      UUID ownerId,
+      String operation,
+      String key,
+      String requestHash,
+      UUID resourceId,
+      Object response) {
+    String responseJson = write(response);
+    db.sql(
+            """
+            insert into idempotency_records(
+              owner_id,
+              operation,
+              idempotency_key,
+              request_hash,
+              resource_id,
+              response_json,
+              created_at
+            ) values (
+              :ownerId,
+              :operation,
+              :key,
+              :requestHash,
+              :resourceId,
+              cast(:responseJson as jsonb),
+              :createdAt
+            )
+            """)
+        .param("ownerId", ownerId)
+        .param("operation", operation)
+        .param("key", validateKey(key))
+        .param("requestHash", requestHash)
+        .param("resourceId", resourceId)
+        .param("responseJson", responseJson)
+        .param("createdAt", Timestamp.from(Instant.now(clock)))
+        .update();
+  }
+
+  /** Replaces a provisional response while holding the same operation/key transaction lock. */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void complete(
+      String operation, String key, String requestHash, UUID resourceId, Object response) {
+    complete(identity.ownerId(), operation, key, requestHash, resourceId, response);
+  }
+
+  /** Owner-explicit variant for trusted background work without a request identity. */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void complete(
+      UUID ownerId,
+      String operation,
+      String key,
+      String requestHash,
+      UUID resourceId,
+      Object response) {
+    String validatedKey = validateKey(key);
+    acquireTransactionLock(ownerId, operation, validatedKey);
+    int updated =
+        db.sql(
+                """
+                update idempotency_records
+                   set response_json = cast(:responseJson as jsonb)
+                 where owner_id = :ownerId
+                   and operation = :operation
+                   and idempotency_key = :key
+                   and request_hash = :requestHash
+                   and resource_id = :resourceId
+                """)
+            .param("resourceId", resourceId)
+            .param("responseJson", write(response))
+            .param("ownerId", ownerId)
+            .param("operation", operation)
+            .param("key", validatedKey)
+            .param("requestHash", requestHash)
+            .update();
+    if (updated != 1) {
+      throw new IllegalStateException("The provisional idempotency response is missing.");
+    }
+  }
+
+  public String hashRequest(Object request) {
+    return Hashing.sha256(write(request));
+  }
+
+  public <T> T convert(JsonNode node, Class<T> responseType) {
+    try {
+      return json.treeToValue(node, responseType);
+    } catch (Exception exception) {
+      throw new IllegalStateException("Could not restore an idempotent response.", exception);
+    }
+  }
+
+  private void acquireTransactionLock(UUID ownerId, String operation, String key) {
+    String lockScope = ownerId + ":" + operation + ":" + key;
+    db.sql("select pg_advisory_xact_lock(hashtextextended(:lockScope, 0))")
+        .param("lockScope", lockScope)
+        .query(
+            (resultSet, rowNumber) -> {
+              resultSet.getObject(1);
+              return rowNumber;
+            })
+        .single();
+  }
+
+  private StoredRecord mapStoredRecord(ResultSet resultSet, int rowNumber) throws SQLException {
+    return new StoredRecord(
+        resultSet.getString("request_hash"),
+        resultSet.getObject("resource_id", UUID.class),
+        resultSet.getString("response_json"));
+  }
+
+  private String validateKey(String key) {
+    if (key == null || key.isBlank() || key.length() > MAX_KEY_LENGTH) {
+      throw DomainException.invalid(
+          "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key must contain between 1 and 128 characters.");
+    }
+    return key;
+  }
+
+  private String write(Object value) {
+    try {
+      return json.writeValueAsString(value);
+    } catch (Exception exception) {
+      throw new IllegalStateException("Could not serialize JSON.", exception);
+    }
+  }
+
+  private JsonNode parse(String value) {
+    try {
+      return json.readTree(value);
+    } catch (Exception exception) {
+      throw new IllegalStateException("Could not parse a stored idempotent response.", exception);
+    }
+  }
+
+  private record StoredRecord(String requestHash, UUID resourceId, String responseJson) {}
+
+  public record StoredResult(UUID resourceId, JsonNode response) {}
+}

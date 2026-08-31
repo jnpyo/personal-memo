@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FindBugsFilter>
+  <!--
+    These fields are application-scoped collaborators supplied and lifecycle-managed by Spring.
+    Copying them is neither possible nor an ownership boundary; keep each exclusion field-specific
+    so collection-bearing DTOs and domain values remain covered by EI_EXPOSE_REP/EI_EXPOSE_REP2.
+  -->
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.analysis.api.AnalysisController"/>
+    <Field name="analysisService"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.analysis.api.AnalysisController"/>
+    <Field name="applicationService"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.analysis.application.AnalysisApplicationService"/>
+    <Field name="idempotency"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.analysis.application.AnalysisApplicationService"/>
+    <Field name="json"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.analysis.application.AnalysisService"/>
+    <Field name="ambiguityGate"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.analysis.application.AnalysisService"/>
+    <Field name="idempotency"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.analysis.application.AnalysisService"/>
+    <Field name="json"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.analysis.application.AnalysisReviewOutcomeService"/>
+    <Field name="json"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.analysis.application.AnalysisRelationReviewService"/>
+    <Field name="json"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.analysis.infrastructure.FakeAnalyzer"/>
+    <Field name="json"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.analysis.infrastructure.TagRetrievalContextCodec"/>
+    <Field name="json"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.auth.api.AuthController"/>
+    <Field name="contextHolderStrategy"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.auth.infrastructure.GoogleOAuthFailureHandler"/>
+    <Field name="contextHolderStrategy"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.auth.infrastructure.GoogleOAuthSuccessHandler"/>
+    <Field name="authorizedClients"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.auth.infrastructure.GoogleOAuthSuccessHandler"/>
+    <Field name="contextHolderStrategy"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.auth.infrastructure.LocalAccountUserDetailsService"/>
+    <Field name="repository"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.common.idempotency.IdempotencyService"/>
+    <Field name="json"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.memo.application.MemoService"/>
+    <Field name="idempotency"/>
+  </Match>
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Class name="local.personalmemo.task.application.TaskService"/>
+    <Field name="idempotency"/>
+  </Match>
+</FindBugsFilter>

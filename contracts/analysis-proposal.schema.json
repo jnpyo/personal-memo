@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://personal-memo.local/schemas/analysis-proposal-v1.json",
-  "title": "AnalysisProposalV1",
+  "$id": "https://personal-memo.local/schemas/analysis-proposal.json",
+  "title": "AnalysisProposal",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -17,9 +17,45 @@
     "ambiguityReasons",
     "providerMetadata"
   ],
+  "allOf": [
+    {
+      "if": {
+        "properties": { "schemaVersion": { "const": "1" } },
+        "required": ["schemaVersion"]
+      },
+      "then": {
+        "properties": {
+          "dateCandidates": {
+            "items": {
+              "not": { "required": ["candidateId"] }
+            }
+          },
+          "itemCandidates": {
+            "items": {
+              "not": { "required": ["dueDateCandidateId"] }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "dateCandidates": {
+            "items": {
+              "required": ["candidateId"]
+            }
+          },
+          "itemCandidates": {
+            "items": {
+              "required": ["dueDateCandidateId"]
+            }
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "schemaVersion": {
-      "const": "1"
+      "enum": ["1", "2"]
     },
     "memoId": {
       "type": "string",
@@ -27,7 +63,8 @@
     },
     "memoRevision": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "maximum": 2147483647
     },
     "suggestedTitle": {
       "$ref": "#/$defs/scoredText"
@@ -87,10 +124,46 @@
     },
     "providerMetadata": {
       "type": "object",
-      "additionalProperties": true
+      "additionalProperties": true,
+      "required": [
+        "analyzerVersion",
+        "promptVersion",
+        "localModelVersion",
+        "embeddingModelVersion",
+        "routingPolicyVersion",
+        "toolCalls"
+      ],
+      "properties": {
+        "analyzerVersion": {
+          "$ref": "#/$defs/versionString"
+        },
+        "promptVersion": {
+          "$ref": "#/$defs/versionString"
+        },
+        "localModelVersion": {
+          "$ref": "#/$defs/versionString"
+        },
+        "embeddingModelVersion": {
+          "$ref": "#/$defs/versionString"
+        },
+        "routingPolicyVersion": {
+          "$ref": "#/$defs/versionString"
+        },
+        "toolCalls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      }
     }
   },
   "$defs": {
+    "versionString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "\\S"
+    },
     "score": {
       "type": "number",
       "minimum": 0,
@@ -116,16 +189,19 @@
     },
     "sourceSpan": {
       "type": "object",
+      "description": "A non-empty, half-open [start, end) range in UTF-16 code units over the exact immutable memo revision. Offsets must not split a surrogate pair.",
       "additionalProperties": false,
       "required": ["start", "end"],
       "properties": {
         "start": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 2147483647
         },
         "end": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 2147483647
         }
       }
     },
@@ -143,6 +219,7 @@
         "MISSING_ACTION",
         "MISSING_OBJECT",
         "MULTI_INTENT",
+        "CANDIDATE_LIMIT_EXCEEDED",
         "LOCAL_CLOUD_CONFLICT"
       ]
     },
@@ -158,9 +235,15 @@
         "ambiguityReasons"
       ],
       "properties": {
+        "candidateId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
         "surfaceText": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "maxLength": 200
         },
         "value": {
           "type": ["string", "null"]
@@ -181,7 +264,49 @@
             "$ref": "#/$defs/ambiguityReason"
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "precision": { "const": "DATE_ONLY" } },
+            "required": ["precision"]
+          },
+          "then": {
+            "properties": {
+              "value": { "type": "string", "format": "date" },
+              "timeSpecified": { "const": false }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "precision": { "enum": ["EXACT_TIME", "RELATIVE_EXACT"] }
+            },
+            "required": ["precision"]
+          },
+          "then": {
+            "properties": {
+              "value": { "type": "string", "format": "date-time" },
+              "timeSpecified": { "const": true }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "precision": { "enum": ["APPROXIMATE", "UNKNOWN"] }
+            },
+            "required": ["precision"]
+          },
+          "then": {
+            "properties": {
+              "value": { "type": "null" },
+              "timeSpecified": { "const": false }
+            }
+          }
+        }
+      ]
     },
     "tagCandidate": {
       "type": "object",
@@ -204,7 +329,9 @@
           "maxLength": 100
         },
         "matchedAlias": {
-          "type": ["string", "null"]
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 100
         },
         "score": {
           "$ref": "#/$defs/score"
@@ -221,7 +348,13 @@
       "properties": {
         "candidateId": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "dueDateCandidateId": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 100
         },
         "kind": {
           "enum": ["TASK", "EVENT", "INFORMATION", "IDEA", "RECORD"]
@@ -238,10 +371,14 @@
           ]
         },
         "action": {
-          "type": ["string", "null"]
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 200
         },
         "object": {
-          "type": ["string", "null"]
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 200
         },
         "confidence": {
           "$ref": "#/$defs/score"
@@ -254,13 +391,16 @@
       "required": ["sourceCandidateId", "targetType", "targetId", "relationType", "score"],
       "properties": {
         "sourceCandidateId": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
         },
         "targetType": {
           "enum": ["MEMO", "TAG"]
         },
         "targetId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         },
         "relationType": {
           "enum": ["RELATED_TO", "CONTINUES", "DEPENDS_ON", "REFERENCES"]
@@ -272,4 +412,3 @@
     }
   }
 }
-

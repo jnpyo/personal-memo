@@ -19,13 +19,13 @@
 1. **원본 메모가 유일한 원본(source of truth)이다.** AI는 원문을 덮어쓰지 않는다.
 2. **AI 결과는 제안이다.** 사용자가 승인하기 전에는 태그·할 일·알림·관계를 확정하지 않는다.
 3. **입력은 자유 형식이지만 출력은 버전이 있는 구조화 스키마다.**
-4. **명확한 메모는 휴대폰 로컬 분석기로 끝내고, 모호한 메모만 클라우드 Agent로 보낸다.**
+4. **명확한 메모는 local-analysis 경계에서 끝내고, 외부 전송은 별도 동의 gate 뒤에 둔다.** 현재 구현은 서버의 결정론적 `FakeAnalyzer`와 `NO_NETWORK` Fake gateway이며, 휴대폰 모델과 실제 cloud Agent는 아직 연결하지 않는다.
 5. **로컬 모델의 self-confidence를 그대로 신뢰하지 않는다.** 분류 마진, 태그 유사도, 날짜 완전성, 미해결 지시어 등으로 필드별 모호성을 계산한다.
 6. **그래프는 저장 포맷이 아니라 데이터의 투영(view)이다.** 메모·파생 항목·태그·관계가 원본 데이터다.
 7. **압축은 가역적이어야 한다.** 오래된 노드를 화면에서 접거나 요약하되 원본을 삭제·병합하지 않는다.
 8. **증분 처리한다.** 새 메모가 들어올 때 전체 메모를 재분석하거나 모든 쌍을 비교하지 않는다.
 9. **Agent 도구는 읽기 위주로 제한한다.** 승인 전에는 삭제·대량 수정·알림 생성 도구를 제공하지 않는다.
-10. **오프라인에서도 메모를 잃지 않는다.** 분석이 불가능하면 원본을 먼저 저장하고 대기열에 둔다.
+10. **오프라인에서도 작성 중 원문을 잃지 않는다.** owner별 로컬 draft는 보존하되, canonical memo 생성과 완전한 동기화 대기열은 구분한다.
 
 ## 3. 권장 기술 구성
 
@@ -34,7 +34,7 @@
 - React + TypeScript
 - Vite 기반 PWA
 - React Flow 기반 그래프
-- IndexedDB 기반 임시 캡처 보존; 완전한 오프라인 동기화 대기열은 P1
+- owner별 임시 캡처 draft 보존; 완전한 오프라인 동기화 대기열은 P1
 - Web Worker 안에서 로컬 분석 실행
 - 로컬 추론 런타임은 인터페이스로 추상화하고, 초기에는 mock/deterministic analyzer로 시작
 - 이후 ONNX Runtime Web 또는 동급 런타임 연결
@@ -61,7 +61,7 @@
 
 ```text
 사용자 메모 입력
-→ 원문을 로컬에 즉시 저장
+→ 작성 중 원문을 owner별 로컬 draft로 즉시 보존
 → 날짜 파서 + 유형 분류 + 임베딩 검색
 → 필드별 모호성 판별
    ├─ 명확: 로컬 후보 표시
@@ -78,9 +78,9 @@
 
 MVP는 아래의 수직 흐름 하나를 완성하는 데 집중한다.
 
-1. 사용자 인증 또는 개발용 단일 사용자 세션
+1. 자체 email/password 또는 선택적 Google OIDC 인증으로 생성한 서버 세션
 2. 자유 텍스트 메모 작성·수정·삭제
-3. 원본 메모의 즉시 로컬 저장
+3. 작성 중 원문의 owner별 로컬 draft 보존
 4. deterministic/mock 로컬 분석기
 5. 유형·날짜·기존 태그 후보와 모호성 결과
 6. 분석 후보 선택·수정·거부
@@ -209,3 +209,76 @@ Codex는 바로 실제 모델을 연결하지 말고 다음 세로 흐름부터 
 - 문서와 API 스키마를 변경하면 관련 테스트와 예제도 갱신한다.
 - 사용자 데이터가 있는 마이그레이션은 파괴적으로 작성하지 않는다.
 - 실제 모델 선택은 샘플 한국어 메모 평가 결과로 결정한다.
+
+## 12. 현재 구현 체크포인트
+
+- Phase 0과 Phase 1의 AI-free 수직 흐름은 구현되어 있다.
+- graph home은 별도 graph 저장소 없이 canonical memo/application/item/task/tag에서 최대 100개를
+  투영한다. memo는 pin → overdue → TODO → nearest due → 현재 raw revision 시각 → UUID,
+  tag는 선택된 memo 안의 연결도 → 이름 → UUID 순으로 안정적으로 제한한다. `limit > 1`이면
+  최소 1개이자 전체의 1/5인 슬롯을 tag 쪽에 먼저 예약하여 큰 memo corpus에서도 edge를
+  memo node가 전부 밀어내지 않는다. 실제 선택된 tag 수만큼만 슬롯을 유지하고 나머지는 memo로
+  안전하게 채운 뒤 final memo set에서 tag 순위와 truncation을 다시 계산한다. tag가 initial
+  memo 밖에만 있으면 관계를 빠뜨린 채 complete라 하지 않고 underfill+`truncated`를 유지한다.
+  node는 실제 keyboard/touch button이며 current-home direct neighbor를 강조하고 mobile detail
+  drawer를 연다. 별도 `GET /graph/nodes/{kind}/{id}/neighborhood`는 Spring Security owner 안의
+  canonical `MEMO_TAG` 1-hop을 page당 최대 20개로 읽고, 24시간 snapshot cursor로 MEMO→TAG는
+  normalized name/UUID, TAG→MEMO는 home의 pin/overdue/TODO/due/raw-revision/UUID hard priority를
+  유지한다. cursor v2는 owner·center·마지막 neighbor identity와 snapshot 외에 첫 page 전체의
+  visible membership·정렬·표시 상태 SHA-256 digest를 담는다. continuation은 같은 owner 범위에서
+  digest를 재계산해 canonical 상태가 달라졌으면 `422`로 처음부터 다시 읽게 하므로 mutable
+  priority 변경으로 이웃을 조용히 누락하지 않는다. cursor는 authorization으로 쓰지 않으며,
+  unavailable/foreign center는 cursor 해석 전에 동일한 404다. PWA는 최대 5 page, 100개를
+  유지하고 stale cursor에서는 더 불러오기를 숨긴 채 첫 page 재시작을 제공하며, tag에서 home
+  밖 memo의 owner-scoped current raw detail을 no-store로 연다.
+  active memo pin/unpin은 owner row lock과 idempotency key/body hash를 사용하고 raw revision·proposal·
+  item/tag/task를 바꾸지 않는다. 명시적 opt-in 10,000 memo/tag high-fanout EXPLAIN runner는
+  양방향 bounded page와 digest query가 기존 V5/V12/PK index를 사용하고 shared read/temp block 없이
+  끝나는 한 번의 격리 관측을 남겼다. 이는 SLA가 아니며 재현 명령과 bounded JSON report 계약은
+  `docs/DATA_MODEL.md`에 있다. 현재 근거로는 graph-neighborhood 전용 migration/index를 추가하지 않았다.
+- Milestone 5의 두 번째 read-only slice는 `POST /api/v1/search/memos` exact lexical search다. query는
+  CSRF-protected JSON body에만 있고 URL·browser storage·service-worker cache·ordinary access log에
+  저장하지 않는다. query는 U+0000과 lone surrogate를 포함하지 않아야 하고, raw와
+  NFKC/strip/`Locale.ROOT` lowercase 결과 모두 200 UTF-16 code unit 이하여야 한다. 저장된 current
+  raw BODY와 latest valid `APPLIED` canonical TITLE은
+  PostgreSQL NFKC/`und-x-icu` lowercase를 적용해 그 query와 literal substring으로 비교하고, current
+  owner의 `ACTIVE` TAG/ALIAS는 `TagNormalizer` exact normalized equality로 찾는다. proposal,
+  `UNDONE` application, archived item과 inactive tag는 검색 authority가 아니다. lifecycle,
+  aggregated task state, snapshot-derived overdue, current-revision inclusive lower/exclusive upper
+  instant filter를 제공한다. 각 bound는 JDBC binding 전
+  `0001-01-01T00:00:00Z`–`9999-12-31T23:59:59.999999Z`로 제한하고 current revision
+  recency/UUID keyset으로 page한다.
+  server page는 기본 20·최대 50, PWA는 5 page/100 result이며 preview는 current raw 최대 240 Unicode
+  code point, visible canonical tag는 matching-first 최대 8개다. cursor v1은 query/filter raw나 display
+  text 없이 owner·normalized query/filter digest·sort shape·24시간 snapshot·full-visible-result digest·
+  last memo identity를 묶는다. 결과 membership/order/display state가 바뀌면 `422
+  INVALID_SEARCH_CURSOR`로 기존 목록을 stale 표시하고 cursor 없는 첫 page 재시작을 요구한다.
+  결과는 React Flow에 주입하지 않고 owner-scoped `GET /memos/{id}`로 current raw detail을 no-store로
+  다시 연다. 이는 exact lexical 첫 slice이며 fuzzy/`pg_trgm`, related-memo, vector/embedding,
+  provider/Agent tool, cluster reveal, taxonomy evolution이나 Milestone 5 전체 완료를 뜻하지 않는다.
+  별도 opt-in 10,000-memo worst-case all-match runner의 한 hot-buffer 관측에서 BODY/TITLE page/digest는
+  812.126/1082.515 ms, exact ALIAS page/digest는 555.671/1009.93 ms였고 shared read/temp I/O가
+  없었다. 이는 end-to-end latency나 SLA가 아니다. canonical join이 기존 index를 사용하고 새 B-tree
+  효용 근거가 없어 search 전용 migration/index를 추가하지 않았으며 exact 재현/report 계약은 `docs/DATA_MODEL.md`에
+  있다.
+- Flyway `V1`–`V18`이 memo/revision, proposal/application, canonical item/tag/task/relation, owner integrity, revision capture context, analyzer·prompt·local model·embedding model·routing policy provenance, local/Google identity, JDBC session schema, claimed user identity 무결성과 일회성 initial-account provisioning gate를 관리한다. `V11`은 owner별 proposal의 최신 application을 찾는 review-outcome 조회 인덱스, `V12`는 memo별 최신 `APPLIED` selection과 활성 item을 읽는 graph projection partial index만 추가한다. `V13`은 boolean-only legacy cloud consent를 폐기하고 owner row의 exact policy-version·granted-at pin을 강제하며, run마다 cloud transfer/gateway/provider/model/policy/outcome evidence를 추가한다. `V14`는 새 run의 내부 authorization/grant snapshot과 결정론적 provider-request token을 일관되게 저장하고 과거 row는 `legacy-v0`로 보존한다. `V15`는 호출 전에 `durable-v1` run과 1:1 `analysis_run_dispatches` preparation을 commit하고 immutable executor binding·descriptor, deadline/lease/fence, reserved proposal와 idempotency evidence를 보존한다. `V16`은 새 dispatch에 owner-scoped exact tag/alias K=8 context의 raw/hash/version/count를 함께 준비하고, 기존 V15 row는 `none/0/NULL/NULL`로 보존한다. `V17`은 새 dispatch를 `gateway-attempt-v1`로 versioning하고 claim fence별 owner-scoped `analysis_run_dispatch_attempts` row를 `max_attempts` 상한 안에서 보존한다. 기존 dispatch는 `attempt_history_version=none`이고 attempt row를 소급 생성하지 않는다. V14까지의 row에도 dispatch를 소급 생성하지 않는다. `V18`은 사용자가 선택한 proposal relation을 application 소유의 item-scoped directed MEMO/TAG relation으로 저장하고 owner-aware source/application/target constraint와 undo를 강제한다. 새 raw analytics 복제본이나 일반 clickstream table은 만들지 않는다.
+- 각 local/Google 로그인 수단은 internal UUID에 매핑되고, 명시적으로 연결한 두 수단은 같은 UUID와 PostgreSQL-backed server session을 사용한다. Google email만으로 자동 연결하지 않고 기존 로그인 뒤 명시적 link intent를 요구하며, 마지막 login method는 해제할 수 없다. domain owner는 client 값이나 개발 상수가 아니라 Spring Security context에서 가져온다.
+- React 인증 shell은 capability·CSRF·현재 session을 먼저 확인하고, 로그인 전에는 owner domain API를 호출하지 않는다. service worker는 API와 OAuth/login 경로를 cache하지 않는다.
+- owner별 원문 capture draft는 browser localStorage에 동기식으로 보존하고 저장소 실패를 사용자에게 알린다. 제안 수정·새 태그 입력·원문 revision 편집은 통합 dirty 상태로 추적하며, OAuth·로그아웃·브라우저 이탈을 확인하고 service-worker 업데이트는 사용자가 선택하되 미저장 편집 중에는 적용하지 않는다.
+- 인증 통합 테스트는 local 가입·로그인, CSRF, session rotation, owner 격리와 mocked OIDC 연결/해제를 검증한다. 실제 Google credential과 provider network round trip은 사용하거나 검증했다고 간주하지 않는다.
+- 12개 regression + 12개 `VISIBLE_CHALLENGE` 한국어 fixture, version-2 fixture JSON Schema, raw content를 포함하지 않는 결정론적 평가 report, revision 기준 날짜 파서, `field-policy-v1` ambiguity gate, Draft 2020-12 runtime contract와 strict domain validation이 구현되어 있다. version 2는 route/type/signal뿐 아니라 date mention/item/item-source-span 지표도 report에 노출한다. `fake-v6` / `korean-rules-v4`는 기존 날짜·행동·참조·multi-intent 규칙과 원문 기반 순차 item/source-span 추출을 유지하면서 proposal schema v2를 생성한다. v2의 각 date candidate에는 proposal-local `candidateId`, 각 item에는 nullable `dueDateCandidateId`가 필수이며, TASK item만 존재하는 정밀 date candidate를 참조할 수 있다. schema v1 proposal은 recovery와 outcome 재구성을 위해 계속 지원한다. `providerMetadata`의 다섯 version은 각각 1–64자, 필수 `toolCalls`는 0–100이며 proposal은 64 KiB, metadata는 8 KiB로 제한된다. 이 변경은 기존 `analysis_runs.schema_version`과 `analysis_proposals.proposal_json`을 사용하므로 Flyway migration이나 과거 JSON rewrite가 필요하지 않다.
+- proposal 단건 GET과 recovery list는 `X-Analysis-Proposal-Schema-Version`을 협상한다. 무헤더/`1`은 저장된 v2의 응답 복사본만 strict v1으로 내려 설치된 구형 PWA를 보호하고, 현재 PWA는 `2`를 보내 저장된 version을 받는다. 과거 v1은 `2` 요청에도 v1이며, invalid/combined 값은 `422 UNSUPPORTED_PROPOSAL_SCHEMA_VERSION`이다. 성공 응답은 `Cache-Control: no-store`와 schema-header `Vary`를 포함하고 JSONB/hash/run version을 수정하지 않는다.
+- Apply due의 client `timeZone`은 호환성 입력으로 유효성만 검사한다. canonical `task_details.source_time_zone`은 잠근 immutable memo revision의 capture zone으로 서버가 교체하므로 승인 기기·여행 중 zone이 date-only overdue 경계를 바꿀 수 없다.
+- 공개된 합성 `VISIBLE_CHALLENGE`는 blind/general accuracy가 아니며 계속 report-only다. regression hard gate는 proposal schema/domain validity, 기존 route/type/signal wrong-local 0, invented precise date 0, local overflow 0, missing overflow signal 0, unresolved action/object hallucination 0으로 제한한다. 현재 공개 자료의 item cardinality는 양 split 12/12 case, 필수 source span은 regression 15/15·visible challenge 14/14개가 일치하지만 date mention/item/item-source-span quality rate와 semantic false-confident-local은 독립적인 2인 gold adjudication과 외부 blind 실행 전까지 진단 지표다. evaluation dataset v2에는 date-to-item binding gold가 없으므로 report는 `SUPPORTED_NOT_SCORED_DATASET_V2`만 선언하고 binding 품질을 hard metric으로 승격하지 않는다. strict v2 2인 review schema/verifier와 immutable v2 release를 참조하는 ID-only v3 binding overlay integrity validator는 준비됐지만, 실제 human review manifest·adjudication·v3 dataset·binding score·`PASS`는 없다. `docs/EVALUATION_LABEL_POLICY.md`도 human approval 전 draft다. 저장소 밖의 독립적 human-curated version-2 envelope만 받는 external blind harness와 aggregate-only privacy 경계는 구현되어 있지만 실제 blind 데이터와 사전 등록된 metric `PASS` 정책은 저장소에 없으며 실행했다고 주장하지 않는다. 자세한 진입 조건은 `docs/EVALUATION.md`를 따른다.
+- 공개 v2 human review 실행을 위한 두 도구도 명시 실행 전용으로 준비한다. `PublicGoldReviewPacketRunner`는 같은 clean candidate commit을 읽기 전과 원자 게시 직전에 확인하고 strict public release를 검증한 뒤 case ID/split, 공개 source/base instant/time zone과 date/item gold만 수동 허용 목록으로 렌더링하며 fixture notes, route/type/tag/signal, analyzer/Fake/report/peer-review data, verdict form과 manifest 생성을 배제한다. 모든 source span은 반개구간 UTF-16 숫자와 강조 조각으로 표시한다. 실제 두 사람이 저장소 밖에 만든 완전한 manifest 두 개가 있을 때만 `ExternalPublicGoldReviewRunner`가 absolute/non-link/distinct input, strict UTF-8/JSON/schema, exact release, distinct reviewer token, attestation, clean pinned commit을 확인하고 aggregate-only summary를 원자적으로 쓴다. summary의 `CONSENSUS_ACCEPTED`도 human identity·independence·policy approval·adjudication·v3 binding·blind `PASS`·provider readiness를 증명하지 않는다. 일반 Maven/CI는 두 Runner를 실행하지 않는다.
+- 명확한 결과는 cloud 호출 없이 `LOCAL`/`REVIEW_REQUIRED`로 저장된다. 모호한 결과는 server-owned gateway descriptor를 확인한 뒤 `HYBRID`로 저장된다. `NO_NETWORK` Fake는 consent가 필요 없고, `EXTERNAL_MEMO_CONTENT`는 authenticated owner의 consent boolean·정확한 policy version·non-null 승인 시각이 모두 맞고 `granted_at`이 권한 확인 시각보다 늦지 않아야 호출된다. 미동의·policy mismatch·revoke·미래 시각 grant는 gateway 0-call과 `CONSENT_REQUIRED` evidence를 남긴다.
+- LOCAL, cloud SUCCESS, fallback의 모든 새 proposal은 공통 allowlist canonicalizer가 `providerMetadata`를 다시 만든다. cloud typed failure, gateway/descriptor 예외, invalid enriched proposal은 run을 rollback하지 않고 provider 오류 text 없이 server-owned outcome만 남기며, 검증된 local proposal을 `HYBRID`/`REVIEW_REQUIRED`로 저장해 UI가 상세 검토하도록 한다. raw revision과 canonical tag/task/relation은 바뀌지 않는다.
+- 현재 실제 external provider, Ollama/LiquidAI와 consent grant/revoke API는 없다. V15는 gateway 호출 전 durable preparation commit, immutable executor binding·descriptor 재검증, DB transaction 밖 bounded timeout 호출, claim/lease/fence/deadline과 caller-driven same-key/body retry, finalize transaction의 memo revision 재검사를 구현한다. V16은 구조 검증된 proposal의 tag 후보 최대 10개에서 최대 20개 normalized term을 만들고, 현재 owner의 `ACTIVE` canonical tag/alias exact equality 결과 전체로 unique resolution을 먼저 수행한 뒤 deterministic K=8 hint를 만든다. raw/related memo, fuzzy/vector/embedding 검색은 없다. 새 dispatch는 이 context의 raw/hash/version/count를 호출 전에 commit하고 retry/restart recovery는 DB snapshot만 사용한다. `FINALIZED`에서는 raw를 지우고 hash/version/count를 보존한다. context는 hint이며 최종 owner/reference validation이 authoritative하다. V17은 fence별 내부 gateway-attempt ledger를 추가한다. gateway result는 execution `STARTED`, executor 거절은 확정적 `NOT_STARTED`/`EXECUTOR_REJECTED`/remote result `UNKNOWN`으로 기록해 gateway가 반환한 `UNAVAILABLE`과 분리한다. 제출 뒤 timeout·caller interruption·unexpected local termination은 시작 관측이 있으면 `STARTED`, 없으면 `UNKNOWN`이며 `NOT_STARTED`로 단정하지 않는다. 완료·timeout·interrupt처럼 로컬 프로세스가 관측한 elapsed는 monotonic clock으로 측정한다. 이 종료들과 process loss의 remote truth는 `UNKNOWN`이며 process loss의 duration도 null이다. 현재 `NO_NETWORK` Fake는 model version `none`이라 local termination observation이 있으면 execution uncertainty와 무관하게 model-token/cost가 `NOT_APPLICABLE`/null이다. real-model은 확정적으로 시작되지 않았을 때만 `NOT_APPLICABLE`/null이고, 실행 또는 remote completion이 불확실하면 `UNKNOWN`/null이며, 결과가 관측되어도 숫자 usage/cost가 gateway 계약에 연결되기 전까지 `NOT_REPORTED`/null이다. 운영 프로필에서는 recovery scheduler가 enabled되어 30초 fixed delay마다 `PREPARED` 또는 lease가 만료된 `RUNNING` dispatch를 DB에서 최대 25건 선택한다. 복구는 DB row의 owner와 기존 raw idempotency key만 사용하고, 기존 owner+`ANALYSIS_START`+raw-key advisory transaction lock 아래 같은 claim/finalize를 재사용한다. live lease는 skip하며 process 재시작 뒤 남은 row도 다음 bounded 주기에서 복구한다. 공개 POST는 내부 `QUEUED`/`RUNNING`/`PENDING`을 반환하지 않고 최종 `RunView`를 동기로 유지하며, caller의 same-key/body recovery도 그대로 지원한다. 같은 key의 live lease/call이 coordination window를 넘으면 `409 ANALYSIS_IN_PROGRESS`이다. revision 변경은 `STALE` finalize를 먼저 commit한 뒤 caller에게 `409 STALE_MEMO_REVISION`을 반환한다. authorization/grant 시각, execution contract, attempt ledger, 복구용 key, dispatch의 raw validated-local payload·retrieval context, binding·lease·fence·provider token은 HTTP DTO/proposal/`providerMetadata`/UI/평가 report/일반 log/browser·service-worker storage에 노출하지 않는다. bounded server-owned provider/model descriptor와 cloud outcome은 기존 계약대로 proposal `providerMetadata`에 공개된다. attempt row에는 provider text·ID·token·raw memo·context를 넣지 않는다. ledger retention은 승인된 purge 정책이 생기기 전까지 현재 run data를 따르며 임의 TTL을 구현하지 않는다. transport는 exactly-once가 아니라 at-least-once이므로 실제 provider의 token 멱등 처리가 필수다. 실제 model-token/cost 숫자 수집·집계·budget enforcement와 related-memo/fuzzy/vector context는 미구현이다.
+- V17의 Fake `NOT_APPLICABLE`/null은 descriptor로 no-model임을 확인하고 local termination observation이 있는 attempt에 적용된다. real-model의 `NOT_APPLICABLE`/null은 확정적 `NOT_STARTED`에만 적용하고, 시작 여부나 remote completion이 불확실하면 `UNKNOWN`/null이다. observation 없이 process가 유실되면 duration·remote truth·model-token/cost evidence는 `UNKNOWN`/null이다.
+- `UNKNOWN` 유형은 UI가 자동 확정하지 않으며 사용자가 유형을 선택하고 항목을 추가해야 적용할 수 있다.
+- `GET /analysis-review-outcomes/summary`는 authenticated owner의 rolling `proposal.created_at` cohort에서 현재 run 상태, proposal별 최신 application/undo 상태, versioned latest-selection 비교를 raw content와 identifier 없이 집계한다. `exact`는 “제안 그대로 적용”일 뿐 AI 정확도 label이 아니며, reject에는 corrected target이 없고 `currentPostponed`는 과거 보류 event history가 아니다. 1,001번째 proposal이 있으면 부분 집계를 반환하지 않고 1,000개 cap 오류로 fail-closed한다.
+- Relation review는 저장된 proposal 배열 순서의 owner-visible bounded label만 no-store로 해소하며 모든 후보를 기본 미선택으로 둔다. Apply는 client가 target/type/score를 다시 주장하지 못하게 `proposalIndex`만 받고, exact opaque `sourceCandidateId`를 적용 item 하나에 매핑한 뒤 owner의 `ACTIVE` MEMO/TAG target을 transaction 안에서 다시 잠근다. 명시 `[]`는 관계 전부 거절이며 non-empty proposal에서 field 누락은 `422 RELATION_SELECTION_REQUIRED`다. V18 row와 resolved selection provenance는 application과 함께 원자적으로 생성되고 undo가 source item보다 먼저 제거한다. TAG relation은 `item_tags`와 별개이며, 네 relation type의 graph edge 의미가 결정될 때까지 current MEMO_TAG graph/neighborhood/`projectionVersion`에는 투영하지 않는다. `review-default-v3`도 relation adjudication target이 없어 non-empty relation proposal을 계속 `UNCLASSIFIABLE`로 분류한다.
+- 실제 로컬 모델·클라우드 LLM, Web Push, 완전한 오프라인 동기화, 자동 taxonomy migration, 노드 압축은 아직 연결하지 않는다.
+- private personal-PC checkpoint는 production overlay 위에 기존 frontend Nginx의 private-LAN TLS listener만 추가한다. backend와 PostgreSQL은 host port가 없고, actual personal values·database secret·CA/private leaf key·backup은 Git 밖에 둔다. 첫 local account는 TTY password를 받는 non-web `bootstrap-account` command로 한 번만 만들며 운영 registration을 열지 않는다.
+- `scripts/personal`은 Windows에서 local CA/leaf와 ignored config, `Documents\PersonalMemo\Backups`, exact-project start/stop/status, checksummed logical backup, Windows session을 가로지르는 private exclusive lock과 forward-only 실패 처리를 갖춘 database credential rotation, 별도 project restore 검증을 제공한다. Windows PowerShell 5.1 native UTF-8 capture와 secret-bearing JSON error 비노출도 회귀 검사한다. 기준 기기는 Galaxy S24 Ultra이며 safe-area·44/48px touch target·384/412px·landscape·secure context·manifest/SW installability 자동 검사를 추가했지만 실제 기기의 CA 설치·키보드·cutout·home-screen 설치는 사용자가 검증해야 한다.
+- 계정별 연속 5회 실패 시 15분 잠금은 구현되어 있다. 공개 배포 전 account hardening의 다음 순서는 local email verification, password reset delivery, IP·edge rate limit/abuse protection, MFA/passkey 검토와 account deletion이다. 제품 분석의 다음 순서는 사람 둘이 안전 packet을 각각 보고 version-2 gold manifest를 직접 작성하는 실제 review와 human resolution, 승인된 binding label policy와 independently adjudicated dataset v3, 사전 threshold를 등록한 별도 blind release, provider/region·retention·grant UX와 ledger purge 정책 결정, related-memo/fuzzy/vector retrieval, 실제 provider model-token/cost 숫자 수집·집계·budget enforcement다. Agent는 manifest를 만들거나 채우거나 승인하지 않는다. `review-default-v3`, V13 consent/outcome, V14 snapshot/token evidence, V15 durable lifecycle·bounded production recovery, V16 exact tag/alias context와 V17 내부 attempt ledger, owner-scoped outcome 집계, packet/manifest verifier/overlay 검증 준비와 blind harness 경계만으로 실제 blind 결과·실사용 교정 표본·provider privacy/비용/운영 조건이 충족되지는 않는다. 실제 LLM gate는 계속 닫혀 있다.

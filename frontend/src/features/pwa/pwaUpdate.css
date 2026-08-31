@@ -1,0 +1,51 @@
+.pwa-update {
+  position: fixed;
+  z-index: 60;
+  top: calc(12px + env(safe-area-inset-top));
+  right: calc(12px + env(safe-area-inset-right));
+  left: calc(12px + env(safe-area-inset-left));
+  display: flex;
+  width: min(
+    calc(100% - 24px - env(safe-area-inset-right) - env(safe-area-inset-left)),
+    720px
+  );
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 auto;
+  border: 1px solid #b8c4bb;
+  border-radius: 16px;
+  background: #fffdf7;
+  color: #17221c;
+  padding: 14px;
+  box-shadow: 0 18px 50px #17221c33;
+}
+
+.pwa-update p {
+  margin: 5px 0 0;
+  color: #536158;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.pwa-update .pwa-update__error {
+  color: #9c4339;
+  font-weight: 700;
+}
+
+.pwa-update__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+@media (min-width: 640px) {
+  .pwa-update {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .pwa-update__actions {
+    flex: 0 0 auto;
+  }
+}
