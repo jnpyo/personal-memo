@@ -1,6 +1,8 @@
 import { defineConfig } from '@playwright/test';
 
 const startLocalPreview = process.env.E2E_START_LOCAL_PREVIEW === 'true';
+const browserExecutable = process.env.E2E_BROWSER_EXECUTABLE;
+const disableVideo = process.env.E2E_DISABLE_VIDEO === 'true';
 
 export default defineConfig({
   testDir: './e2e',
@@ -30,6 +32,7 @@ export default defineConfig({
     timezoneId: 'Asia/Seoul',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    video: disableVideo ? 'off' : 'retain-on-failure',
+    launchOptions: browserExecutable ? { executablePath: browserExecutable } : undefined,
   },
 });

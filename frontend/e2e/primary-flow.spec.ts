@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 
 type TestCredentials = { email: string; password: string };
@@ -221,7 +222,13 @@ test('keeps the 384px portrait and landscape shell usable without horizontal ove
   const accountTrigger = page.getByLabel('계정 메뉴 열기');
   const capture = page.locator('.capture-bar');
   const captureSubmit = page.getByRole('button', { name: '원문 저장 후 제안 분석' });
+  const homeOverview = page.locator('.home-overview');
 
+  await expect(homeOverview.getByRole('heading', { name: '오늘' })).toBeVisible();
+  await expect(homeOverview).toContainText(/오늘 일정\s*0/);
+  await expect(homeOverview).toContainText(/우선 할 일\s*0/);
+  await expect(homeOverview).toContainText(/검토 대기\s*0/);
+  await expect(page.getByText('서버 연결됨')).toBeVisible();
   await expectMinimumTouchHeight(accountTrigger, 44);
   await expectMinimumTouchHeight(captureSubmit, 48);
   await expectInsideViewport(page, capture);
@@ -233,10 +240,100 @@ test('keeps the 384px portrait and landscape shell usable without horizontal ove
 
   await page.setViewportSize({ width: 854, height: 384 });
   await page.locator('header.hero').scrollIntoViewIfNeeded();
+  await expect(homeOverview).toBeVisible();
   await expectInsideViewport(page, accountTrigger);
   await expectInsideViewport(page, capture);
   await expectMinimumTouchHeight(captureSubmit, 48);
   await expectNoHorizontalOverflow(page);
+});
+
+test('loads analysis-path evidence only on first expansion and explicit refresh', async ({
+  page,
+}, testInfo) => {
+  let summaryRequests = 0;
+  await page.route('**/api/v1/analysis-path-evidence/summary?days=14', async (route) => {
+    summaryRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: { 'Cache-Control': 'no-store' },
+      body: JSON.stringify({
+        schemaVersion: '1',
+        aggregationPolicyVersion: 'analysis-path-evidence-summary-v1',
+        cohort: {
+          basis: 'ANALYSIS_RUN_CREATED_AT',
+          days: 14,
+          fromInclusive: '2026-08-14T00:00:00Z',
+          toExclusive: '2026-08-28T00:00:00Z',
+          maxRuns: 1_000,
+        },
+        runs: { total: 0, withDispatch: 0, withoutDispatch: 0 },
+        localDecisionEvidence: { current: 0, legacy: 0 },
+        lifecycle: { prepared: 0, running: 0, finalized: 0 },
+        dispatchRoutes: {
+          localModel: 0,
+          externalMemoTransfer: 0,
+          builtInFake: 0,
+          legacyOrOther: 0,
+        },
+        invocationModes: { legacyUnknown: 0, uncertaintyOnly: 0, aiPreferred: 0 },
+        invocationReasons: {
+          legacyUnknown: 0,
+          semanticUncertainty: 0,
+          aiPreferredPolicy: 0,
+        },
+        localModelContributions: {
+          notRecorded: 0,
+          pending: 0,
+          acceptedChanged: 0,
+          acceptedUnchanged: 0,
+          localFallback: 0,
+        },
+        approvedCorrectionSnapshots: { withSignals: 0, totalSignals: 0 },
+        fallbackReasons: {
+          defaultRecordFallback: 0,
+          unparsedTemporalCue: 0,
+          unrecognizedActionCue: 0,
+          lowTypeMargin: 0,
+          tagUncertainty: 0,
+          dateUncertainty: 0,
+          unresolvedReference: 0,
+          incompleteTask: 0,
+          multiIntent: 0,
+          candidateLimit: 0,
+          localConflict: 0,
+        },
+        changedFields: {
+          suggestedTitle: 0,
+          typeCandidates: 0,
+          dateCandidates: 0,
+          tagCandidates: 0,
+          itemCandidates: 0,
+          relationCandidates: 0,
+          ambiguityReasons: 0,
+        },
+      }),
+    });
+  });
+
+  await registerIsolatedUser(page, testInfo);
+  const toggle = page.locator('.ai-diagnostic-toggle');
+  await expect(toggle).toBeVisible();
+  expect(summaryRequests).toBe(0);
+
+  await toggle.click();
+  await expect.poll(() => summaryRequests).toBe(1);
+  await expect(
+    page.getByText('최근 14일 동안 집계할 분석 실행 기록이 없습니다.'),
+  ).toBeVisible();
+
+  await toggle.click();
+  await toggle.click();
+  await page.waitForTimeout(200);
+  expect(summaryRequests).toBe(1);
+
+  await page.getByRole('button', { name: '진단 새로고침' }).click();
+  await expect.poll(() => summaryRequests).toBe(2);
 });
 
 test('keeps the proposal popup usable on S24 portrait and landscape sizes', async ({
@@ -518,6 +615,227 @@ test('applies two explicitly bound task dates and undoes both together', async (
   await page.getByRole('button', { name: '마지막 적용 되돌리기' }).click();
 
   await expect(page.locator('.task-row')).toHaveCount(0);
+  await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
+});
+
+test('explicitly corrects, shares, exports, and then undoes only one event', async ({
+  page,
+}, testInfo) => {
+  const rawMemo = '오늘 오후 6시 디스코드 접속하기';
+  const eventTitle = '디스코드 접속하기';
+
+  await registerIsolatedUser(page, testInfo);
+  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(rawMemo);
+  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
+  await expect(dialog).toBeVisible();
+  await openProposalEditor(page);
+
+  const representativeType = page.getByLabel('대표 유형');
+  const itemType = page.getByLabel('항목 1 유형');
+  await expect(representativeType).toHaveValue('TASK');
+  await expect(itemType).toHaveValue('TASK');
+  await itemType.selectOption('EVENT');
+  await representativeType.selectOption('EVENT');
+  await expect(itemType).toHaveValue('EVENT');
+  await expect(representativeType).toHaveValue('EVENT');
+
+  const eventStart = page.getByLabel('항목 1 일정 시작');
+  const exactCandidate = eventStart
+    .locator('option')
+    .filter({ hasText: /오늘 오후 6시.*(정확한 시각|계산된 시각)/ });
+  await expect(exactCandidate).toHaveCount(1);
+  const exactCandidateValue = await exactCandidate.getAttribute('value');
+  expect(exactCandidateValue).not.toBeNull();
+  await eventStart.selectOption(exactCandidateValue!);
+
+  await expect(page.getByLabel('항목 1 일정 방식')).toHaveValue('TIMED');
+  await expect(page.getByLabel('시작 시각 (UTC offset 포함)'))
+    .toHaveValue(/T18:00:00\+09:00$/);
+  await expect(page.getByLabel('종료 시각 (선택)')).toHaveValue('');
+  await expect(dialog).toContainText('메모 revision의 시간대 Asia/Seoul로 저장합니다.');
+
+  const applyRequestPromise = page.waitForRequest((request) =>
+    /\/api\/v1\/analysis-proposals\/[^/]+\/apply$/.test(new URL(request.url()).pathname),
+  );
+  await page.getByRole('button', { name: '수정한 내용 승인·적용' }).click();
+  const applyBody = (await applyRequestPromise).postDataJSON() as {
+    selectionSchemaVersion?: string;
+    selectedType?: string;
+    items?: Array<{
+      kind?: string;
+      due?: unknown;
+      eventSchedule?: {
+        mode?: string;
+        start?: string;
+        end?: string | null;
+        timeZone?: string;
+      };
+    }>;
+  };
+  expect(applyBody).toMatchObject({
+    selectionSchemaVersion: '2',
+    selectedType: 'EVENT',
+    items: [
+      {
+        kind: 'EVENT',
+        due: null,
+        eventSchedule: {
+          mode: 'TIMED',
+          end: null,
+          timeZone: 'Asia/Seoul',
+        },
+      },
+    ],
+  });
+  expect(applyBody.items?.[0]?.eventSchedule?.start).toMatch(/T18:00:00\+09:00$/);
+
+  await expect(dialog).toHaveCount(0);
+  const event = page.locator('.event-row').filter({ hasText: eventTitle });
+  await expect(event).toBeVisible();
+  await expect(event).toContainText(/(오후 6:00|18:00)/);
+  await expect(event).toContainText('Asia/Seoul');
+  await expect(page.locator('.task-row').filter({ hasText: eventTitle })).toHaveCount(0);
+  await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
+
+  const eventsResponse = await page.request.get('/api/v1/events?limit=100');
+  expect(eventsResponse.ok()).toBe(true);
+  const canonicalEvents = await eventsResponse.json() as Array<{ id: string; title: string }>;
+  const exportedEvent = canonicalEvents.find((candidate) => candidate.title === eventTitle);
+  expect(exportedEvent).toBeDefined();
+
+  await page.getByRole('button', { name: '일정 공유 관리' }).click();
+  const sharingDialog = page.locator('dialog.calendar-sharing-dialog');
+  await expect(page.getByRole('dialog', { name: '일정 공유 관리' })).toBeVisible();
+  await sharingDialog.getByRole('button', { name: '새 공유 만들기' }).click();
+  await expect(page.getByRole('dialog', { name: '새 일정 공유' })).toBeVisible();
+
+  const busyOnlyDisclosure = sharingDialog.getByRole('radio', { name: /시간만 \(기본\)/ });
+  await expect(busyOnlyDisclosure).toBeChecked();
+  const sharedEvent = sharingDialog.getByRole('checkbox', { name: new RegExp(eventTitle) });
+  await expect(sharedEvent).not.toBeChecked();
+  await sharingDialog.getByLabel('공유 대상 이름 (나만 봄)').fill('격리 E2E 수신자');
+  await sharedEvent.check();
+  await sharingDialog.getByRole('button', { name: '선택한 일정으로 공유 만들기' }).click();
+
+  await expect(page.getByRole('dialog', { name: '구독 주소 확인' })).toBeVisible();
+  const firstSubscriptionInput = sharingDialog.getByLabel('한 번만 표시되는 구독 주소');
+  await expect(firstSubscriptionInput).toHaveAttribute('readonly', '');
+  const firstSubscriptionUrl = await firstSubscriptionInput.inputValue();
+  expect(firstSubscriptionUrl).toMatch(
+    new RegExp(`/calendar/v1/feed\\.ics\\?token=[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$`),
+  );
+  expect(new URL(firstSubscriptionUrl).origin).toBe(new URL(page.url()).origin);
+  await expect(sharingDialog).toContainText('현재 주소는 로컬·격리 검증용입니다');
+  await expect(sharingDialog.locator('a[href*="/calendar/v1/feed.ics"]')).toHaveCount(0);
+  await expect(sharingDialog.getByRole('button', { name: '구독 주소 복사' })).toBeVisible();
+
+  const firstFeedResponse = await page.request.get(firstSubscriptionUrl);
+  expect(firstFeedResponse.status()).toBe(200);
+  expect(firstFeedResponse.headers()['content-type']).toMatch(/^text\/calendar\s*;/i);
+  expect(firstFeedResponse.headers()['cache-control']).toContain('no-store');
+  expect(firstFeedResponse.headers()['referrer-policy']).toBe('no-referrer');
+  const firstFeedCalendar = await firstFeedResponse.text();
+  expect(firstFeedCalendar).toContain('SUMMARY:Busy\r\n');
+  expect(firstFeedCalendar).not.toContain(eventTitle);
+  expect(firstFeedCalendar).not.toContain(rawMemo);
+  expect(firstFeedCalendar).not.toContain(exportedEvent!.id);
+  expect(firstFeedCalendar).not.toContain('DESCRIPTION:');
+
+  await sharingDialog.getByRole('button', { name: '확인하고 이 화면에서 지우기' }).click();
+  await expect(firstSubscriptionInput).toHaveCount(0);
+  const isolatedFeed = sharingDialog.locator('.calendar-sharing-feed')
+    .filter({ hasText: '격리 E2E 수신자' });
+  await isolatedFeed.getByRole('button', { name: '설정 보기' }).click();
+  await expect(page.getByRole('dialog', { name: '일정 공유 설정' })).toBeVisible();
+  await sharingDialog.getByRole('button', { name: '구독 주소 교체' }).click();
+  await sharingDialog.getByRole('button', { name: '주소 교체 확인' }).click();
+
+  await expect(page.getByRole('dialog', { name: '구독 주소 확인' })).toBeVisible();
+  const rotatedSubscriptionInput = sharingDialog.getByLabel('한 번만 표시되는 구독 주소');
+  const rotatedSubscriptionUrl = await rotatedSubscriptionInput.inputValue();
+  expect(rotatedSubscriptionUrl).not.toBe(firstSubscriptionUrl);
+  const rotatedOldUrlResponse = await page.request.get(firstSubscriptionUrl);
+  expect(rotatedOldUrlResponse.status()).toBe(404);
+  expect(await rotatedOldUrlResponse.text()).toBe('');
+  expect((await page.request.get(rotatedSubscriptionUrl)).status()).toBe(200);
+
+  await sharingDialog.getByRole('button', { name: '확인하고 이 화면에서 지우기' }).click();
+  await sharingDialog.locator('.calendar-sharing-feed')
+    .filter({ hasText: '격리 E2E 수신자' })
+    .getByRole('button', { name: '설정 보기' })
+    .click();
+  await sharingDialog.getByRole('button', { name: '공유 폐기' }).click();
+  const revokeResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === 'POST'
+      && /\/api\/v1\/calendar-feeds\/[^/]+\/revoke$/.test(new URL(response.url()).pathname),
+  );
+  await sharingDialog.getByRole('button', { name: '공유 폐기 확인' }).click();
+  const revokeResponse = await revokeResponsePromise;
+  expect(revokeResponse.status()).toBe(200);
+  await expect(sharingDialog.locator('.calendar-sharing-status').filter({
+    hasText: '공유 주소를 폐기했습니다.',
+  })).toBeVisible();
+  const revokedResponse = await page.request.get(rotatedSubscriptionUrl);
+  expect(revokedResponse.status()).toBe(404);
+  expect(await revokedResponse.text()).toBe('');
+  await sharingDialog.getByRole('button', { name: '일정 공유 관리 창 닫기' }).click();
+  await expect(sharingDialog).toHaveCount(0);
+
+  await page.getByRole('button', { name: '캘린더 파일 (.ics)' }).click();
+  const calendarDialog = page.getByRole('dialog', { name: '캘린더 파일 (.ics)' });
+  await expect(calendarDialog).toBeVisible();
+  await expect(calendarDialog).toContainText(
+    '사용자가 승인한 시간 정보가 있는 일정만 포함합니다.',
+  );
+  const downloadButton = calendarDialog.getByRole('button', { name: '미리본 파일 다운로드' });
+  await expect(downloadButton).toBeDisabled();
+
+  const calendarResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === 'GET'
+      && new URL(response.url()).pathname === '/api/v1/events/calendar.ics',
+  );
+  await calendarDialog.getByRole('button', { name: '최신 파일 미리보기' }).click();
+  const calendarResponse = await calendarResponsePromise;
+  expect(calendarResponse.status()).toBe(200);
+  expect(calendarResponse.headers()['content-type'])
+    .toMatch(/^text\/calendar\s*;\s*charset=UTF-8$/i);
+  expect(calendarResponse.headers()['content-disposition'])
+    .toBe('attachment; filename="personal-memo-calendar.ics"');
+  const calendarBody = await calendarResponse.body();
+  const calendarText = calendarBody.toString('utf8');
+
+  const preview = calendarDialog.getByLabel('iCalendar 파일 원문 미리보기');
+  await expect(preview).toBeVisible();
+  const previewText = await preview.textContent();
+  expect(previewText).not.toBeNull();
+  expect(previewText!.replace(/\r\n/g, '\n')).toBe(calendarText.replace(/\r\n/g, '\n'));
+  expect(previewText).toContain('BEGIN:VCALENDAR');
+  expect(previewText).toContain(`SUMMARY:${eventTitle}`);
+  expect(previewText).toMatch(/DTSTART:\d{8}T090000Z/);
+  expect(previewText).toContain('END:VCALENDAR');
+  expect(previewText).not.toContain(rawMemo);
+  expect(previewText).not.toContain(exportedEvent!.id);
+  expect(previewText).not.toContain('DESCRIPTION:');
+  expect(previewText).not.toContain('VALARM');
+  await expect(downloadButton).toBeEnabled();
+
+  const downloadPromise = page.waitForEvent('download');
+  await downloadButton.click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('personal-memo-calendar.ics');
+  expect(await readFile(await download.path())).toEqual(calendarBody);
+  await expect(calendarDialog.getByRole('status')).toContainText(
+    'personal-memo-calendar.ics 다운로드를 시작했습니다.',
+  );
+
+  await calendarDialog.getByRole('button', { name: '캘린더 파일 창 닫기' }).click();
+  await expect(calendarDialog).toHaveCount(0);
+
+  await page.getByRole('button', { name: '마지막 적용 되돌리기' }).click();
+
+  await expect(page.locator('.event-row').filter({ hasText: eventTitle })).toHaveCount(0);
   await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
 });
 
@@ -1452,6 +1770,7 @@ test('production build registers an installable offline app shell', async ({
   const networkOnlyPaths = [
     '/api/v1/auth/me',
     '/api/v1/search/memos',
+    `/calendar/v1/feed.ics?token=${'a'.repeat(42)}A`,
     '/oauth2/authorization/google',
     '/login/oauth2/code/google',
   ];
@@ -1472,6 +1791,22 @@ test('production build registers an installable offline app shell', async ({
     resolved: false,
     status: null,
   })));
+
+  const feedNavigationProbe = await context.newPage();
+  try {
+    let feedNavigationResolved = true;
+    try {
+      await feedNavigationProbe.goto(
+        `/calendar/v1/feed.ics?token=${'a'.repeat(42)}A`,
+        { waitUntil: 'domcontentloaded' },
+      );
+    } catch {
+      feedNavigationResolved = false;
+    }
+    expect(feedNavigationResolved).toBe(false);
+  } finally {
+    await feedNavigationProbe.close();
+  }
 
   await context.setOffline(false);
 });

@@ -4,8 +4,18 @@
 !**/.env.example
 !.env.personal.example
 !**/.env.personal.example
+!.env.public-feed.example
+!**/.env.public-feed.example
+!.env.public-app.example
+!**/.env.public-app.example
+!.env.cloudflare-tunnel.example
+!**/.env.cloudflare-tunnel.example
+!.env.cloudflare-app-tunnel.example
+!**/.env.cloudflare-app-tunnel.example
 backend/target/
 frontend/node_modules/
+/.pnpm-store/
+/frontend/pnpm-workspace.yaml
 frontend/dist/
 frontend/coverage/
 frontend/playwright-report/
@@ -20,6 +30,7 @@ frontend/vite.config.d.ts
 *.dump.sha256
 backups/
 PrivateTls/
+artifacts/cloudflare/
 
 # Evaluation inputs with raw or separately held examples stay outside this repository.
 # These patterns are defense in depth only; the blind runner also rejects in-repository paths.

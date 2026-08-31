@@ -7,7 +7,9 @@ import {
   type CaptureAttempt,
 } from '../shared/api/retryIdentity';
 import type {
+  AnalysisPathEvidenceSummary,
   AnalysisReviewOutcomeSummary,
+  CalendarEvent,
   GraphNode,
   GraphProjection,
   MemoView,
@@ -46,6 +48,7 @@ import {
 import {
   isCurrentScopedRequest,
   isLatestWorkspaceRequest,
+  refreshAfterMemoSourceEdit,
 } from './workspaceOperationState';
 
 const EMPTY_GRAPH: GraphProjection = {
@@ -83,10 +86,15 @@ export function useMemoWorkspace(ownerId: string) {
   const [content, setContent] = useState(() => rawMemoDraftStore.read(ownerId));
   const [draftPersistenceFailed, setDraftPersistenceFailed] = useState(false);
   const [review, setReview] = useState<ReviewDraft | null>(null);
+  const [reviewSourceTimeZone, setReviewSourceTimeZone] = useState<string | null>(null);
+  const [reviewSourceTimeZoneError, setReviewSourceTimeZoneError] =
+    useState<string | null>(null);
+  const [reviewSourceTimeZoneRetry, setReviewSourceTimeZoneRetry] = useState(0);
   const [hasUnsavedReview, setHasUnsavedReview] = useState(false);
   const [postponedReview, setPostponedReview] = useState<ReviewDraft | null>(null);
   const [applicationId, setApplicationId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [graph, setGraph] = useState<GraphProjection>(EMPTY_GRAPH);
   const [selectedGraphNode, setSelectedGraphNode] = useState<GraphNode | null>(null);
   const [selectedGraphProjectionVersion, setSelectedGraphProjectionVersion] =
@@ -110,10 +118,16 @@ export function useMemoWorkspace(ownerId: string) {
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [memosLoading, setMemosLoading] = useState(true);
   const [memosError, setMemosError] = useState<string | null>(null);
+  const [eventsLoading, setEventsLoading] = useState(true);
+  const [eventsError, setEventsError] = useState<string | null>(null);
   const [reviewOutcomeSummary, setReviewOutcomeSummary] =
     useState<AnalysisReviewOutcomeSummary | null>(null);
   const [reviewOutcomeLoading, setReviewOutcomeLoading] = useState(true);
   const [reviewOutcomeError, setReviewOutcomeError] = useState<string | null>(null);
+  const [analysisPathEvidenceSummary, setAnalysisPathEvidenceSummary] =
+    useState<AnalysisPathEvidenceSummary | null>(null);
+  const [analysisPathEvidenceLoading, setAnalysisPathEvidenceLoading] = useState(false);
+  const [analysisPathEvidenceError, setAnalysisPathEvidenceError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
@@ -124,9 +138,12 @@ export function useMemoWorkspace(ownerId: string) {
   const captureAttempt = useRef<CaptureAttempt | null>(null);
   const retryIdentities = useRef(new RetryIdentityStore());
   const workspaceRequest = useRef(0);
+  const eventListRequest = useRef(0);
   const memoListRequest = useRef(0);
   const reviewOutcomeRequest = useRef(0);
+  const analysisPathEvidenceRequest = useRef(0);
   const relationReviewRequest = useRef(0);
+  const reviewMemoSourceRequest = useRef(0);
   const relationReviewAbort = useRef<AbortController | null>(null);
   const relationReviewLoadStateRef = useRef<RelationReviewLoadState | null>(null);
   const graphDetailRequest = useRef(0);
@@ -151,10 +168,31 @@ export function useMemoWorkspace(ownerId: string) {
     }
   }, []);
 
+  const refreshEvents = useCallback(async () => {
+    const request = ++eventListRequest.current;
+    setEventsLoading(true);
+    setEventsError(null);
+    try {
+      const nextEvents = await api.events(100);
+      if (isLatestWorkspaceRequest(request, eventListRequest.current)) {
+        setEvents(nextEvents);
+      }
+    } catch (error) {
+      if (isLatestWorkspaceRequest(request, eventListRequest.current)) {
+        setEventsError(errorMessage(error));
+      }
+    } finally {
+      if (isLatestWorkspaceRequest(request, eventListRequest.current)) {
+        setEventsLoading(false);
+      }
+    }
+  }, []);
+
   const refreshWorkspace = useCallback(async () => {
     const request = ++workspaceRequest.current;
     setWorkspaceLoading(true);
     setWorkspaceError(null);
+    void refreshEvents();
     try {
       const [nextTasks, nextGraph] = await Promise.all([api.tasks(), api.graph(100)]);
       if (isLatestWorkspaceRequest(request, workspaceRequest.current)) {
@@ -170,7 +208,7 @@ export function useMemoWorkspace(ownerId: string) {
         setWorkspaceLoading(false);
       }
     }
-  }, []);
+  }, [refreshEvents]);
 
   const refreshMemos = useCallback(async () => {
     const request = ++memoListRequest.current;
@@ -430,6 +468,26 @@ export function useMemoWorkspace(ownerId: string) {
     }
   }, []);
 
+  const refreshAnalysisPathEvidence = useCallback(async () => {
+    const request = ++analysisPathEvidenceRequest.current;
+    setAnalysisPathEvidenceLoading(true);
+    setAnalysisPathEvidenceError(null);
+    try {
+      const summary = await api.analysisPathEvidenceSummary(14);
+      if (analysisPathEvidenceRequest.current === request) {
+        setAnalysisPathEvidenceSummary(summary);
+      }
+    } catch (error) {
+      if (analysisPathEvidenceRequest.current === request) {
+        setAnalysisPathEvidenceError(errorMessage(error));
+      }
+    } finally {
+      if (analysisPathEvidenceRequest.current === request) {
+        setAnalysisPathEvidenceLoading(false);
+      }
+    }
+  }, []);
+
   const loadRelationReviewCandidates = useCallback(async (
     snapshot: Pick<ReviewDraft, 'proposalId' | 'proposal'>,
   ) => {
@@ -534,6 +592,41 @@ export function useMemoWorkspace(ownerId: string) {
 
   const reviewProposalId = review?.proposalId ?? null;
   const reviewProposal = review?.proposal ?? null;
+  const listedReviewSourceTimeZone = reviewProposal
+    ? activeMemos.find(
+        (memo) => memo.id === reviewProposal.memoId &&
+          memo.currentRevision === reviewProposal.memoRevision,
+      )?.sourceTimeZone ?? null
+    : null;
+
+  useEffect(() => {
+    const request = ++reviewMemoSourceRequest.current;
+    setReviewSourceTimeZone(null);
+    setReviewSourceTimeZoneError(null);
+    if (!reviewProposal) return;
+    if (listedReviewSourceTimeZone) {
+      setReviewSourceTimeZone(listedReviewSourceTimeZone);
+      return;
+    }
+
+    void api.memo(reviewProposal.memoId).then((memo) => {
+      if (reviewMemoSourceRequest.current !== request) return;
+      if (memo.currentRevision !== reviewProposal.memoRevision) {
+        setReviewSourceTimeZoneError('메모 revision이 변경되어 작성 시간대를 확인할 수 없습니다.');
+        return;
+      }
+      if (memo.sourceTimeZone) {
+        setReviewSourceTimeZone(memo.sourceTimeZone);
+      } else {
+        setReviewSourceTimeZoneError('메모 revision의 시간대가 응답에 없습니다.');
+      }
+    }).catch((error: unknown) => {
+      if (reviewMemoSourceRequest.current === request) {
+        setReviewSourceTimeZone(null);
+        setReviewSourceTimeZoneError(errorMessage(error));
+      }
+    });
+  }, [activeMemos, listedReviewSourceTimeZone, ownerId, reviewProposal, reviewSourceTimeZoneRetry]);
 
   useEffect(() => {
     if (!reviewProposalId || !reviewProposal) {
@@ -714,7 +807,16 @@ export function useMemoWorkspace(ownerId: string) {
       });
       return;
     }
-    const body = buildApplyRequest(snapshot, timeZone.current);
+    const hasScheduledEvent = snapshot.items.some((item) => item.eventSchedule !== null);
+    const sourceTimeZone = reviewSourceTimeZone;
+    if (hasScheduledEvent && !sourceTimeZone) {
+      setFeedback({
+        kind: 'error',
+        message: '메모 revision의 작성 시간대를 불러온 뒤 일정을 승인해 주세요.',
+      });
+      return;
+    }
+    const body = buildApplyRequest(snapshot, sourceTimeZone ?? timeZone.current);
     const fingerprint = JSON.stringify(body);
     const idempotencyKey = retryIdentities.current.keyFor(scope, fingerprint);
 
@@ -728,7 +830,7 @@ export function useMemoWorkspace(ownerId: string) {
       setHasUnsavedReview(false);
       setContent('');
       clearProposalRetries(snapshot.proposalId);
-      setFeedback({ kind: 'success', message: '승인한 태그와 할 일을 생성했습니다.' });
+      setFeedback({ kind: 'success', message: '승인한 태그와 항목을 생성했습니다.' });
       void refreshReviewOutcomes();
       await Promise.all([refreshWorkspace(), refreshMemos(), refreshRecovery()]);
     } catch (error) {
@@ -833,7 +935,11 @@ export function useMemoWorkspace(ownerId: string) {
         message: `revision ${memo.currentRevision + 1}를 저장했습니다. 이전 분석 결과는 자동으로 오래된 제안이 됩니다.`,
       });
       void refreshReviewOutcomes();
-      await Promise.all([refreshMemos(), refreshRecovery()]);
+      await refreshAfterMemoSourceEdit({
+        refreshMemos,
+        refreshEvents,
+        refreshRecovery,
+      });
       retryIdentities.current.clear(scope);
       return true;
     } catch (error) {
@@ -1122,8 +1228,11 @@ export function useMemoWorkspace(ownerId: string) {
       activeRelationReviewState?.status === 'ERROR' ? activeRelationReviewState.error : null,
     hasUnsavedReview,
     postponedReview,
+    reviewSourceTimeZone,
+    reviewSourceTimeZoneError,
     applicationId,
     tasks,
+    events,
     graph,
     selectedGraphNode,
     selectedGraphProjectionVersion,
@@ -1145,9 +1254,14 @@ export function useMemoWorkspace(ownerId: string) {
     recoveryError,
     memosLoading,
     memosError,
+    eventsLoading,
+    eventsError,
     reviewOutcomeSummary,
     reviewOutcomeLoading,
     reviewOutcomeError,
+    analysisPathEvidenceSummary,
+    analysisPathEvidenceLoading,
+    analysisPathEvidenceError,
     pendingMemoScope:
       busyAction?.startsWith('update:') ||
       busyAction?.startsWith('trash:') ||
@@ -1168,9 +1282,11 @@ export function useMemoWorkspace(ownerId: string) {
     retryAction,
     checkConnection,
     refreshWorkspace,
+    refreshEvents,
     refreshMemos,
     refreshRecovery,
     refreshReviewOutcomes,
+    refreshAnalysisPathEvidence,
     selectGraphNode,
     openGraphNeighborhoodMemo,
     backToGraphNeighborhood,
@@ -1184,6 +1300,7 @@ export function useMemoWorkspace(ownerId: string) {
     retryRelationReviewCandidates: () => {
       if (review) void loadRelationReviewCandidates(review);
     },
+    retryReviewSourceTimeZone: () => setReviewSourceTimeZoneRetry((current) => current + 1),
     applyCurrentReview,
     postponeCurrentReview: () => void postponeCurrentReview(),
     rejectCurrentReview: () => void rejectCurrentReview(),

@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://personal-memo.local/schemas/ai-preferred-product-smoke-fixture-v1.json",
+  "title": "AiPreferredProductSmokeFixtureV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "fixtureId",
+    "dataClass",
+    "clientRecordedAt",
+    "timeZone",
+    "cases"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "fixtureId": {
+      "const": "ai-preferred-product-smoke-v1"
+    },
+    "dataClass": {
+      "const": "PUBLIC_SYNTHETIC_ONLY"
+    },
+    "clientRecordedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "timeZone": {
+      "const": "Asia/Seoul"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/case"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "required": ["expectation"],
+            "properties": {
+              "expectation": {
+                "const": "AFFIRMATIVE_TASK_UNKNOWN_TIME"
+              }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["expectation"],
+            "properties": {
+              "expectation": {
+                "const": "NEGATED_NON_TASK"
+              }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["expectation"],
+            "properties": {
+              "expectation": {
+                "const": "DESCRIPTIVE_NON_TASK"
+              }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "content", "expectation"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "maxLength": 64
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "expectation": {
+          "enum": [
+            "AFFIRMATIVE_TASK_UNKNOWN_TIME",
+            "NEGATED_NON_TASK",
+            "DESCRIPTIVE_NON_TASK"
+          ]
+        }
+      }
+    }
+  }
+}

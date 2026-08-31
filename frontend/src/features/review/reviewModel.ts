@@ -1,15 +1,19 @@
 import type {
   ApplyProposalRequest,
   DateCandidate,
+  EventScheduleSelection,
   ItemCandidate,
   ItemKind,
   Proposal,
+  ProposalEventScheduleCandidate,
   RelationReviewCandidate,
   TagCandidate,
 } from '../../shared/api/types';
 import {
+  compareOffsetDateTimes,
   isValidIsoDate,
   isValidOffsetDateTime,
+  nextIsoDate,
 } from '../../shared/validation/dateTime';
 
 export { isValidIsoDate, isValidOffsetDateTime } from '../../shared/validation/dateTime';
@@ -39,6 +43,12 @@ export function preferredItemKind(proposal: Proposal): ItemKind | null {
 export type ReviewItemDraft = ItemCandidate & {
   proposalCandidateId: string | null;
   due: DateCandidate | null;
+  eventSchedule: EventScheduleDraft | null;
+  eventScheduleProposalCandidateId: string | null;
+};
+
+export type EventScheduleDraft = Omit<EventScheduleSelection, 'timeZone'> & {
+  end: string;
 };
 
 export type ReviewDraft = {
@@ -74,6 +84,87 @@ export function isValidDue(due: DateCandidate | null): boolean {
   return !due.timeSpecified && (!due.value || !due.value.trim());
 }
 
+export function isValidEventSchedule(schedule: EventScheduleDraft | null): boolean {
+  if (!schedule) return false;
+  const end = schedule.end.trim();
+  if (schedule.mode === 'ALL_DAY') {
+    return isValidIsoDate(schedule.start) &&
+      (!end || (isValidIsoDate(end) && end > schedule.start));
+  }
+  return isValidOffsetDateTime(schedule.start) &&
+    (!end ||
+      (isValidOffsetDateTime(end) && compareOffsetDateTimes(end, schedule.start) > 0));
+}
+
+export function createCustomTimedEventSchedule(): EventScheduleDraft {
+  return { mode: 'TIMED', start: '', end: '' };
+}
+
+export function eventScheduleFromDateCandidate(
+  candidate: DateCandidate,
+): EventScheduleDraft | null {
+  if (!isValidDue(candidate) || !candidate.value) return null;
+  if (candidate.precision === 'DATE_ONLY') {
+    return { mode: 'ALL_DAY', start: candidate.value, end: '' };
+  }
+  if (candidate.precision === 'EXACT_TIME' || candidate.precision === 'RELATIVE_EXACT') {
+    return { mode: 'TIMED', start: candidate.value, end: '' };
+  }
+  return null;
+}
+
+export function eventScheduleFromProposalCandidate(
+  proposal: Proposal,
+  candidate: ProposalEventScheduleCandidate,
+): EventScheduleDraft | null {
+  const start = proposal.dateCandidates.find(
+    (date) => date.candidateId === candidate.startDateCandidateId,
+  );
+  if (!start?.value) return null;
+
+  let endValue = '';
+  if (candidate.end) {
+    const end = proposal.dateCandidates.find(
+      (date) => date.candidateId === candidate.end!.dateCandidateId,
+    );
+    if (!end?.value) return null;
+    endValue = candidate.end.boundary === 'INCLUSIVE_THROUGH_VALUE'
+      ? nextIsoDate(end.value) ?? ''
+      : end.value;
+    if (!endValue) return null;
+  }
+
+  const schedule: EventScheduleDraft = {
+    mode: candidate.mode,
+    start: start.value,
+    end: endValue,
+  };
+  return isValidEventSchedule(schedule) ? schedule : null;
+}
+
+export function sameEventScheduleProposalCandidate(
+  schedule: EventScheduleDraft,
+  proposal: Proposal,
+  candidate: ProposalEventScheduleCandidate,
+): boolean {
+  const projected = eventScheduleFromProposalCandidate(proposal, candidate);
+  return projected !== null &&
+    schedule.mode === projected.mode &&
+    schedule.start === projected.start &&
+    schedule.end === projected.end;
+}
+
+export function sameEventScheduleCandidate(
+  schedule: EventScheduleDraft,
+  candidate: DateCandidate,
+): boolean {
+  const projected = eventScheduleFromDateCandidate(candidate);
+  return projected !== null &&
+    schedule.mode === projected.mode &&
+    schedule.start === projected.start &&
+    schedule.end.trim() === '';
+}
+
 export function usableDateCandidates(proposal: Proposal): DateCandidate[] {
   return proposal.dateCandidates
     .filter(
@@ -90,6 +181,20 @@ export function usableDateCandidates(proposal: Proposal): DateCandidate[] {
       if (right.precision === 'DATE_ONLY') return 1;
       return 0;
     });
+}
+
+export function referencedProposalDateCandidateIds(proposal: Proposal): Set<string> {
+  const referenced = new Set<string>();
+  if (proposal.schemaVersion === '1') return referenced;
+  proposal.itemCandidates.forEach((item) => {
+    if (item.dueDateCandidateId) referenced.add(item.dueDateCandidateId);
+    if (proposal.schemaVersion !== '3') return;
+    item.eventScheduleCandidates.forEach((candidate) => {
+      referenced.add(candidate.startDateCandidateId);
+      if (candidate.end) referenced.add(candidate.end.dateCandidateId);
+    });
+  });
+  return referenced;
 }
 
 export function sameDateCandidate(left: DateCandidate, right: DateCandidate): boolean {
@@ -136,6 +241,8 @@ export function createReviewDraft(proposalId: string, proposal: Proposal): Revie
         title: index === 0 ? proposal.suggestedTitle.value : item.title,
         sourceSpan: item.sourceSpan ? { ...item.sourceSpan } : item.sourceSpan,
         due: null,
+        eventSchedule: null,
+        eventScheduleProposalCandidateId: null,
       };
     }),
     selectedRelationIndexes: [],
@@ -154,7 +261,7 @@ export function createReviewDraft(proposalId: string, proposal: Proposal): Revie
     items: projectedDraft.items.map((item) => {
       let due: DateCandidate | null = null;
       if (item.kind === 'TASK') {
-        if (proposal.schemaVersion === '2' && item.dueDateCandidateId) {
+        if (proposal.schemaVersion !== '1' && item.dueDateCandidateId) {
           const explicitDue = usableDates.find(
             (candidate) => candidate.candidateId === item.dueDateCandidateId,
           );
@@ -163,7 +270,12 @@ export function createReviewDraft(proposalId: string, proposal: Proposal): Revie
           due = cloneDate(unambiguousLegacyDue);
         }
       }
-      return { ...item, due };
+      return {
+        ...item,
+        due,
+        eventSchedule: null,
+        eventScheduleProposalCandidateId: null,
+      };
     }),
   };
 }
@@ -198,6 +310,17 @@ export function requiresExplicitDateMapping(review: ReviewDraft): boolean {
     referencedDateIds.add(dueDateCandidateId);
   }
 
+  if (
+    review.proposal.schemaVersion === '3' &&
+    review.proposal.itemCandidates.some((item) => item.eventScheduleCandidates.length > 0)
+  ) {
+    return true;
+  }
+
+  referencedProposalDateCandidateIds(review.proposal).forEach((candidateId) => {
+    referencedDateIds.add(candidateId);
+  });
+
   return dates.some(
     (candidate) => !candidate.candidateId || !referencedDateIds.has(candidate.candidateId),
   );
@@ -213,7 +336,14 @@ export function changeSelectedType(review: ReviewDraft, selectedType: ItemKind):
     selectedType,
     items: review.items.map((item, index) =>
       index === 0
-        ? { ...item, kind: selectedType, due: selectedType === 'TASK' ? item.due : null }
+        ? {
+            ...item,
+            kind: selectedType,
+            due: selectedType === 'TASK' ? item.due : null,
+            eventSchedule: selectedType === 'EVENT' ? item.eventSchedule : null,
+            eventScheduleProposalCandidateId:
+              selectedType === 'EVENT' ? item.eventScheduleProposalCandidateId : null,
+          }
         : item,
     ),
   };
@@ -245,7 +375,16 @@ export function changeItemKind(
   kind: ItemKind,
 ): ReviewDraft {
   const items = review.items.map((item, index) =>
-    index === itemIndex ? { ...item, kind, due: kind === 'TASK' ? item.due : null } : item,
+    index === itemIndex
+      ? {
+          ...item,
+          kind,
+          due: kind === 'TASK' ? item.due : null,
+          eventSchedule: kind === 'EVENT' ? item.eventSchedule : null,
+          eventScheduleProposalCandidateId:
+            kind === 'EVENT' ? item.eventScheduleProposalCandidateId : null,
+        }
+      : item,
   );
   const selectedType = review.selectedType && items.some((item) => item.kind === review.selectedType)
     ? review.selectedType
@@ -270,6 +409,8 @@ export function addManualItem(review: ReviewDraft): ReviewDraft {
     action: null,
     object: null,
     due: null,
+    eventSchedule: null,
+    eventScheduleProposalCandidateId: null,
   };
   return { ...review, items: [...review.items, item] };
 }
@@ -376,6 +517,70 @@ export function changeItemDueValue(
   };
 }
 
+export function changeItemEventSchedule(
+  review: ReviewDraft,
+  itemIndex: number,
+  eventSchedule: EventScheduleDraft | null,
+  eventScheduleProposalCandidateId: string | null = null,
+): ReviewDraft {
+  return {
+    ...review,
+    items: review.items.map((item, index) =>
+      index === itemIndex
+        ? {
+            ...item,
+            eventSchedule: eventSchedule ? { ...eventSchedule } : null,
+            eventScheduleProposalCandidateId:
+              eventSchedule ? eventScheduleProposalCandidateId : null,
+          }
+        : item,
+    ),
+  };
+}
+
+export function changeItemEventScheduleField(
+  review: ReviewDraft,
+  itemIndex: number,
+  field: 'start' | 'end',
+  value: string,
+): ReviewDraft {
+  return {
+    ...review,
+    items: review.items.map((item, index) => {
+      if (index !== itemIndex || !item.eventSchedule) return item;
+      return {
+        ...item,
+        eventSchedule: { ...item.eventSchedule, [field]: value },
+        eventScheduleProposalCandidateId: null,
+      };
+    }),
+  };
+}
+
+export function changeItemEventScheduleMode(
+  review: ReviewDraft,
+  itemIndex: number,
+  mode: EventScheduleDraft['mode'],
+): ReviewDraft {
+  return changeItemEventSchedule(review, itemIndex, { mode, start: '', end: '' });
+}
+
+function hasValidEventScheduleProposalReference(
+  review: ReviewDraft,
+  item: ReviewItemDraft,
+): boolean {
+  if (item.eventScheduleProposalCandidateId === null) return true;
+  if (item.kind !== 'EVENT' || !item.eventSchedule || !item.proposalCandidateId) return false;
+  const proposalItem = review.proposal.itemCandidates.find(
+    (candidate) => candidate.candidateId === item.proposalCandidateId,
+  );
+  const proposalSchedule = proposalItem?.eventScheduleCandidates.find(
+    (candidate) => candidate.candidateId === item.eventScheduleProposalCandidateId,
+  );
+  return proposalSchedule !== undefined &&
+    sameEventScheduleProposalCandidate(item.eventSchedule, review.proposal, proposalSchedule);
+}
+
 export function isValidReviewDraft(review: ReviewDraft): review is ApplicableReviewDraft {
   const proposalCandidateIds = new Set(
     review.proposal.itemCandidates.map((item) => item.candidateId),
@@ -406,7 +611,13 @@ export function isValidReviewDraft(review: ReviewDraft): review is ApplicableRev
     review.items.every(
       (item) =>
         item.title.trim().length > 0 &&
-        (item.kind !== 'TASK' || item.due === null || isValidDue(item.due)),
+        (item.kind === 'TASK'
+          ? item.eventSchedule === null && (item.due === null || isValidDue(item.due))
+          : item.due === null) &&
+        (item.kind === 'EVENT'
+          ? item.eventSchedule === null || isValidEventSchedule(item.eventSchedule)
+          : item.eventSchedule === null) &&
+        hasValidEventScheduleProposalReference(review, item),
     )
   );
 }
@@ -415,15 +626,8 @@ export function buildApplyRequest(review: ReviewDraft, timeZone: string): ApplyP
   if (!isValidReviewDraft(review)) {
     throw new Error('검토 제안은 적용 전에 유형, 제목, 항목을 확인해야 합니다.');
   }
-  return {
-    expectedMemoRevision: review.proposal.memoRevision,
-    selectedType: review.selectedType,
-    title: review.title.trim(),
-    selectedTags: review.tags.map((tag) => ({
-      existingTagId: tag.existingTagId,
-      newCanonicalName: tag.existingTagId ? null : tag.canonicalName.trim(),
-    })),
-    items: review.items.map((item) => ({
+  const items: ApplyProposalRequest['items'] = review.items.map((item) => {
+    const applyItem: ApplyProposalRequest['items'][number] = {
       proposalCandidateId: item.proposalCandidateId,
       kind: item.kind,
       title: item.title.trim(),
@@ -437,7 +641,30 @@ export function buildApplyRequest(review: ReviewDraft, timeZone: string): ApplyP
               timeSpecified: item.due.timeSpecified,
             }
           : null,
+    };
+    if (item.kind === 'EVENT' && item.eventSchedule) {
+      applyItem.eventSchedule = {
+        mode: item.eventSchedule.mode,
+        start: item.eventSchedule.start,
+        end: item.eventSchedule.end.trim() || null,
+        timeZone,
+      };
+    }
+    return applyItem;
+  });
+  const request: ApplyProposalRequest = {
+    expectedMemoRevision: review.proposal.memoRevision,
+    selectedType: review.selectedType,
+    title: review.title.trim(),
+    selectedTags: review.tags.map((tag) => ({
+      existingTagId: tag.existingTagId,
+      newCanonicalName: tag.existingTagId ? null : tag.canonicalName.trim(),
     })),
+    items,
     selectedRelations: review.selectedRelationIndexes.map((proposalIndex) => ({ proposalIndex })),
   };
+  if (items.some((item) => item.eventSchedule !== undefined)) {
+    request.selectionSchemaVersion = '2';
+  }
+  return request;
 }

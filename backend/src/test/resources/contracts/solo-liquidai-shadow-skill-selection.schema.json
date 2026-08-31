@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://personal-memo.local/contracts/solo-liquidai-shadow-skill-selection.schema.json",
+  "title": "Solo LiquidAI bounded deterministic skill selection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "primaryItemOrdinal",
+    "topicObjectOrdinals"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "enum": ["solo-liquidai-shadow-skill-selection-v1"]
+    },
+    "primaryItemOrdinal": {
+      "type": "integer",
+      "enum": [-1, 0, 1, 2]
+    },
+    "topicObjectOrdinals": {
+      "type": "array",
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "type": "integer",
+        "enum": [0, 1, 2]
+      }
+    }
+  }
+}

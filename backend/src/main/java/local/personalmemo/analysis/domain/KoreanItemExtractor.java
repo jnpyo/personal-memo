@@ -56,8 +56,14 @@ public final class KoreanItemExtractor {
   private static final Pattern TOPIC_PREFIX = Pattern.compile("^(.{1,100}?)(?:은|는|이|가)(?=$|\\s)");
   private static final Pattern RECORD_PREFIX =
       Pattern.compile("^(?:(?:운동|식사|수면|독서|지출)\\s+)?기록\\s*[:：]?\\s*(.+)$", Pattern.CASE_INSENSITIVE);
+  private static final Pattern RECORD_SUFFIX =
+      Pattern.compile("^(?:.+\\s)?기록$", Pattern.CASE_INSENSITIVE);
+  private static final Pattern ACTION_LIKE_CUE =
+      Pattern.compile("(?<![\\p{L}\\p{N}])[\\p{L}\\p{N}]{1,40}하기(?=$|\\s|[,.;!?:：])");
   private static final Pattern NON_COMMAND_CONTINUATION =
-      Pattern.compile("^\\s*(?:싶(?:은|다|어서|지만|음|었던)|좋(?:은|다|아서)|쉬운|어려운|편한|위한)(?=$|\\s|[,.;!?:：])");
+      Pattern.compile(
+          "^\\s*(?:싶(?:은|다|어서|지만|음|었던)|싫(?:은|다|어서|지만|음|었던)|"
+              + "좋(?:은|다|아서)|쉬운|어려운|편한|위한)(?=$|\\s|[,.;!?:：])");
   private static final Pattern LEADING_COORDINATOR =
       Pattern.compile("^(?:그리고|그다음|그 다음|이어서|이후에|다음으로)\\s+");
   private static final Pattern BARE_NEXT_COORDINATOR = Pattern.compile("^다음\\s+");
@@ -75,6 +81,7 @@ public final class KoreanItemExtractor {
       List.of(
           actionRule("장보기", "장보기", "장보기(?=\\s*[:：]|\\s*$)"),
           actionRule("전화하기", "전화하기", "전화\\s*하기"),
+          actionRule("접속하기", "접속하기", "접속\\s*하기"),
           actionRule("찾아보기", "찾아보기", "찾아보(?:기|고)"),
           actionRule("다시 보기", "다시 보기", "다시\\s*보기"),
           actionRule("올리기", "올리기", "올리(?:기|고)"),
@@ -99,23 +106,40 @@ public final class KoreanItemExtractor {
 
     Span whole = trimmedSpan(content, 0, content.length());
     if (whole == null) {
-      return new Extraction(List.of(), 0, Set.of(), false);
+      return new Extraction(List.of(), 0, Set.of(), false, ClassificationBasis.DEFAULT_FALLBACK, 0);
     }
 
     List<ActionMatch> actions = detectActions(content);
+    int unrecognizedActionCueCount = countUnrecognizedActionCues(content, actions);
     int alternativeBranchCount = alternativeBranchCount(content);
     Alternative alternative = findAlternative(content, actions);
     EnumSet<AmbiguityReason> signals = EnumSet.noneOf(AmbiguityReason.class);
     List<ExtractedItem> items = new ArrayList<>();
 
     if (actions.isEmpty()) {
-      items.add(classifyNonAction(content, dates, whole));
+      NonActionClassification classification = classifyNonAction(content, dates, whole);
+      items.add(classification.item());
+      int effectiveUnrecognizedActionCueCount =
+          classification.suppressActionCueCount() ? 0 : unrecognizedActionCueCount;
+      if (classification.basis() == ClassificationBasis.DEFAULT_FALLBACK
+          || effectiveUnrecognizedActionCueCount > 0) {
+        signals.add(AmbiguityReason.MISSING_ACTION);
+      }
       boolean hasAlternative = alternativeBranchCount > 0;
       if (hasAlternative) {
         signals.add(AmbiguityReason.MULTI_INTENT);
       }
       return extraction(
-          items, hasAlternative ? alternativeBranchCount : items.size(), signals, hasAlternative);
+          items,
+          hasAlternative ? alternativeBranchCount : items.size(),
+          signals,
+          hasAlternative,
+          classification.basis(),
+          effectiveUnrecognizedActionCueCount);
+    }
+
+    if (unrecognizedActionCueCount > 0) {
+      signals.add(AmbiguityReason.MISSING_ACTION);
     }
 
     InformationPrefix informationPrefix = findInformationPrefix(content, actions.getFirst());
@@ -170,24 +194,39 @@ public final class KoreanItemExtractor {
 
     int detectedItemCount =
         Math.max(actions.size(), alternativeBranchCount) + (informationPrefix == null ? 0 : 1);
-    return extraction(items, detectedItemCount, signals, alternative.present());
+    return extraction(
+        items,
+        detectedItemCount,
+        signals,
+        alternative.present(),
+        ClassificationBasis.EXPLICIT_RULE,
+        unrecognizedActionCueCount);
   }
 
   private Extraction extraction(
       List<ExtractedItem> items,
       int detectedItemCount,
       EnumSet<AmbiguityReason> signals,
-      boolean alternative) {
+      boolean alternative,
+      ClassificationBasis classificationBasis,
+      int unrecognizedActionCueCount) {
     if (items.size() > 1) {
       signals.add(AmbiguityReason.MULTI_INTENT);
     }
     if (detectedItemCount > REVIEW_ITEM_LIMIT) {
       signals.add(AmbiguityReason.CANDIDATE_LIMIT_EXCEEDED);
     }
-    return new Extraction(items, detectedItemCount, signals, alternative);
+    return new Extraction(
+        items,
+        detectedItemCount,
+        signals,
+        alternative,
+        classificationBasis,
+        unrecognizedActionCueCount);
   }
 
-  private ExtractedItem classifyNonAction(String content, List<ParsedDate> dates, Span whole) {
+  private NonActionClassification classifyNonAction(
+      String content, List<ParsedDate> dates, Span whole) {
     Matcher event = EVENT_CONTEXT.matcher(content);
     boolean hasEventContext = event.find();
     Matcher pastEvent = PAST_EVENT_END.matcher(content);
@@ -197,23 +236,39 @@ public final class KoreanItemExtractor {
       if (!object.isBlank()) {
         object = bounded(normalize(object), 200);
         String title = bounded(withObjectParticle(object) + " 봄", 200);
-        return item("EVENT", title, null, object, whole, 0.9);
+        return explicit(item("EVENT", title, null, object, whole, 0.9));
       }
     }
     if (!dates.isEmpty() && hasEventContext) {
       Span span = new Span(event.start(), event.end());
       String title = content.substring(span.start(), span.end());
-      return item("EVENT", title, null, title, span, 0.9);
+      return explicit(item("EVENT", title, null, title, span, 0.9));
     }
     if (looksLikeInformation(content)) {
       String title = bounded(normalize(content.substring(whole.start(), whole.end())), 200);
-      return item("INFORMATION", title, null, topicObject(title), whole, 0.86);
+      return explicit(item("INFORMATION", title, null, topicObject(title), whole, 0.86));
     }
 
     String title = bounded(normalize(content.substring(whole.start(), whole.end())), 200);
     Matcher record = RECORD_PREFIX.matcher(title);
-    String object = record.matches() ? bounded(record.group(1).strip(), 200) : null;
-    return item("RECORD", title, null, object, whole, 0.8);
+    boolean prefixRecord = record.matches();
+    String object = prefixRecord ? bounded(record.group(1).strip(), 200) : null;
+    ExtractedItem item = item("RECORD", title, null, object, whole, 0.8);
+    return prefixRecord || RECORD_SUFFIX.matcher(title).matches()
+        ? explicitRecord(item)
+        : defaultFallback(item);
+  }
+
+  private NonActionClassification explicit(ExtractedItem item) {
+    return new NonActionClassification(item, ClassificationBasis.EXPLICIT_RULE, false);
+  }
+
+  private NonActionClassification explicitRecord(ExtractedItem item) {
+    return new NonActionClassification(item, ClassificationBasis.EXPLICIT_RULE, true);
+  }
+
+  private NonActionClassification defaultFallback(ExtractedItem item) {
+    return new NonActionClassification(item, ClassificationBasis.DEFAULT_FALLBACK, false);
   }
 
   private InformationPrefix findInformationPrefix(String content, ActionMatch firstAction) {
@@ -281,6 +336,23 @@ public final class KoreanItemExtractor {
 
   private boolean isNonCommandContinuation(String content, int actionEnd) {
     return NON_COMMAND_CONTINUATION.matcher(content.substring(actionEnd)).find();
+  }
+
+  private int countUnrecognizedActionCues(String content, List<ActionMatch> knownActions) {
+    int count = 0;
+    Matcher cue = ACTION_LIKE_CUE.matcher(content);
+    while (cue.find()) {
+      if (isNonCommandContinuation(content, cue.end())) {
+        continue;
+      }
+      boolean covered =
+          knownActions.stream()
+              .anyMatch(action -> cue.start() < action.end() && action.start() < cue.end());
+      if (!covered) {
+        count++;
+      }
+    }
+    return count;
   }
 
   private Alternative findAlternative(String content, List<ActionMatch> actions) {
@@ -543,13 +615,19 @@ public final class KoreanItemExtractor {
       List<ExtractedItem> detectedItems,
       int detectedItemCount,
       Set<AmbiguityReason> signals,
-      boolean alternative) {
+      boolean alternative,
+      ClassificationBasis classificationBasis,
+      int unrecognizedActionCueCount) {
     public Extraction {
       Objects.requireNonNull(detectedItems, "detectedItems");
       Objects.requireNonNull(signals, "signals");
+      Objects.requireNonNull(classificationBasis, "classificationBasis");
       if (detectedItemCount < detectedItems.size()) {
         throw new IllegalArgumentException(
             "Detected item count cannot be smaller than the emitted review items.");
+      }
+      if (unrecognizedActionCueCount < 0) {
+        throw new IllegalArgumentException("Unrecognized action cue count cannot be negative.");
       }
       detectedItems = List.copyOf(detectedItems);
       signals = Set.copyOf(signals);
@@ -558,6 +636,11 @@ public final class KoreanItemExtractor {
     public List<ExtractedItem> allItems() {
       return detectedItems;
     }
+  }
+
+  public enum ClassificationBasis {
+    EXPLICIT_RULE,
+    DEFAULT_FALLBACK
   }
 
   public record ExtractedItem(
@@ -599,6 +682,9 @@ public final class KoreanItemExtractor {
   }
 
   private record InformationPrefix(Span span, int taskStart) {}
+
+  private record NonActionClassification(
+      ExtractedItem item, ClassificationBasis basis, boolean suppressActionCueCount) {}
 
   private record Span(int start, int end) {}
 }

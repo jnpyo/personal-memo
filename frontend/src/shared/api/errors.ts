@@ -2,6 +2,7 @@ import { ProposalContractError } from './proposalDecoder';
 import { GraphNeighborhoodContractError } from './graphNeighborhoodDecoder';
 import { MemoSearchContractError } from './searchDecoder';
 import { RelationReviewContractError } from './relationReviewDecoder';
+import { CalendarFeedContractError } from './calendarFeedDecoder';
 
 export class ApiError extends Error {
   constructor(
@@ -36,6 +37,10 @@ export function errorMessage(error: unknown): string {
 
   if (error instanceof RelationReviewContractError) {
     return '서버가 지원하지 않는 형식의 연결 검토 정보를 반환했습니다. 선택한 제안과 원본 메모는 변경되지 않습니다.';
+  }
+
+  if (error instanceof CalendarFeedContractError) {
+    return '서버가 안전한 형식의 일정 공유 정보를 반환하지 않았습니다. 기존 일정과 공유 설정은 변경되지 않습니다.';
   }
 
   if (error instanceof ApiError) {

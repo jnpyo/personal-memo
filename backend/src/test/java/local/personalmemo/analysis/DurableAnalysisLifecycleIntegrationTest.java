@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import local.personalmemo.analysis.application.AnalysisService;
 import local.personalmemo.analysis.application.BoundedCloudGatewayInvoker;
+import local.personalmemo.analysis.domain.CloudAnalysisFailureReason;
 import local.personalmemo.analysis.domain.CloudAnalysisGateway;
 import local.personalmemo.analysis.domain.CloudAnalysisRequest;
 import local.personalmemo.analysis.domain.CloudAnalysisResult;
@@ -65,6 +66,13 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
           "test-model-v1",
           "no-network-v1",
           CloudTransferMode.NO_NETWORK);
+  private static final CloudGatewayDescriptor LOCAL_MACHINE_MODEL_DESCRIPTOR =
+      new CloudGatewayDescriptor(
+          "local-machine-lifecycle-test-v1",
+          "localhost-ollama-test",
+          "public-synthetic-model-v1",
+          "local-machine-v1",
+          CloudTransferMode.LOCAL_MACHINE_MEMO_CONTENT);
 
   @MockitoBean private CloudAnalysisGateway cloudGateway;
   @Autowired private AnalysisService analysisService;
@@ -76,6 +84,121 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
     when(cloudGateway.bind())
         .thenReturn(
             binding(request -> CloudAnalysisResult.success(request.validatedLocalProposal())));
+  }
+
+  @Test
+  void localMachineRequestUsesOnlyTheLockedRevisionAndPersistsRawFreeChangedEvidence()
+      throws Exception {
+    String content = "6시 디스코드 접속 예정";
+    AtomicReference<CloudAnalysisRequest> observedRequest = new AtomicReference<>();
+    when(cloudGateway.bind())
+        .thenReturn(
+            new CloudGatewayBinding(
+                LOCAL_MACHINE_MODEL_DESCRIPTOR,
+                request -> {
+                  observedRequest.set(request);
+                  ObjectNode enriched = request.validatedLocalProposal();
+                  enriched.set(
+                      "typeCandidates",
+                      json.createArrayNode()
+                          .add(json.createObjectNode().put("value", "TASK").put("score", 0.92)));
+                  ObjectNode item = (ObjectNode) enriched.path("itemCandidates").path(0);
+                  item.put("kind", "TASK")
+                      .put("action", "접속하기")
+                      .put("object", "디스코드")
+                      .put("confidence", 0.92);
+                  enriched.set("ambiguityReasons", json.createArrayNode().add("IMPRECISE_DATE"));
+                  return CloudAnalysisResult.success(enriched);
+                }));
+    UUID memoId = createMemoWithContent("local-machine-changed", content);
+
+    MvcResult completed = startAnalysis(memoId, "local-machine-changed-start", 1);
+
+    assertThat(completed.getResponse().getStatus()).isEqualTo(200);
+    UUID runId = UUID.fromString(response(completed).path("id").asText());
+    CloudAnalysisRequest request = observedRequest.get();
+    assertThat(request).isNotNull();
+    assertThat(request.authorizationCheckedAt()).isEmpty();
+    assertThat(request.acceptedConsentGrantedAt()).isEmpty();
+    assertThat(request.localModelInput()).isPresent();
+    assertThat(request.localModelInput().orElseThrow().memoContent()).isEqualTo(content);
+    assertThat(request.localModelInput().orElseThrow().referenceInstant())
+        .isEqualTo(Instant.parse("2026-08-05T02:00:00Z"));
+    assertThat(request.localModelInput().orElseThrow().timeZone()).isEqualTo("Asia/Seoul");
+
+    LocalDecisionLifecycle evidence = localDecisionLifecycle(runId);
+    assertThat(evidence.evidenceVersion()).isEqualTo("local-decision-v1");
+    assertThat(evidence.fallbackPolicyVersion()).isEqualTo("model-fallback-v1");
+    assertThat(evidence.fallbackReasonCodes()).contains("DEFAULT_RECORD_FALLBACK");
+    assertThat(evidence.modelContributionStatus()).isEqualTo("ACCEPTED_CHANGED");
+    assertThat(evidence.modelChangedFields())
+        .containsExactly("TYPE_CANDIDATES", "ITEM_CANDIDATES", "AMBIGUITY_REASONS");
+    assertThat(evidence.localDecisionEvidence()).doesNotContain(content, memoId.toString());
+    assertThat(evidence.hasPreparedProposal()).isFalse();
+  }
+
+  @Test
+  void localMachineFailureKeepsTheExplicitTaskWithoutInventingAPreciseDate() throws Exception {
+    String content = "6시 디스코드 접속하기";
+    AtomicReference<CloudAnalysisRequest> observedRequest = new AtomicReference<>();
+    when(cloudGateway.bind())
+        .thenReturn(
+            new CloudGatewayBinding(
+                LOCAL_MACHINE_MODEL_DESCRIPTOR,
+                request -> {
+                  observedRequest.set(request);
+                  return CloudAnalysisResult.failure(CloudAnalysisFailureReason.PROVIDER_ERROR);
+                }));
+    UUID memoId = createMemoWithContent("local-machine-fallback", content);
+
+    MvcResult completed = startAnalysis(memoId, "local-machine-fallback-start", 1);
+
+    assertThat(completed.getResponse().getStatus()).isEqualTo(200);
+    UUID runId = UUID.fromString(response(completed).path("id").asText());
+    assertThat(observedRequest.get()).isNotNull();
+    ObjectNode proposal = (ObjectNode) json.readTree(storedProposalJson(runId));
+    assertThat(proposal.path("typeCandidates").path(0).path("value").asText()).isEqualTo("TASK");
+    assertThat(proposal.path("itemCandidates")).hasSize(1);
+    assertThat(proposal.path("itemCandidates").path(0).path("kind").asText()).isEqualTo("TASK");
+    assertThat(proposal.path("itemCandidates").path(0).path("action").asText()).isEqualTo("접속하기");
+    assertThat(proposal.path("itemCandidates").path(0).path("object").asText()).isEqualTo("디스코드");
+    assertThat(proposal.path("dateCandidates").path(0).path("surfaceText").asText())
+        .isEqualTo("6시");
+    assertThat(proposal.path("dateCandidates").path(0).path("value").isNull()).isTrue();
+    assertThat(proposal.path("dateCandidates").path(0).path("precision").asText())
+        .isEqualTo("UNKNOWN");
+    assertThat(proposal.path("relationCandidates")).isEmpty();
+    assertThat(proposal.path("providerMetadata").path("cloudOutcome").asText())
+        .isEqualTo("PROVIDER_ERROR");
+
+    LocalDecisionLifecycle evidence = localDecisionLifecycle(runId);
+    assertThat(evidence.modelContributionStatus()).isEqualTo("LOCAL_FALLBACK");
+    assertThat(evidence.modelChangedFields()).isEmpty();
+    assertThat(evidence.localDecisionEvidence()).doesNotContain(content, memoId.toString());
+    assertThat(evidence.hasPreparedProposal()).isFalse();
+    assertNoCanonicalAnalysisWrites();
+  }
+
+  @Test
+  void deterministicallyCompleteRecordDoesNotCreateOrCallALocalModelDispatch() throws Exception {
+    AtomicInteger gatewayCalls = new AtomicInteger();
+    when(cloudGateway.bind())
+        .thenReturn(
+            new CloudGatewayBinding(
+                LOCAL_MACHINE_MODEL_DESCRIPTOR,
+                request -> {
+                  gatewayCalls.incrementAndGet();
+                  return CloudAnalysisResult.success(request.validatedLocalProposal());
+                }));
+    UUID memoId = createMemoWithContent("complete-local-record", "회의 기록");
+
+    MvcResult completed = startAnalysis(memoId, "complete-local-record-start", 1);
+
+    assertThat(completed.getResponse().getStatus()).isEqualTo(200);
+    assertThat(response(completed).path("status").asText()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(gatewayCalls).hasValue(0);
+    assertThat(dispatchCount()).isZero();
+    assertNoCanonicalAnalysisWrites();
   }
 
   @Test
@@ -200,6 +323,7 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
 
     assertThat(completed.getResponse().getStatus()).isEqualTo(200);
     UUID runId = UUID.fromString(response(completed).path("id").asText());
+    assertThat(localDecisionLifecycle(runId).modelContributionStatus()).isEqualTo("LOCAL_FALLBACK");
     AttemptLifecycle attempt = attemptLifecycle(runId, 1L);
     assertThat(attempt.attemptState()).isEqualTo("OBSERVED");
     assertThat(attempt.executionState()).isEqualTo("STARTED");
@@ -1640,6 +1764,47 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
         .single();
   }
 
+  private LocalDecisionLifecycle localDecisionLifecycle(UUID runId) {
+    return db.sql(
+            """
+            select local_decision_evidence_version,
+                   local_decision_evidence::text as local_decision_evidence,
+                   fallback_policy_version,
+                   fallback_reason_codes::text as fallback_reason_codes,
+                   model_contribution_status,
+                   model_changed_fields::text as model_changed_fields,
+                   validated_local_proposal is not null as has_prepared_proposal
+              from analysis_run_dispatches
+             where analysis_run_id = :runId
+               and owner_id = :ownerId
+            """)
+        .param("runId", runId)
+        .param("ownerId", OWNER_ID)
+        .query(
+            (resultSet, rowNumber) ->
+                new LocalDecisionLifecycle(
+                    resultSet.getString("local_decision_evidence_version"),
+                    resultSet.getString("local_decision_evidence"),
+                    resultSet.getString("fallback_policy_version"),
+                    parseTextArray(resultSet.getString("fallback_reason_codes")),
+                    resultSet.getString("model_contribution_status"),
+                    parseTextArray(resultSet.getString("model_changed_fields")),
+                    resultSet.getBoolean("has_prepared_proposal")))
+        .single();
+  }
+
+  private List<String> parseTextArray(String encoded) {
+    try {
+      List<String> values = new java.util.ArrayList<>();
+      for (var value : json.readTree(encoded)) {
+        values.add(value.asText());
+      }
+      return List.copyOf(values);
+    } catch (RuntimeException exception) {
+      throw new IllegalStateException("Could not parse test evidence.", exception);
+    }
+  }
+
   private long runCount() {
     return db.sql("select count(*) from analysis_runs").query(Long.class).single();
   }
@@ -1852,6 +2017,15 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
 
   private record RetrievalContextEvidence(
       String rawContext, String contextHash, String version, int candidateCount) {}
+
+  private record LocalDecisionLifecycle(
+      String evidenceVersion,
+      String localDecisionEvidence,
+      String fallbackPolicyVersion,
+      List<String> fallbackReasonCodes,
+      String modelContributionStatus,
+      List<String> modelChangedFields,
+      boolean hasPreparedProposal) {}
 
   private record AbandonedDispatch(UUID memoId, UUID runId, String key) {}
 }

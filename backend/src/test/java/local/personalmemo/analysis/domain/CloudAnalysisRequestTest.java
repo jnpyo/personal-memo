@@ -24,6 +24,13 @@ class CloudAnalysisRequestTest {
           "model-v1",
           "memo-transfer-v1",
           CloudTransferMode.EXTERNAL_MEMO_CONTENT);
+  private static final CloudGatewayDescriptor LOCAL_MACHINE =
+      new CloudGatewayDescriptor(
+          "ollama-local-gateway-v1",
+          "ollama-local",
+          "lfm-local:Q8_0",
+          "local-machine-memo-v1",
+          CloudTransferMode.LOCAL_MACHINE_MEMO_CONTENT);
   private static final CloudProviderRequestToken TOKEN =
       CloudProviderRequestToken.issue(
           UUID.fromString("00000000-0000-0000-0000-000000000001"),
@@ -187,5 +194,86 @@ class CloudAnalysisRequestTest {
     assertThat(request.toString())
         .contains(TagRetrievalContext.CURRENT_VERSION, "1 candidates/redacted")
         .doesNotContain(tagId.toString(), "비공개 프로젝트", "업무");
+  }
+
+  @Test
+  void requiresAndRedactsBoundedInputForMachineLocalTransfer() {
+    LocalModelInput input =
+        new LocalModelInput("6시 디스코드 접속하기", Instant.parse("2026-08-21T09:00:00Z"), "Asia/Seoul");
+
+    CloudAnalysisRequest request =
+        new CloudAnalysisRequest(
+            json.createObjectNode(),
+            List.of(),
+            "field-policy-v1",
+            LOCAL_MACHINE,
+            Optional.empty(),
+            Optional.empty(),
+            TOKEN,
+            Optional.empty(),
+            Optional.of(input));
+
+    assertThat(request.localModelInput()).contains(input);
+    assertThat(request.toString())
+        .contains("localModelInput=present/redacted")
+        .doesNotContain("디스코드");
+    assertThatThrownBy(
+            () ->
+                new CloudAnalysisRequest(
+                    json.createObjectNode(),
+                    List.of(),
+                    "field-policy-v1",
+                    LOCAL_MACHINE,
+                    Optional.empty(),
+                    Optional.empty(),
+                    TOKEN))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void preventsLocalMemoContentFromCrossingTheWrongTransferBoundary() {
+    LocalModelInput input =
+        new LocalModelInput(
+            "private local memo", Instant.parse("2026-08-21T09:00:00Z"), "Asia/Seoul");
+
+    assertThatThrownBy(
+            () ->
+                new CloudAnalysisRequest(
+                    json.createObjectNode(),
+                    List.of(),
+                    "field-policy-v1",
+                    NO_NETWORK,
+                    Optional.empty(),
+                    Optional.empty(),
+                    TOKEN,
+                    Optional.empty(),
+                    Optional.of(input)))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(
+            () ->
+                new CloudAnalysisRequest(
+                    json.createObjectNode(),
+                    List.of(),
+                    "field-policy-v1",
+                    LOCAL_MACHINE,
+                    Optional.of(Instant.parse("2026-08-21T09:00:00Z")),
+                    Optional.of(Instant.parse("2026-08-21T08:00:00Z")),
+                    TOKEN,
+                    Optional.empty(),
+                    Optional.of(input)))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(
+            () ->
+                new CloudAnalysisRequest(
+                    json.createObjectNode(),
+                    List.of(),
+                    "field-policy-v1",
+                    EXTERNAL,
+                    Optional.of(Instant.parse("2026-08-21T09:00:00Z")),
+                    Optional.of(Instant.parse("2026-08-21T08:00:00Z")),
+                    TOKEN,
+                    Optional.empty(),
+                    Optional.of(input)))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 }

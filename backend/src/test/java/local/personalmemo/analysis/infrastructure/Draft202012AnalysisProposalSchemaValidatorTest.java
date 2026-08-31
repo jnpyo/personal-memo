@@ -29,6 +29,8 @@ class Draft202012AnalysisProposalSchemaValidatorTest {
         .isNotNull();
     assertThatCode(() -> validator.validate(validProposal())).doesNotThrowAnyException();
     assertThatCode(() -> validator.validate(validVersionTwoProposal())).doesNotThrowAnyException();
+    assertThatCode(() -> validator.validate(validVersionThreeProposal()))
+        .doesNotThrowAnyException();
   }
 
   @Test
@@ -51,10 +53,20 @@ class Draft202012AnalysisProposalSchemaValidatorTest {
                 .putNull("action")
                 .putNull("object")
                 .put("confidence", 0.9));
+    ObjectNode versionThreeMissingEventFields = validVersionThreeProposal();
+    ((ObjectNode) versionThreeMissingEventFields.at("/itemCandidates/0"))
+        .remove("eventScheduleCandidates");
+    ObjectNode versionTwoWithEventFields = validVersionTwoProposal();
+    ((ObjectNode) versionTwoWithEventFields.at("/itemCandidates/0"))
+        .putArray("eventScheduleCandidates");
+    ((ObjectNode) versionTwoWithEventFields.at("/itemCandidates/0"))
+        .putNull("suggestedEventScheduleCandidateId");
 
     assertInvalidWithoutDataLeak(versionTwoMissingDateId);
     assertInvalidWithoutDataLeak(versionTwoMissingBinding);
     assertInvalidWithoutDataLeak(versionOneWithBinding);
+    assertInvalidWithoutDataLeak(versionThreeMissingEventFields);
+    assertInvalidWithoutDataLeak(versionTwoWithEventFields);
   }
 
   @ParameterizedTest
@@ -203,6 +215,41 @@ class Draft202012AnalysisProposalSchemaValidatorTest {
                 .put("action", "submit")
                 .put("object", "assignment")
                 .put("confidence", 0.9));
+    return proposal;
+  }
+
+  private ObjectNode validVersionThreeProposal() {
+    ObjectNode proposal = validProposal().put("schemaVersion", "3");
+    proposal
+        .putArray("typeCandidates")
+        .add(json.createObjectNode().put("value", "EVENT").put("score", 0.9));
+    proposal
+        .putArray("dateCandidates")
+        .add(
+            dateCandidate(proposal, "2026-11-25T18:00:00+09:00", "EXACT_TIME", true)
+                .put("candidateId", "date-1"));
+    ObjectNode item =
+        proposal
+            .objectNode()
+            .put("candidateId", "item-1")
+            .putNull("dueDateCandidateId")
+            .put("kind", "EVENT")
+            .put("title", "Attend event")
+            .putNull("sourceSpan")
+            .putNull("action")
+            .putNull("object")
+            .put("confidence", 0.9)
+            .putNull("suggestedEventScheduleCandidateId");
+    item.putArray("eventScheduleCandidates")
+        .add(
+            proposal
+                .objectNode()
+                .put("candidateId", "event-schedule-1")
+                .put("mode", "TIMED")
+                .put("startDateCandidateId", "date-1")
+                .putNull("end")
+                .put("score", 0.9));
+    proposal.putArray("itemCandidates").add(item);
     return proposal;
   }
 

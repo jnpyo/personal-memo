@@ -4,6 +4,9 @@ coverage/
 playwright-report/
 test-results/
 .vite/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
 .env
 .env.*
 !.env.example

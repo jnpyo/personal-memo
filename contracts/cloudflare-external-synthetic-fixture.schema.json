@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://personal-memo.local/schemas/cloudflare-external-synthetic-fixture-v1.json",
+  "title": "CloudflareExternalSyntheticFixtureV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "fixtureId",
+    "dataClass",
+    "localProbes",
+    "externalProbes",
+    "rateLimitProbe"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "fixtureId": {
+      "const": "cloudflare-external-synthetic-v1"
+    },
+    "dataClass": {
+      "const": "PUBLIC_SYNTHETIC_ONLY"
+    },
+    "localProbes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/probe"
+      }
+    },
+    "externalProbes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 30,
+      "items": {
+        "$ref": "#/$defs/probe"
+      }
+    },
+    "rateLimitProbe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namePrefix", "method", "target", "tokenRole", "body", "expected", "maximumAttempts"],
+      "properties": {
+        "namePrefix": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "maxLength": 64
+        },
+        "method": {
+          "const": "GET"
+        },
+        "target": {
+          "const": "EXACT"
+        },
+        "tokenRole": {
+          "const": "VALID"
+        },
+        "body": {
+          "const": "NONE"
+        },
+        "expected": {
+          "const": "OPTIONAL_BODYLESS_429"
+        },
+        "maximumAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        }
+      }
+    }
+  },
+  "$defs": {
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "method", "target", "tokenRole", "body", "expected"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "maxLength": 64
+        },
+        "method": {
+          "enum": ["GET", "HEAD", "POST"]
+        },
+        "target": {
+          "enum": [
+            "EXACT",
+            "EXACT_NONCANONICAL",
+            "MISSING_TOKEN",
+            "EXTRA_QUERY",
+            "DUPLICATE_TOKEN",
+            "WRONG_PATH",
+            "SUFFIX_PATH",
+            "ENCODED_DOT",
+            "ENCODED_SLASH",
+            "DOUBLE_SLASH"
+          ]
+        },
+        "tokenRole": {
+          "enum": ["VALID", "UNKNOWN", "FAILURE", "NONCANONICAL", "NONE"]
+        },
+        "body": {
+          "enum": ["NONE", "ONE_BYTE"]
+        },
+        "expected": {
+          "enum": [
+            "POSITIVE_BODY",
+            "POSITIVE_BODYLESS",
+            "ORIGIN_EMPTY_404",
+            "REMOTE_BOUNDED_404"
+          ]
+        }
+      }
+    }
+  }
+}

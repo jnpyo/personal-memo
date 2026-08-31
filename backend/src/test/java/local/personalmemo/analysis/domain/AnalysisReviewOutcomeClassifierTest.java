@@ -106,6 +106,23 @@ class AnalysisReviewOutcomeClassifierTest {
   }
 
   @Test
+  void versionThreeTaskOnlyProposalUsesTheExplicitDueBinding() {
+    proposal = versionThreeTaskProposal();
+    context = new ReviewContext("3", MEMO_ID, 1, MEMO_ID, 1);
+
+    var exact = classifier.classify(proposal, selection, context);
+
+    assertThat(exact.outcome()).isEqualTo(Outcome.EXACT);
+    assertThat(exact.correctedFields().any()).isFalse();
+
+    ((ObjectNode) selection.path("items").get(0)).putNull("due");
+    var corrected = classifier.classify(proposal, selection, context);
+
+    assertThat(corrected.outcome()).isEqualTo(Outcome.CORRECTED);
+    assertThat(corrected.correctedFields().due()).isTrue();
+  }
+
+  @Test
   void versionTwoUnboundPreciseAndImpreciseDatesRequireUserResolution() {
     proposal = versionTwoTaskProposal();
     context = versionTwoReviewContext();
@@ -248,6 +265,65 @@ class AnalysisReviewOutcomeClassifierTest {
 
     proposal.putArray("relationCandidates");
     ((ObjectNode) selection.at("/items/0/due")).put("dueLocalDate", "2026-11-26");
+    assertThat(classifier.classify(proposal, selection, context).outcome())
+        .isEqualTo(Outcome.UNCLASSIFIABLE);
+  }
+
+  @Test
+  void eventScheduleSelectionIsUnclassifiableUntilTemporalReviewPolicyIsVersioned() {
+    ObjectNode item = (ObjectNode) selection.path("items").get(0);
+    item.put("kind", "EVENT").putNull("due");
+    item.putObject("eventSchedule")
+        .put("mode", "TIMED")
+        .put("originalStart", "2026-08-24T18:00:00+09:00")
+        .putNull("originalEnd")
+        .put("timeZone", "Asia/Seoul")
+        .put("startInstant", "2026-08-24T09:00:00Z")
+        .putNull("endInstant")
+        .putNull("startLocalDate")
+        .putNull("endLocalDateExclusive");
+
+    assertThat(classifier.classify(proposal, selection, context).outcome())
+        .isEqualTo(Outcome.UNCLASSIFIABLE);
+  }
+
+  @Test
+  void versionThreeEventBindingRemainsUnclassifiableWithoutAnApprovedComparisonPolicy() {
+    proposal = versionTwoTaskProposal().put("schemaVersion", "3");
+    ((ObjectNode) proposal.at("/typeCandidates/0")).put("value", "EVENT");
+    ((ObjectNode) proposal.at("/dateCandidates/0"))
+        .put("value", "2026-08-24T18:00:00+09:00")
+        .put("precision", "EXACT_TIME")
+        .put("timeSpecified", true);
+    ObjectNode proposalItem = (ObjectNode) proposal.at("/itemCandidates/0");
+    proposalItem
+        .put("kind", "EVENT")
+        .putNull("dueDateCandidateId")
+        .putNull("suggestedEventScheduleCandidateId");
+    proposalItem
+        .putArray("eventScheduleCandidates")
+        .addObject()
+        .put("candidateId", "event-schedule-1")
+        .put("mode", "TIMED")
+        .put("startDateCandidateId", "date-1")
+        .putNull("end")
+        .put("score", 0.9);
+
+    selection.put("selectedType", "EVENT");
+    ObjectNode selectedItem = (ObjectNode) selection.at("/items/0");
+    selectedItem.put("kind", "EVENT").putNull("due");
+    selectedItem
+        .putObject("eventSchedule")
+        .put("mode", "TIMED")
+        .put("originalStart", "2026-08-24T18:00:00+09:00")
+        .putNull("originalEnd")
+        .put("timeZone", "Asia/Seoul")
+        .put("startInstant", "2026-08-24T09:00:00Z")
+        .putNull("endInstant")
+        .putNull("startLocalDate")
+        .putNull("endLocalDateExclusive");
+    context = new ReviewContext("3", MEMO_ID, 1, MEMO_ID, 1);
+
     assertThat(classifier.classify(proposal, selection, context).outcome())
         .isEqualTo(Outcome.UNCLASSIFIABLE);
   }
@@ -409,6 +485,14 @@ class AnalysisReviewOutcomeClassifierTest {
     ObjectNode value = taskProposal().put("schemaVersion", "2");
     ((ObjectNode) value.path("dateCandidates").get(0)).put("candidateId", "date-1");
     ((ObjectNode) value.path("itemCandidates").get(0)).put("dueDateCandidateId", "date-1");
+    return value;
+  }
+
+  private ObjectNode versionThreeTaskProposal() {
+    ObjectNode value = versionTwoTaskProposal().put("schemaVersion", "3");
+    ObjectNode item = (ObjectNode) value.path("itemCandidates").get(0);
+    item.putArray("eventScheduleCandidates");
+    item.putNull("suggestedEventScheduleCandidateId");
     return value;
   }
 

@@ -1,9 +1,12 @@
 package local.personalmemo.analysis.domain;
 
+import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -45,6 +48,8 @@ public class AnalysisProposalValidator {
       Set.of(
           "candidateId",
           "dueDateCandidateId",
+          "eventScheduleCandidates",
+          "suggestedEventScheduleCandidateId",
           "kind",
           "title",
           "sourceSpan",
@@ -52,6 +57,10 @@ public class AnalysisProposalValidator {
           "object",
           "confidence");
   private static final Set<String> SOURCE_SPAN_FIELDS = Set.of("start", "end");
+  private static final Set<String> EVENT_SCHEDULE_CANDIDATE_FIELDS =
+      Set.of("candidateId", "mode", "startDateCandidateId", "end", "score");
+  private static final Set<String> EVENT_SCHEDULE_END_FIELDS =
+      Set.of("dateCandidateId", "boundary");
   private static final Set<String> RELATION_CANDIDATE_FIELDS =
       Set.of("sourceCandidateId", "targetType", "targetId", "relationType", "score");
   private static final Set<String> ITEM_KINDS =
@@ -60,6 +69,9 @@ public class AnalysisProposalValidator {
       Set.of("TASK", "EVENT", "INFORMATION", "IDEA", "RECORD", "UNKNOWN");
   private static final Set<String> DATE_PRECISIONS =
       Set.of("EXACT_TIME", "DATE_ONLY", "RELATIVE_EXACT", "APPROXIMATE", "UNKNOWN");
+  private static final Set<String> EVENT_SCHEDULE_MODES = Set.of("TIMED", "ALL_DAY");
+  private static final Set<String> EVENT_SCHEDULE_END_BOUNDARIES =
+      Set.of("EXCLUSIVE_AT_VALUE", "INCLUSIVE_THROUGH_VALUE");
   private static final Set<String> AMBIGUITY_REASONS =
       Set.of(
           "LOW_TYPE_MARGIN",
@@ -81,8 +93,8 @@ public class AnalysisProposalValidator {
     requireObject(proposal, "proposal");
     rejectUnknownFields(proposal, "proposal", PROPOSAL_FIELDS);
     String schemaVersion = requireText(proposal, "schemaVersion", 1, 16);
-    if (!Set.of("1", "2").contains(schemaVersion)) {
-      fail("schemaVersion must be 1 or 2.");
+    if (!Set.of("1", "2", "3").contains(schemaVersion)) {
+      fail("schemaVersion must be 1, 2, or 3.");
     }
     if (!memoId.equals(parseUuid(requireText(proposal, "memoId", 1, 64), "memoId"))) {
       fail("memoId does not match the analyzed memo.");
@@ -100,11 +112,15 @@ public class AnalysisProposalValidator {
     ValidatedDateCandidates dates =
         validateDateCandidates(proposal.path("dateCandidates"), schemaVersion);
     validateTagCandidates(proposal.path("tagCandidates"));
+    validateAmbiguityReasons(proposal.path("ambiguityReasons"), "ambiguityReasons");
     Set<String> itemCandidateIds =
         validateItemCandidates(
-            proposal.path("itemCandidates"), contentLength, schemaVersion, dates);
+            proposal.path("itemCandidates"),
+            contentLength,
+            schemaVersion,
+            dates,
+            reasonValues(proposal.path("ambiguityReasons")));
     validateRelationCandidates(proposal.path("relationCandidates"), itemCandidateIds);
-    validateAmbiguityReasons(proposal.path("ambiguityReasons"), "ambiguityReasons");
     validateAmbiguityConsistency(proposal);
     validateProviderMetadata(proposal.path("providerMetadata"));
   }
@@ -317,17 +333,18 @@ public class AnalysisProposalValidator {
     requireArray(candidates, "dateCandidates", 0, 5);
     Set<String> candidateIds = new HashSet<>();
     Set<String> preciseCandidateIds = new HashSet<>();
+    Map<String, ValidatedDateCandidate> candidatesById = new HashMap<>();
     for (JsonNode candidate : candidates) {
       requireObject(candidate, "dateCandidates[]");
       rejectUnknownFields(candidate, "dateCandidates[]", DATE_CANDIDATE_FIELDS);
       String candidateId = null;
-      if ("2".equals(schemaVersion)) {
+      if (!"1".equals(schemaVersion)) {
         candidateId = requireText(candidate, "candidateId", 1, 100);
         if (!candidateIds.add(candidateId)) {
           fail("dateCandidates[].candidateId must be unique.");
         }
       } else if (candidate.has("candidateId")) {
-        fail("dateCandidates[].candidateId is only supported by schema version 2.");
+        fail("dateCandidates[].candidateId is only supported by schema version 2 or 3.");
       }
       requireText(candidate, "surfaceText", 1, 200);
       String precision = requireText(candidate, "precision", 1, 32);
@@ -346,8 +363,16 @@ public class AnalysisProposalValidator {
           && Set.of("DATE_ONLY", "EXACT_TIME", "RELATIVE_EXACT").contains(precision)) {
         preciseCandidateIds.add(candidateId);
       }
+      if (candidateId != null) {
+        candidatesById.put(
+            candidateId,
+            new ValidatedDateCandidate(
+                precision,
+                candidate.path("value").isTextual() ? candidate.path("value").asText() : null));
+      }
     }
-    return new ValidatedDateCandidates(Set.copyOf(candidateIds), Set.copyOf(preciseCandidateIds));
+    return new ValidatedDateCandidates(
+        Set.copyOf(candidateIds), Set.copyOf(preciseCandidateIds), Map.copyOf(candidatesById));
   }
 
   private void validateCandidateDateValue(JsonNode value, String precision, boolean timeSpecified) {
@@ -414,9 +439,14 @@ public class AnalysisProposalValidator {
   }
 
   private Set<String> validateItemCandidates(
-      JsonNode candidates, int contentLength, String schemaVersion, ValidatedDateCandidates dates) {
+      JsonNode candidates,
+      int contentLength,
+      String schemaVersion,
+      ValidatedDateCandidates dates,
+      Set<String> proposalAmbiguityReasons) {
     requireArray(candidates, "itemCandidates", 0, 3);
     Set<String> candidateIds = new HashSet<>();
+    Set<String> eventScheduleCandidateIds = new HashSet<>();
     for (JsonNode candidate : candidates) {
       requireObject(candidate, "itemCandidates[]");
       rejectUnknownFields(candidate, "itemCandidates[]", ITEM_CANDIDATE_FIELDS);
@@ -430,6 +460,13 @@ public class AnalysisProposalValidator {
       }
       requireText(candidate, "title", 1, 200);
       validateDueDateCandidateReference(candidate, kind, schemaVersion, dates);
+      validateEventScheduleCandidates(
+          candidate,
+          kind,
+          schemaVersion,
+          dates,
+          eventScheduleCandidateIds,
+          proposalAmbiguityReasons);
       validateSourceSpan(candidate.path("sourceSpan"), contentLength);
       requireNullableText(candidate.path("action"), "itemCandidates[].action", 200);
       requireNullableText(candidate.path("object"), "itemCandidates[].object", 200);
@@ -442,13 +479,13 @@ public class AnalysisProposalValidator {
       JsonNode candidate, String kind, String schemaVersion, ValidatedDateCandidates dates) {
     if ("1".equals(schemaVersion)) {
       if (candidate.has("dueDateCandidateId")) {
-        fail("itemCandidates[].dueDateCandidateId is only supported by schema version 2.");
+        fail("itemCandidates[].dueDateCandidateId is only supported by schema version 2 or 3.");
       }
       return;
     }
 
     if (!candidate.has("dueDateCandidateId")) {
-      fail("itemCandidates[].dueDateCandidateId is required by schema version 2.");
+      fail("itemCandidates[].dueDateCandidateId is required by schema version 2 or 3.");
     }
     JsonNode reference = candidate.path("dueDateCandidateId");
     if (reference.isNull()) {
@@ -466,6 +503,149 @@ public class AnalysisProposalValidator {
     if (!dates.preciseCandidateIds().contains(reference.asText())) {
       fail("An approximate or unknown date candidate cannot be proposed as a task due date.");
     }
+  }
+
+  private void validateEventScheduleCandidates(
+      JsonNode item,
+      String kind,
+      String schemaVersion,
+      ValidatedDateCandidates dates,
+      Set<String> globalCandidateIds,
+      Set<String> proposalAmbiguityReasons) {
+    if (!"3".equals(schemaVersion)) {
+      if (item.has("eventScheduleCandidates") || item.has("suggestedEventScheduleCandidateId")) {
+        fail("EVENT schedule proposal fields are only supported by schema version 3.");
+      }
+      return;
+    }
+    if (!item.has("eventScheduleCandidates") || !item.has("suggestedEventScheduleCandidateId")) {
+      fail("Schema version 3 requires EVENT schedule proposal fields on every item.");
+    }
+
+    JsonNode scheduleCandidates = item.path("eventScheduleCandidates");
+    requireArray(scheduleCandidates, "itemCandidates[].eventScheduleCandidates", 0, 5);
+    JsonNode suggested = item.path("suggestedEventScheduleCandidateId");
+    if (!suggested.isNull()) {
+      fail("A suggested EVENT schedule is disabled until the temporal binding policy is approved.");
+    }
+    if (!"EVENT".equals(kind) && !scheduleCandidates.isEmpty()) {
+      fail("Only an EVENT item may contain EVENT schedule candidates.");
+    }
+    if (scheduleCandidates.size() > 1 && !proposalAmbiguityReasons.contains("CONFLICTING_DATES")) {
+      fail("Multiple EVENT schedule candidates must carry CONFLICTING_DATES.");
+    }
+
+    Set<EventScheduleSemanticKey> semanticCandidates = new HashSet<>();
+    for (JsonNode scheduleCandidate : scheduleCandidates) {
+      EventScheduleSemanticKey semantic =
+          validateEventScheduleCandidate(scheduleCandidate, dates, globalCandidateIds);
+      if (!semanticCandidates.add(semantic)) {
+        fail("EVENT schedule candidates must not contain duplicate semantic alternatives.");
+      }
+    }
+  }
+
+  private EventScheduleSemanticKey validateEventScheduleCandidate(
+      JsonNode candidate, ValidatedDateCandidates dates, Set<String> globalCandidateIds) {
+    requireObject(candidate, "itemCandidates[].eventScheduleCandidates[]");
+    rejectUnknownFields(
+        candidate, "itemCandidates[].eventScheduleCandidates[]", EVENT_SCHEDULE_CANDIDATE_FIELDS);
+    String candidateId = requireText(candidate, "candidateId", 1, 100);
+    if (!globalCandidateIds.add(candidateId)) {
+      fail("EVENT schedule candidate IDs must be unique within a proposal.");
+    }
+    String mode = requireText(candidate, "mode", 1, 16);
+    if (!EVENT_SCHEDULE_MODES.contains(mode)) {
+      fail("EVENT schedule candidates contain an unsupported mode.");
+    }
+    String startDateCandidateId = requireText(candidate, "startDateCandidateId", 1, 100);
+    ValidatedDateCandidate start = dates.candidatesById().get(startDateCandidateId);
+    if (start == null) {
+      fail("An EVENT schedule start references an unknown date candidate.");
+    }
+    requireScore(candidate.path("score"), "itemCandidates[].eventScheduleCandidates[].score");
+
+    JsonNode endNode = candidate.path("end");
+    ValidatedEventScheduleEnd end = validateEventScheduleEnd(endNode, mode, dates);
+    return switch (mode) {
+      case "TIMED" -> validateTimedEventScheduleCandidate(start, end);
+      case "ALL_DAY" -> validateAllDayEventScheduleCandidate(start, end);
+      default -> throw new IllegalStateException("Unexpected EVENT schedule mode.");
+    };
+  }
+
+  private ValidatedEventScheduleEnd validateEventScheduleEnd(
+      JsonNode endNode, String mode, ValidatedDateCandidates dates) {
+    if (endNode.isNull()) {
+      return null;
+    }
+    requireObject(endNode, "itemCandidates[].eventScheduleCandidates[].end");
+    rejectUnknownFields(
+        endNode, "itemCandidates[].eventScheduleCandidates[].end", EVENT_SCHEDULE_END_FIELDS);
+    String dateCandidateId = requireText(endNode, "dateCandidateId", 1, 100);
+    ValidatedDateCandidate dateCandidate = dates.candidatesById().get(dateCandidateId);
+    if (dateCandidate == null) {
+      fail("An EVENT schedule end references an unknown date candidate.");
+    }
+    String boundary = requireText(endNode, "boundary", 1, 32);
+    if (!EVENT_SCHEDULE_END_BOUNDARIES.contains(boundary)) {
+      fail("An EVENT schedule end contains an unsupported boundary.");
+    }
+    if ("TIMED".equals(mode) && !"EXCLUSIVE_AT_VALUE".equals(boundary)) {
+      fail("A timed EVENT end must use EXCLUSIVE_AT_VALUE.");
+    }
+    return new ValidatedEventScheduleEnd(dateCandidate, boundary);
+  }
+
+  private EventScheduleSemanticKey validateTimedEventScheduleCandidate(
+      ValidatedDateCandidate start, ValidatedEventScheduleEnd end) {
+    if (!Set.of("EXACT_TIME", "RELATIVE_EXACT").contains(start.precision())) {
+      fail("A timed EVENT start must reference an exact timestamp candidate.");
+    }
+    OffsetDateTime startValue = OffsetDateTime.parse(start.value());
+    OffsetDateTime endValue = null;
+    if (end != null) {
+      if (!Set.of("EXACT_TIME", "RELATIVE_EXACT").contains(end.date().precision())) {
+        fail("A timed EVENT end must reference an exact timestamp candidate.");
+      }
+      endValue = OffsetDateTime.parse(end.date().value());
+      if (!endValue.toInstant().isAfter(startValue.toInstant())) {
+        fail("A timed EVENT end must be after its start.");
+      }
+    }
+    return new EventScheduleSemanticKey(
+        "TIMED",
+        startValue.toInstant().toString(),
+        endValue == null ? null : endValue.toInstant().toString());
+  }
+
+  private EventScheduleSemanticKey validateAllDayEventScheduleCandidate(
+      ValidatedDateCandidate start, ValidatedEventScheduleEnd end) {
+    if (!"DATE_ONLY".equals(start.precision())) {
+      fail("An all-day EVENT start must reference a date-only candidate.");
+    }
+    LocalDate startValue = LocalDate.parse(start.value());
+    LocalDate exclusiveEnd = null;
+    if (end != null) {
+      if (!"DATE_ONLY".equals(end.date().precision())) {
+        fail("An all-day EVENT end must reference a date-only candidate.");
+      }
+      LocalDate endValue = LocalDate.parse(end.date().value());
+      try {
+        exclusiveEnd =
+            "INCLUSIVE_THROUGH_VALUE".equals(end.boundary()) ? endValue.plusDays(1) : endValue;
+      } catch (DateTimeException exception) {
+        fail("An inclusive all-day EVENT end is outside the supported date range.");
+      }
+      if (exclusiveEnd.getYear() < 0 || exclusiveEnd.getYear() > 9999) {
+        fail("An inclusive all-day EVENT end is outside the supported date range.");
+      }
+      if (!exclusiveEnd.isAfter(startValue)) {
+        fail("An all-day EVENT exclusive end must be after its start.");
+      }
+    }
+    return new EventScheduleSemanticKey(
+        "ALL_DAY", startValue.toString(), exclusiveEnd == null ? null : exclusiveEnd.toString());
   }
 
   private void validateSourceSpan(JsonNode sourceSpan, int contentLength) {
@@ -604,6 +784,14 @@ public class AnalysisProposalValidator {
     throw DomainException.invalid("INVALID_ANALYSIS_PROPOSAL", reason);
   }
 
+  private record ValidatedDateCandidate(String precision, String value) {}
+
   private record ValidatedDateCandidates(
-      Set<String> candidateIds, Set<String> preciseCandidateIds) {}
+      Set<String> candidateIds,
+      Set<String> preciseCandidateIds,
+      Map<String, ValidatedDateCandidate> candidatesById) {}
+
+  private record ValidatedEventScheduleEnd(ValidatedDateCandidate date, String boundary) {}
+
+  private record EventScheduleSemanticKey(String mode, String start, String exclusiveEnd) {}
 }

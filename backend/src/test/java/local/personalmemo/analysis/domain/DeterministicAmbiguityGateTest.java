@@ -20,7 +20,7 @@ class DeterministicAmbiguityGateTest {
 
   @Test
   void routesNoSignalAndReviewableDateOmissionsLocally() {
-    assertThat(gate.version()).isEqualTo("field-policy-v1");
+    assertThat(gate.version()).isEqualTo("field-policy-v2");
     assertThat(gate.route(Set.of())).isEqualTo(AnalysisRoute.LOCAL_REVIEW);
     assertThat(gate.route(LOCAL_ONLY_SIGNALS)).isEqualTo(AnalysisRoute.LOCAL_REVIEW);
   }
@@ -60,6 +60,36 @@ class DeterministicAmbiguityGateTest {
 
     assertThat(signals).contains(AmbiguityReason.IMPRECISE_DATE);
     assertThat(gate.route(signals)).isEqualTo(AnalysisRoute.CLOUD_ENRICH);
+  }
+
+  @Test
+  void derivesCompletenessSignalsFromContentFreeProviderMetadata() {
+    ObjectNode proposal = emptyProposal();
+    proposal.set(
+        "providerMetadata",
+        json.createObjectNode()
+            .put("classificationBasis", "DEFAULT_FALLBACK")
+            .put("unparsedTemporalCueCount", 1)
+            .put("unrecognizedActionCueCount", 1));
+
+    var signals = gate.routingSignals(proposal);
+
+    assertThat(signals)
+        .containsExactlyInAnyOrder(AmbiguityReason.IMPRECISE_DATE, AmbiguityReason.MISSING_ACTION);
+    assertThat(gate.route(signals)).isEqualTo(AnalysisRoute.CLOUD_ENRICH);
+  }
+
+  @Test
+  void explicitRuleWithZeroCoverageGapsRemainsLocallyReviewable() {
+    ObjectNode proposal = emptyProposal();
+    proposal.set(
+        "providerMetadata",
+        json.createObjectNode()
+            .put("classificationBasis", "EXPLICIT_RULE")
+            .put("unparsedTemporalCueCount", 0)
+            .put("unrecognizedActionCueCount", 0));
+
+    assertThat(gate.routingSignals(proposal)).isEmpty();
   }
 
   @Test

@@ -9,6 +9,7 @@ import java.time.LocalDate;
 import java.util.List;
 import local.personalmemo.analysis.api.AnalysisDtos.Apply;
 import local.personalmemo.analysis.api.AnalysisDtos.Due;
+import local.personalmemo.analysis.api.AnalysisDtos.EventSchedule;
 import local.personalmemo.analysis.api.AnalysisDtos.Item;
 import local.personalmemo.analysis.api.AnalysisDtos.SelectedRelation;
 import local.personalmemo.common.error.DomainException;
@@ -53,6 +54,113 @@ class AnalysisApplicationValidatorTest {
     assertThat(canonical.items().getFirst().due().timeZone()).isEqualTo("America/New_York");
     assertThat(canonical.items().getFirst().due().dueLocalDate())
         .isEqualTo(LocalDate.of(2026, 11, 25));
+  }
+
+  @Test
+  void timedEventPreservesAnExplicitMissingEndWithoutInventingDuration() {
+    EventSchedule schedule =
+        new EventSchedule("TIMED", "2026-08-24T18:00:00+09:00", null, "Asia/Seoul");
+
+    var validated = validator.validate(eventApply(schedule)).items().getFirst().eventSchedule();
+
+    assertThat(validated.startInstant()).isEqualTo(Instant.parse("2026-08-24T09:00:00Z"));
+    assertThat(validated.endInstant()).isNull();
+    assertThat(validated.startLocalDate()).isNull();
+  }
+
+  @Test
+  void timedEventRejectsFractionalSecondsThatCannotBeRepresentedInRfc5545() {
+    EventSchedule fractionalStart =
+        new EventSchedule("TIMED", "2026-08-24T18:00:00.100+09:00", null, "Asia/Seoul");
+    EventSchedule fractionalEnd =
+        new EventSchedule(
+            "TIMED", "2026-08-24T18:00:00+09:00", "2026-08-24T19:00:00.100+09:00", "Asia/Seoul");
+
+    assertInvalidEvent(eventApply(fractionalStart), "INVALID_EVENT_SCHEDULE_PRECISION");
+    assertInvalidEvent(eventApply(fractionalEnd), "INVALID_EVENT_SCHEDULE_PRECISION");
+  }
+
+  @Test
+  void timedEventOffsetMustMatchTheImmutableRevisionZoneAndRejectDstGaps() {
+    EventSchedule mismatched =
+        new EventSchedule("TIMED", "2026-08-24T18:00:00+09:00", null, "Asia/Seoul");
+    var mismatchedSelection = validator.validate(eventApply(mismatched));
+
+    assertThatThrownBy(
+            () -> validator.canonicalizeDueTimeZone(mismatchedSelection, "America/New_York"))
+        .isInstanceOf(DomainException.class)
+        .extracting(error -> ((DomainException) error).code())
+        .isEqualTo("EVENT_SCHEDULE_ZONE_OFFSET_MISMATCH");
+
+    EventSchedule gap =
+        new EventSchedule("TIMED", "2026-03-08T02:30:00-05:00", null, "America/New_York");
+    var gapSelection = validator.validate(eventApply(gap));
+
+    assertThatThrownBy(() -> validator.canonicalizeDueTimeZone(gapSelection, "America/New_York"))
+        .isInstanceOf(DomainException.class)
+        .extracting(error -> ((DomainException) error).code())
+        .isEqualTo("EVENT_SCHEDULE_ZONE_OFFSET_MISMATCH");
+  }
+
+  @Test
+  void timedEventPreservesEitherExplicitOffsetDuringADstOverlap() {
+    for (String start : List.of("2026-11-01T01:30:00-04:00", "2026-11-01T01:30:00-05:00")) {
+      EventSchedule overlap = new EventSchedule("TIMED", start, null, "America/New_York");
+
+      var canonical =
+          validator.canonicalizeDueTimeZone(
+              validator.validate(eventApply(overlap)), "America/New_York");
+
+      assertThat(canonical.items().getFirst().eventSchedule().originalStart()).isEqualTo(start);
+    }
+  }
+
+  @Test
+  void allDayEventPreservesExclusiveEndAndCanonicalRevisionTimeZone() {
+    EventSchedule schedule = new EventSchedule("ALL_DAY", "2026-08-24", "2026-08-26", "Asia/Seoul");
+    var original = validator.validate(eventApply(schedule));
+
+    var canonical = validator.canonicalizeDueTimeZone(original, "America/New_York");
+    var validated = canonical.items().getFirst().eventSchedule();
+
+    assertThat(validated.startLocalDate()).isEqualTo(LocalDate.of(2026, 8, 24));
+    assertThat(validated.endLocalDateExclusive()).isEqualTo(LocalDate.of(2026, 8, 26));
+    assertThat(validated.timeZone()).isEqualTo("America/New_York");
+  }
+
+  @Test
+  void rejectsEventScheduleWithoutVersionWrongKindOrInvalidRange() {
+    EventSchedule timed =
+        new EventSchedule(
+            "TIMED", "2026-08-24T18:00:00+09:00", "2026-08-24T17:00:00+09:00", "Asia/Seoul");
+    assertInvalidEvent(eventApply(timed), "INVALID_EVENT_SCHEDULE_RANGE");
+
+    EventSchedule allDay = new EventSchedule("ALL_DAY", "2026-08-24", "2026-08-24", "Asia/Seoul");
+    assertInvalidEvent(eventApply(allDay), "INVALID_EVENT_SCHEDULE_RANGE");
+    EventSchedule validAllDay =
+        new EventSchedule("ALL_DAY", "2026-08-24", "2026-08-25", "Asia/Seoul");
+
+    Apply taskWithSchedule =
+        new Apply(
+            1,
+            "TASK",
+            "과제 제출",
+            List.of(),
+            List.of(new Item(null, "TASK", "과제 제출", null, validAllDay)),
+            List.of(),
+            "2");
+    assertInvalidEvent(taskWithSchedule, "EVENT_SCHEDULE_REQUIRES_EVENT");
+
+    Apply missingVersion =
+        new Apply(
+            1,
+            "EVENT",
+            "회의",
+            List.of(),
+            List.of(new Item(null, "EVENT", "회의", null, validAllDay)),
+            List.of(),
+            null);
+    assertInvalidEvent(missingVersion, "EVENT_SCHEDULE_VERSION_REQUIRED");
   }
 
   @Test
@@ -135,6 +243,17 @@ class AnalysisApplicationValidatorTest {
         List.of());
   }
 
+  private Apply eventApply(EventSchedule schedule) {
+    return new Apply(
+        1,
+        "EVENT",
+        "회의",
+        List.of(),
+        List.of(new Item(null, "EVENT", "회의", null, schedule)),
+        List.of(),
+        "2");
+  }
+
   private void assertInvalidCandidateId(String candidateId) {
     assertThatThrownBy(() -> validator.validate(applyWithCandidateId(candidateId)))
         .isInstanceOfSatisfying(
@@ -144,6 +263,13 @@ class AnalysisApplicationValidatorTest {
 
   private void assertInvalidDate(Due due, String expectedCode) {
     assertThatThrownBy(() -> validator.validate(apply(due)))
+        .isInstanceOfSatisfying(
+            DomainException.class,
+            exception -> assertThat(exception.code()).isEqualTo(expectedCode));
+  }
+
+  private void assertInvalidEvent(Apply apply, String expectedCode) {
+    assertThatThrownBy(() -> validator.validate(apply))
         .isInstanceOfSatisfying(
             DomainException.class,
             exception -> assertThat(exception.code()).isEqualTo(expectedCode));

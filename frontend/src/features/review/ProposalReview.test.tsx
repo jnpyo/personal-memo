@@ -1,7 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { Proposal, RelationReviewCandidate } from '../../shared/api/types';
-import { createReviewDraft } from './reviewModel';
+import {
+  changeItemEventSchedule,
+  changeItemKind,
+  createReviewDraft,
+  eventScheduleFromProposalCandidate,
+} from './reviewModel';
 import { ProposalReview, shouldFocusStepHeadingOnInitialOpen } from './ProposalReview';
 
 const taskProposal: Proposal = {
@@ -31,6 +36,8 @@ const taskProposal: Proposal = {
     {
       candidateId: 'item-1',
       dueDateCandidateId: null,
+      eventScheduleCandidates: [],
+      suggestedEventScheduleCandidateId: null,
       kind: 'TASK',
       title: '운영체제 과제 제출',
       sourceSpan: null,
@@ -70,6 +77,15 @@ const externalCloudEvidence = {
   cloudResolvedFields: [],
   receivedRoutingPolicyVersion: 'field-policy-v1',
   receivedRoutingReasons: ['IMPRECISE_DATE'],
+};
+
+const localMachineCloudEvidence = {
+  ...noNetworkCloudEvidence,
+  cloudTransferMode: 'LOCAL_MACHINE_MEMO_CONTENT',
+  cloudGatewayVersion: 'ollama-local-gateway-v1',
+  cloudProviderId: 'ollama-local',
+  cloudModelVersion: 'synthetic-local-model-v1',
+  cloudConsentPolicyVersion: 'local-machine-memo-v1',
 };
 
 function explicitDateProposal(shared = false): Proposal {
@@ -112,6 +128,57 @@ function explicitDateProposal(shared = false): Proposal {
         candidateId: 'item-2',
         dueDateCandidateId: shared ? 'date-1' : 'date-2',
         title: '발표 준비',
+      },
+    ],
+  };
+}
+
+function eventProposalV3(): Proposal {
+  return {
+    ...taskProposal,
+    schemaVersion: '3',
+    suggestedTitle: { value: '디스코드 접속하기', confidence: 0.94, needsConfirmation: true },
+    typeCandidates: [{ value: 'EVENT', score: 0.94 }],
+    dateCandidates: [
+      {
+        candidateId: 'date-start',
+        surfaceText: '오늘 오후 6시',
+        value: '2026-08-24T18:00:00+09:00',
+        precision: 'EXACT_TIME',
+        timeSpecified: true,
+        confidence: 0.93,
+        ambiguityReasons: [],
+      },
+      {
+        candidateId: 'date-end',
+        surfaceText: '오늘 오후 7시',
+        value: '2026-08-24T19:00:00+09:00',
+        precision: 'EXACT_TIME',
+        timeSpecified: true,
+        confidence: 0.9,
+        ambiguityReasons: [],
+      },
+    ],
+    itemCandidates: [
+      {
+        ...taskProposal.itemCandidates[0],
+        candidateId: 'item-event',
+        dueDateCandidateId: null,
+        eventScheduleCandidates: [
+          {
+            candidateId: 'schedule-1',
+            mode: 'TIMED',
+            startDateCandidateId: 'date-start',
+            end: {
+              dateCandidateId: 'date-end',
+              boundary: 'EXCLUSIVE_AT_VALUE',
+            },
+            score: 0.91,
+          },
+        ],
+        suggestedEventScheduleCandidateId: 'schedule-1',
+        kind: 'EVENT',
+        title: '디스코드 접속하기',
       },
     ],
   };
@@ -172,6 +239,141 @@ describe('proposal review dialog', () => {
     expect(markup).toContain('마감 11월 25일 오후 6시 → 2026-11-25T18:00:00+09:00');
     expect(markup).not.toContain('(DATE_ONLY)');
     expect(markup).not.toContain('(EXACT_TIME)');
+  });
+
+  it('shows an explicitly reviewed EVENT schedule and immutable revision time zone', () => {
+    let review = createReviewDraft('event-proposal', taskProposal);
+    review = changeItemKind(review, 0, 'EVENT');
+    review = changeItemEventSchedule(review, 0, {
+      mode: 'TIMED',
+      start: '2026-08-24T18:00:00+09:00',
+      end: '',
+    });
+    const markup = renderToStaticMarkup(
+      <ProposalReview
+        review={review}
+        sourceTimeZone="Asia/Seoul"
+        relationReviewCandidates={[]}
+        relationReviewLoading={false}
+        relationReviewError={null}
+        busy={false}
+        onChange={vi.fn()}
+        onApply={vi.fn()}
+        onPostpone={vi.fn()}
+        onReject={vi.fn()}
+        onRetryRelationReview={vi.fn()}
+        onTransientDirtyChange={vi.fn()}
+        feedback={null}
+        onDismissFeedback={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('일정 2026-08-24T18:00:00+09:00 · Asia/Seoul');
+    expect(markup).toContain('예, 이대로 적용');
+  });
+
+  it('offers a retry when an EVENT source time zone cannot be restored', () => {
+    let review = createReviewDraft('event-proposal', taskProposal);
+    review = changeItemKind(review, 0, 'EVENT');
+    review = changeItemEventSchedule(review, 0, {
+      mode: 'TIMED',
+      start: '2026-08-24T18:00:00+09:00',
+      end: '',
+    });
+    const markup = renderToStaticMarkup(
+      <ProposalReview
+        review={review}
+        sourceTimeZone={null}
+        sourceTimeZoneError="temporary failure"
+        relationReviewCandidates={[]}
+        relationReviewLoading={false}
+        relationReviewError={null}
+        busy={false}
+        onChange={vi.fn()}
+        onApply={vi.fn()}
+        onPostpone={vi.fn()}
+        onReject={vi.fn()}
+        onRetryRelationReview={vi.fn()}
+        onRetrySourceTimeZone={vi.fn()}
+        onTransientDirtyChange={vi.fn()}
+        feedback={null}
+        onDismissFeedback={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('시간대 다시 불러오기');
+    expect(markup).not.toContain('temporary failure');
+    expect(markup).toContain('class="approve-button" disabled=""');
+  });
+
+  it('shows v3 EVENT alternatives as untrusted and keeps every schedule unselected', () => {
+    const onApply = vi.fn();
+    const eventProposal = eventProposalV3();
+    const review = createReviewDraft('event-proposal-v3', eventProposal);
+    const markup = renderToStaticMarkup(
+      <ProposalReview
+        review={review}
+        sourceTimeZone="Asia/Seoul"
+        relationReviewCandidates={[]}
+        relationReviewLoading={false}
+        relationReviewError={null}
+        busy={false}
+        onChange={vi.fn()}
+        onApply={onApply}
+        onPostpone={vi.fn()}
+        onReject={vi.fn()}
+        onRetryRelationReview={vi.fn()}
+        onTransientDirtyChange={vi.fn()}
+        feedback={null}
+        onDismissFeedback={vi.fn()}
+      />,
+    );
+
+    expect(review.items[0].eventSchedule).toBeNull();
+    expect(markup).toContain('AI 일정 후보 · 아직 미적용');
+    expect(markup).toContain('AI 추천 후보 · 신뢰하지 않은 제안');
+    expect(markup).toContain('이 후보 사용');
+    expect(markup).toContain('시간 미정으로 저장');
+    expect(markup).toContain('수정한 내용 승인·적용');
+    expect(markup).not.toContain('예, 이대로 적용');
+    expect(markup).not.toContain('안전하게 연결하지 못해 자동 적용하지');
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('renders a v3 schedule only after the explicit candidate action has changed the draft', () => {
+    const eventProposal = eventProposalV3();
+    const candidate = eventProposal.itemCandidates[0].eventScheduleCandidates[0];
+    let review = createReviewDraft('event-proposal-v3', eventProposal);
+    review = changeItemEventSchedule(
+      review,
+      0,
+      eventScheduleFromProposalCandidate(eventProposal, candidate),
+      candidate.candidateId,
+    );
+    const markup = renderToStaticMarkup(
+      <ProposalReview
+        review={review}
+        sourceTimeZone="Asia/Seoul"
+        relationReviewCandidates={[]}
+        relationReviewLoading={false}
+        relationReviewError={null}
+        busy={false}
+        onChange={vi.fn()}
+        onApply={vi.fn()}
+        onPostpone={vi.fn()}
+        onReject={vi.fn()}
+        onRetryRelationReview={vi.fn()}
+        onTransientDirtyChange={vi.fn()}
+        feedback={null}
+        onDismissFeedback={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('이 후보 사용 중');
+    expect(markup).toContain('AI 일정 후보에서 선택됨');
+    expect(markup).toContain('value="2026-08-24T18:00:00+09:00"');
+    expect(markup).toContain('value="2026-08-24T19:00:00+09:00"');
+    expect(markup).toContain('메모 revision의 시간대 Asia/Seoul로 저장합니다.');
   });
 
   it('supports one explicit v2 date shared by multiple task candidates', () => {
@@ -374,6 +576,38 @@ describe('proposal review dialog', () => {
     expect(markup).toContain('예, 이대로 적용');
     expect(markup).not.toContain('보완 분석을 완료하지 못했습니다.');
     expect(markup).not.toContain('검증된 로컬 제안만 표시됩니다.');
+  });
+
+  it('labels a successful localhost model assist without changing explicit approval', () => {
+    const markup = renderProposal({
+      ...taskProposal,
+      providerMetadata: {
+        ...localMachineCloudEvidence,
+        cloudOutcome: 'SUCCESS',
+      },
+    });
+
+    expect(markup).toContain('로컬 LLM 보조 제안');
+    expect(markup).toContain('예, 이대로 적용');
+    expect(markup).toContain('아직 제안일 뿐입니다.');
+    expect(markup).not.toContain('보완 분석을 완료하지 못했습니다.');
+  });
+
+  it('keeps a failed localhost UNKNOWN result in detailed review without the success badge', () => {
+    const markup = renderProposal({
+      ...taskProposal,
+      typeCandidates: [{ value: 'UNKNOWN', score: 0.4 }],
+      itemCandidates: [],
+      providerMetadata: {
+        ...localMachineCloudEvidence,
+        cloudOutcome: 'TIMEOUT',
+      },
+    });
+
+    expect(markup).toContain('보완 분석을 완료하지 못했습니다.');
+    expect(markup).toContain('AI가 유형을 확정하지 못했어요.');
+    expect(markup).not.toContain('로컬 LLM 보조 제안');
+    expect(markup).not.toContain('예, 이대로 적용');
   });
 
   it('fails closed for partial external cloud evidence', () => {

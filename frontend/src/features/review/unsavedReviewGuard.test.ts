@@ -39,6 +39,13 @@ describe('unsaved review guard', () => {
     ['uncommitted tag input', { reviewEdited: false, transientReviewInput: true, memoEdit: false, unpersistedCapture: false }],
     ['memo edit', { reviewEdited: false, transientReviewInput: false, memoEdit: true, unpersistedCapture: false }],
     ['blocked local draft', { reviewEdited: false, transientReviewInput: false, memoEdit: false, unpersistedCapture: true }],
+    ['one-time calendar URL', {
+      reviewEdited: false,
+      transientReviewInput: false,
+      memoEdit: false,
+      unpersistedCapture: false,
+      calendarSharingProtected: true,
+    }],
   ])('includes %s in the unified workspace guard', (_label, input) => {
     expect(hasUnsavedWorkspaceChanges(input)).toBe(true);
   });

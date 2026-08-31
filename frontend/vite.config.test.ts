@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   BACKEND_NETWORK_ONLY_PATH_PATTERNS,
+  CALENDAR_FEED_DEV_PROXY_CONTEXT,
   isBackendNetworkOnlyPath,
   PWA_REGISTER_TYPE,
 } from './vite.config';
@@ -10,6 +11,12 @@ const applicationStyles = readFileSync(new URL('./src/app/styles.css', import.me
 
 function navigationFallbackIsDenied(pathname: string): boolean {
   return BACKEND_NETWORK_ONLY_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
+}
+
+function networkOnlyPatternDiagnostics(pathname: string): string {
+  return BACKEND_NETWORK_ONLY_PATH_PATTERNS
+    .map((pattern) => `${pattern.toString()}=${pattern.test(pathname)}`)
+    .join(', ');
 }
 
 describe('PWA backend routing boundary', () => {
@@ -26,18 +33,44 @@ describe('PWA backend routing boundary', () => {
   it('keeps backend API and OAuth endpoints network-only', () => {
     for (const pathname of [
       '/api/v1/auth/me',
+      '/api/v1/events/calendar.ics',
       '/api/v1/search/memos',
+      '/calendar/v1/feed.ics',
       '/oauth2/authorization/google',
       '/login/oauth2',
       '/login/oauth2/code/google',
     ]) {
-      expect(navigationFallbackIsDenied(pathname)).toBe(true);
-      expect(isBackendNetworkOnlyPath(pathname)).toBe(true);
+      expect(
+        navigationFallbackIsDenied(pathname),
+        `${pathname}: ${networkOnlyPatternDiagnostics(pathname)}`,
+      ).toBe(true);
+      expect(isBackendNetworkOnlyPath(pathname), pathname).toBe(true);
     }
+  });
+
+  it('denies the real query-bearing feed navigation before the app-shell fallback', () => {
+    const subscriptionTarget = `/calendar/v1/feed.ics?token=${'a'.repeat(42)}A`;
+
+    expect(
+      navigationFallbackIsDenied(subscriptionTarget),
+      networkOnlyPatternDiagnostics(subscriptionTarget),
+    ).toBe(true);
+    expect(isBackendNetworkOnlyPath('/calendar/v1/feed.ics')).toBe(true);
+  });
+
+  it('keeps the development feed proxy fixed to only the token-bearing endpoint', () => {
+    const proxyPattern = new RegExp(CALENDAR_FEED_DEV_PROXY_CONTEXT);
+
+    expect(proxyPattern.test(`/calendar/v1/feed.ics?token=${'a'.repeat(42)}A`)).toBe(true);
+    expect(proxyPattern.test('/calendar/v1/feed.ics')).toBe(true);
+    expect(proxyPattern.test('/calendar/v1/feed.ics/extra')).toBe(false);
+    expect(proxyPattern.test('/calendar/v1/feed.ics.evil')).toBe(false);
   });
 
   it('does not widen prefix matches beyond backend route boundaries', () => {
     expect(isBackendNetworkOnlyPath('/apian')).toBe(false);
+    expect(isBackendNetworkOnlyPath('/calendar/v1/feed.ics/extra')).toBe(false);
+    expect(isBackendNetworkOnlyPath('/calendar/v1/another.ics')).toBe(false);
     expect(isBackendNetworkOnlyPath('/oauth2callback')).toBe(false);
     expect(isBackendNetworkOnlyPath('/login/oauth2callback')).toBe(false);
   });

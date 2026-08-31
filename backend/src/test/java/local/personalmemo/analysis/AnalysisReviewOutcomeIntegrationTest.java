@@ -158,8 +158,7 @@ class AnalysisReviewOutcomeIntegrationTest extends PostgresIntegrationTestSuppor
         .isEqualTo(1);
 
     UUID mismatchedMemo = UUID.randomUUID();
-    UUID mismatchedProposal =
-        createProposal(mismatchedMemo, "mismatched-outcome", "11.25 OS assignment submit");
+    UUID mismatchedProposal = createProposal(mismatchedMemo, "mismatched-outcome", "11.25 OS과제 제출");
     var mismatchedApplied =
         applyProposal(
             mismatchedProposal,

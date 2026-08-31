@@ -62,6 +62,27 @@ function proposalV2Payload(): Record<string, unknown> {
   return payload;
 }
 
+function proposalV3Payload(): Record<string, unknown> {
+  const payload = structuredClone(proposalV2Payload());
+  payload.schemaVersion = '3';
+  const items = payload.itemCandidates as Record<string, unknown>[];
+  Object.assign(items[0]!, {
+    kind: 'EVENT',
+    dueDateCandidateId: null,
+    eventScheduleCandidates: [
+      {
+        candidateId: 'event-schedule-1',
+        mode: 'ALL_DAY',
+        startDateCandidateId: 'date-1',
+        end: null,
+        score: 0.88,
+      },
+    ],
+    suggestedEventScheduleCandidateId: 'event-schedule-1',
+  });
+  return payload;
+}
+
 describe('analysis proposal decoder', () => {
   it('accepts the supported schema and preserves the core review fields', () => {
     const decoded = decodeProposal(proposalPayload());
@@ -73,6 +94,8 @@ describe('analysis proposal decoder', () => {
       kind: 'TASK',
       title: '운영체제 과제',
       dueDateCandidateId: null,
+      eventScheduleCandidates: [],
+      suggestedEventScheduleCandidateId: null,
     });
   });
 
@@ -82,6 +105,28 @@ describe('analysis proposal decoder', () => {
     expect(decoded.schemaVersion).toBe('2');
     expect(decoded.dateCandidates[0]?.candidateId).toBe('date-1');
     expect(decoded.itemCandidates[0]?.dueDateCandidateId).toBe('date-1');
+    expect(decoded.itemCandidates[0]?.eventScheduleCandidates).toEqual([]);
+    expect(decoded.itemCandidates[0]?.suggestedEventScheduleCandidateId).toBeNull();
+  });
+
+  it('accepts schema v3 EVENT schedule candidates without selecting one', () => {
+    const decoded = decodeProposal(proposalV3Payload());
+
+    expect(decoded.schemaVersion).toBe('3');
+    expect(decoded.itemCandidates[0]).toMatchObject({
+      kind: 'EVENT',
+      dueDateCandidateId: null,
+      suggestedEventScheduleCandidateId: 'event-schedule-1',
+      eventScheduleCandidates: [
+        {
+          candidateId: 'event-schedule-1',
+          mode: 'ALL_DAY',
+          startDateCandidateId: 'date-1',
+          end: null,
+          score: 0.88,
+        },
+      ],
+    });
   });
 
   it('keeps schema v1 strict while preserving historical recovery', () => {
@@ -91,7 +136,7 @@ describe('analysis proposal decoder', () => {
     expect(() => decodeProposal(payload)).toThrowError(ProposalContractError);
   });
 
-  it.each([undefined, '3'])('rejects an unsupported schemaVersion %s', (schemaVersion) => {
+  it.each([undefined, '4'])('rejects an unsupported schemaVersion %s', (schemaVersion) => {
     const payload = { ...proposalPayload(), schemaVersion };
 
     expect(() => decodeProposal(payload)).toThrowError(ProposalContractError);
@@ -101,6 +146,134 @@ describe('analysis proposal decoder', () => {
     } catch (error) {
       expect(error).toMatchObject({ field: 'schemaVersion' });
     }
+  });
+
+  it('keeps v1 and v2 strict while requiring both v3 EVENT schedule fields', () => {
+    const v2WithV3Field = proposalV2Payload();
+    ((v2WithV3Field.itemCandidates as Record<string, unknown>[])[0])
+      .eventScheduleCandidates = [];
+    const missingCandidates = proposalV3Payload();
+    delete ((missingCandidates.itemCandidates as Record<string, unknown>[])[0])
+      .eventScheduleCandidates;
+    const missingSuggestion = proposalV3Payload();
+    delete ((missingSuggestion.itemCandidates as Record<string, unknown>[])[0])
+      .suggestedEventScheduleCandidateId;
+
+    expect(() => decodeProposal(v2WithV3Field)).toThrowError(ProposalContractError);
+    expect(() => decodeProposal(missingCandidates)).toThrowError(ProposalContractError);
+    expect(() => decodeProposal(missingSuggestion)).toThrowError(ProposalContractError);
+  });
+
+  it('rejects dangling, duplicate, or cross-item v3 EVENT schedule identifiers', () => {
+    const danglingStart = proposalV3Payload();
+    ((((danglingStart.itemCandidates as Record<string, unknown>[])[0])
+      .eventScheduleCandidates as Record<string, unknown>[])[0]).startDateCandidateId =
+      'date-missing';
+    const danglingSuggestion = proposalV3Payload();
+    ((danglingSuggestion.itemCandidates as Record<string, unknown>[])[0])
+      .suggestedEventScheduleCandidateId = 'event-schedule-missing';
+    const duplicateAcrossItems = proposalV3Payload();
+    const originalItem = (duplicateAcrossItems.itemCandidates as Record<string, unknown>[])[0]!;
+    (duplicateAcrossItems.itemCandidates as Record<string, unknown>[]).push({
+      ...structuredClone(originalItem),
+      candidateId: 'item-2',
+      title: '두 번째 일정',
+    });
+
+    expect(() => decodeProposal(danglingStart)).toThrowError(ProposalContractError);
+    expect(() => decodeProposal(danglingSuggestion)).toThrowError(ProposalContractError);
+    expect(() => decodeProposal(duplicateAcrossItems)).toThrowError(ProposalContractError);
+  });
+
+  it('rejects multiple unmarked or semantically duplicate v3 EVENT alternatives', () => {
+    const missingConflictReason = proposalV3Payload();
+    const missingReasonCandidates = ((missingConflictReason.itemCandidates as Record<string, unknown>[])[0])
+      .eventScheduleCandidates as Record<string, unknown>[];
+    missingReasonCandidates.push({
+      ...structuredClone(missingReasonCandidates[0]!),
+      candidateId: 'event-schedule-2',
+    });
+
+    const semanticDuplicate = structuredClone(missingConflictReason);
+    semanticDuplicate.ambiguityReasons = ['CONFLICTING_DATES'];
+
+    expect(() => decodeProposal(missingConflictReason)).toThrowError(ProposalContractError);
+    expect(() => decodeProposal(semanticDuplicate)).toThrowError(ProposalContractError);
+  });
+
+  it('rejects v3 EVENT candidates with incompatible modes, boundaries, or ranges', () => {
+    const timedDateOnly = proposalV3Payload();
+    ((((timedDateOnly.itemCandidates as Record<string, unknown>[])[0])
+      .eventScheduleCandidates as Record<string, unknown>[])[0]).mode = 'TIMED';
+
+    const inclusiveOverflow = proposalV3Payload();
+    Object.assign((inclusiveOverflow.dateCandidates as Record<string, unknown>[])[0], {
+      surfaceText: '마지막 날짜',
+      value: '9999-12-31',
+    });
+    const overflowSchedule = (((inclusiveOverflow.itemCandidates as Record<string, unknown>[])[0])
+      .eventScheduleCandidates as Record<string, unknown>[])[0]!;
+    overflowSchedule.end = {
+      dateCandidateId: 'date-1',
+      boundary: 'INCLUSIVE_THROUGH_VALUE',
+    };
+
+    const zeroExclusiveRange = proposalV3Payload();
+    const zeroSchedule = (((zeroExclusiveRange.itemCandidates as Record<string, unknown>[])[0])
+      .eventScheduleCandidates as Record<string, unknown>[])[0]!;
+    zeroSchedule.end = {
+      dateCandidateId: 'date-1',
+      boundary: 'EXCLUSIVE_AT_VALUE',
+    };
+
+    expect(() => decodeProposal(timedDateOnly)).toThrowError(ProposalContractError);
+    expect(() => decodeProposal(inclusiveOverflow)).toThrowError(ProposalContractError);
+    expect(() => decodeProposal(zeroExclusiveRange)).toThrowError(ProposalContractError);
+  });
+
+  it('accepts a bounded inclusive all-day end and a later exclusive timed end', () => {
+    const allDay = proposalV3Payload();
+    (allDay.dateCandidates as Record<string, unknown>[]).push({
+      candidateId: 'date-end',
+      surfaceText: '11.26까지',
+      value: '2026-11-26',
+      precision: 'DATE_ONLY',
+      timeSpecified: false,
+      confidence: 0.85,
+      ambiguityReasons: [],
+    });
+    ((((allDay.itemCandidates as Record<string, unknown>[])[0])
+      .eventScheduleCandidates as Record<string, unknown>[])[0]).end = {
+      dateCandidateId: 'date-end',
+      boundary: 'INCLUSIVE_THROUGH_VALUE',
+    };
+
+    const timed = proposalV3Payload();
+    Object.assign((timed.dateCandidates as Record<string, unknown>[])[0], {
+      surfaceText: '오늘 오후 6시',
+      value: '2026-11-25T18:00:00+09:00',
+      precision: 'EXACT_TIME',
+      timeSpecified: true,
+    });
+    (timed.dateCandidates as Record<string, unknown>[]).push({
+      candidateId: 'date-end',
+      surfaceText: '오늘 오후 7시',
+      value: '2026-11-25T19:00:00+09:00',
+      precision: 'EXACT_TIME',
+      timeSpecified: true,
+      confidence: 0.85,
+      ambiguityReasons: [],
+    });
+    const timedSchedule = (((timed.itemCandidates as Record<string, unknown>[])[0])
+      .eventScheduleCandidates as Record<string, unknown>[])[0]!;
+    timedSchedule.mode = 'TIMED';
+    timedSchedule.end = {
+      dateCandidateId: 'date-end',
+      boundary: 'EXCLUSIVE_AT_VALUE',
+    };
+
+    expect(decodeProposal(allDay).itemCandidates[0]?.eventScheduleCandidates).toHaveLength(1);
+    expect(decodeProposal(timed).itemCandidates[0]?.eventScheduleCandidates).toHaveLength(1);
   });
 
   it('requires both v2 binding fields instead of silently applying the v1 heuristic', () => {

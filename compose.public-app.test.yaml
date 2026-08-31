@@ -1,0 +1,55 @@
+services:
+  frontend:
+    image: nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
+    volumes:
+      - type: bind
+        source: ./app-edge/test/upstream-nginx.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5173/_internal/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    networks:
+      - app-publication
+
+  app-public-edge:
+    build:
+      context: ./app-edge
+    environment:
+      PUBLIC_APP_HOSTNAME: memo.synthetic.test
+    depends_on:
+      frontend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${PERSONAL_MEMO_APP_EDGE_TEST_PORT:-18788}:8080"
+    read_only: true
+    tmpfs:
+      # nginx-unprivileged renders the hostname-only template here at container start.
+      - /etc/nginx/conf.d:uid=101,gid=101,mode=0750
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - app-publication
+      - app-loopback
+
+networks:
+  app-publication:
+    internal: true
+  # Mirrors the production Windows topology while carrying disposable public fixtures only.
+  app-loopback: {}

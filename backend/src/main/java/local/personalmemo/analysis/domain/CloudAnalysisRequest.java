@@ -15,7 +15,8 @@ public record CloudAnalysisRequest(
     Optional<Instant> authorizationCheckedAt,
     Optional<Instant> acceptedConsentGrantedAt,
     CloudProviderRequestToken providerRequestToken,
-    Optional<TagRetrievalContext> tagRetrievalContext) {
+    Optional<TagRetrievalContext> tagRetrievalContext,
+    Optional<LocalModelInput> localModelInput) {
 
   public CloudAnalysisRequest(
       ObjectNode validatedLocalProposal,
@@ -33,6 +34,28 @@ public record CloudAnalysisRequest(
         authorizationCheckedAt,
         acceptedConsentGrantedAt,
         providerRequestToken,
+        Optional.empty(),
+        Optional.empty());
+  }
+
+  public CloudAnalysisRequest(
+      ObjectNode validatedLocalProposal,
+      List<AmbiguityReason> routingReasons,
+      String routingPolicyVersion,
+      CloudGatewayDescriptor descriptor,
+      Optional<Instant> authorizationCheckedAt,
+      Optional<Instant> acceptedConsentGrantedAt,
+      CloudProviderRequestToken providerRequestToken,
+      Optional<TagRetrievalContext> tagRetrievalContext) {
+    this(
+        validatedLocalProposal,
+        routingReasons,
+        routingPolicyVersion,
+        descriptor,
+        authorizationCheckedAt,
+        acceptedConsentGrantedAt,
+        providerRequestToken,
+        tagRetrievalContext,
         Optional.empty());
   }
 
@@ -47,13 +70,15 @@ public record CloudAnalysisRequest(
         Objects.requireNonNull(acceptedConsentGrantedAt, "acceptedConsentGrantedAt");
     providerRequestToken = Objects.requireNonNull(providerRequestToken, "providerRequestToken");
     tagRetrievalContext = Objects.requireNonNull(tagRetrievalContext, "tagRetrievalContext");
+    localModelInput = Objects.requireNonNull(localModelInput, "localModelInput");
     if (routingPolicyVersion == null
         || routingPolicyVersion.isBlank()
         || routingPolicyVersion.codePointCount(0, routingPolicyVersion.length())
             > AnalysisProvenance.MAX_VERSION_LENGTH) {
       throw new IllegalArgumentException("routingPolicyVersion must contain 1 to 64 characters.");
     }
-    validateAuthorizationSnapshot(descriptor, authorizationCheckedAt, acceptedConsentGrantedAt);
+    validateTransferBoundary(
+        descriptor, authorizationCheckedAt, acceptedConsentGrantedAt, localModelInput);
   }
 
   @Override
@@ -61,24 +86,48 @@ public record CloudAnalysisRequest(
     return validatedLocalProposal.deepCopy();
   }
 
-  private static void validateAuthorizationSnapshot(
+  private static void validateTransferBoundary(
       CloudGatewayDescriptor descriptor,
       Optional<Instant> authorizationCheckedAt,
-      Optional<Instant> acceptedConsentGrantedAt) {
-    if (descriptor.transferMode() == CloudTransferMode.NO_NETWORK) {
-      if (authorizationCheckedAt.isPresent() || acceptedConsentGrantedAt.isPresent()) {
-        throw new IllegalArgumentException(
-            "A no-network gateway request cannot carry an external consent snapshot.");
+      Optional<Instant> acceptedConsentGrantedAt,
+      Optional<LocalModelInput> localModelInput) {
+    switch (descriptor.transferMode()) {
+      case NO_NETWORK -> {
+        requireNoExternalConsent(authorizationCheckedAt, acceptedConsentGrantedAt);
+        if (localModelInput.isPresent()) {
+          throw new IllegalArgumentException(
+              "A no-network gateway request cannot carry local-model memo content.");
+        }
       }
-      return;
+      case LOCAL_MACHINE_MEMO_CONTENT -> {
+        requireNoExternalConsent(authorizationCheckedAt, acceptedConsentGrantedAt);
+        if (localModelInput.isEmpty()) {
+          throw new IllegalArgumentException(
+              "A machine-local gateway request requires bounded local-model input.");
+        }
+      }
+      case EXTERNAL_MEMO_CONTENT -> {
+        if (localModelInput.isPresent()) {
+          throw new IllegalArgumentException(
+              "An external gateway request cannot carry machine-local model input.");
+        }
+        if (authorizationCheckedAt.isEmpty() || acceptedConsentGrantedAt.isEmpty()) {
+          throw new IllegalArgumentException(
+              "An external gateway request requires an accepted consent snapshot.");
+        }
+        if (acceptedConsentGrantedAt.get().isAfter(authorizationCheckedAt.get())) {
+          throw new IllegalArgumentException(
+              "Accepted consent cannot be later than the authorization check.");
+        }
+      }
     }
-    if (authorizationCheckedAt.isEmpty() || acceptedConsentGrantedAt.isEmpty()) {
+  }
+
+  private static void requireNoExternalConsent(
+      Optional<Instant> authorizationCheckedAt, Optional<Instant> acceptedConsentGrantedAt) {
+    if (authorizationCheckedAt.isPresent() || acceptedConsentGrantedAt.isPresent()) {
       throw new IllegalArgumentException(
-          "An external gateway request requires an accepted consent snapshot.");
-    }
-    if (acceptedConsentGrantedAt.get().isAfter(authorizationCheckedAt.get())) {
-      throw new IllegalArgumentException(
-          "Accepted consent cannot be later than the authorization check.");
+          "A machine-local gateway request cannot carry an external consent snapshot.");
     }
   }
 
@@ -100,6 +149,8 @@ public record CloudAnalysisRequest(
                 context ->
                     context.version() + "/" + context.candidateCount() + " candidates/redacted")
             .orElse("absent")
+        + ", localModelInput="
+        + (localModelInput.isPresent() ? "present/redacted" : "absent")
         + "]";
   }
 }

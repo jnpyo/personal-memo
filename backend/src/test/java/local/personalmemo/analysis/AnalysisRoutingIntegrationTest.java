@@ -34,7 +34,7 @@ import tools.jackson.databind.node.ObjectNode;
 @PostgresIntegration
 class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
   private static final AnalysisProvenance FAKE_PROVENANCE =
-      new AnalysisProvenance("fake-v6", "none", "none", "none");
+      new AnalysisProvenance("fake-v9", "none", "none", "none");
 
   @MockitoBean private LocalAnalyzer localAnalyzer;
   @MockitoBean private CloudAnalysisGateway cloudGateway;
@@ -108,6 +108,8 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
               ((ObjectNode) proposal.path("providerMetadata"))
                   .put("cloudOutcome", "SUCCESS")
                   .put("cloudProviderId", "spoofed-provider")
+                  .put("approvedCorrectionHints", "private-approved-text")
+                  .put("invocationMode", "spoofed-mode")
                   .put("providerFailureText", "provider-secret-local-detail")
                   .put("rawMemoFragment", "must-not-be-stored");
               return proposal;
@@ -123,6 +125,9 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(response(proposal).at("/providerMetadata/route").asText()).isEqualTo("LOCAL_REVIEW");
     assertThat(response(proposal).at("/providerMetadata/cloudOutcome").isMissingNode()).isTrue();
     assertThat(response(proposal).at("/providerMetadata/cloudProviderId").isMissingNode()).isTrue();
+    assertThat(response(proposal).at("/providerMetadata/approvedCorrectionHints").isMissingNode())
+        .isTrue();
+    assertThat(response(proposal).at("/providerMetadata/invocationMode").isMissingNode()).isTrue();
     assertThat(response(proposal).at("/providerMetadata/providerFailureText").isMissingNode())
         .isTrue();
     assertThat(response(proposal).at("/providerMetadata/rawMemoFragment").isMissingNode()).isTrue();
@@ -267,7 +272,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(response(proposal).at("/providerMetadata/receivedRoutingReasons").toString())
         .contains("LOW_TYPE_MARGIN");
     assertThat(response(proposal).at("/providerMetadata/receivedRoutingPolicyVersion").asText())
-        .isEqualTo("field-policy-v1");
+        .isEqualTo("field-policy-v2");
     verify(cloudExecutor, times(1)).execute(any(CloudAnalysisRequest.class));
   }
 
@@ -587,11 +592,11 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(state.route()).isEqualTo(expectedRoute);
     assertThat(state.status()).isEqualTo("REVIEW_REQUIRED");
     assertThat(state.schemaVersion()).isEqualTo("2");
-    assertThat(state.analyzerVersion()).isEqualTo("fake-v6");
+    assertThat(state.analyzerVersion()).isEqualTo("fake-v9");
     assertThat(state.promptVersion()).isEqualTo("none");
     assertThat(state.localModelVersion()).isEqualTo("none");
     assertThat(state.embeddingModelVersion()).isEqualTo("none");
-    assertThat(state.routingPolicyVersion()).isEqualTo("field-policy-v1");
+    assertThat(state.routingPolicyVersion()).isEqualTo("field-policy-v2");
   }
 
   private String runAmbiguityReasons(UUID runId) {

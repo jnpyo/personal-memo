@@ -12,7 +12,7 @@ import tools.jackson.databind.JsonNode;
 
 @Component
 public final class DeterministicAmbiguityGate {
-  public static final String VERSION = "field-policy-v1";
+  public static final String VERSION = "field-policy-v2";
   private static final double MIN_TYPE_SCORE = 0.70;
   private static final double MIN_TYPE_MARGIN = 0.10;
   private static final double MIN_TAG_SCORE = 0.75;
@@ -51,6 +51,15 @@ public final class DeterministicAmbiguityGate {
     Objects.requireNonNull(proposal, "proposal");
     EnumSet<AmbiguityReason> signals = EnumSet.noneOf(AmbiguityReason.class);
     addReasons(signals, proposal.path("ambiguityReasons"));
+
+    JsonNode providerMetadata = proposal.path("providerMetadata");
+    if ("DEFAULT_FALLBACK".equals(providerMetadata.path("classificationBasis").asText())
+        || positiveCount(providerMetadata, "unrecognizedActionCueCount")) {
+      signals.add(AmbiguityReason.MISSING_ACTION);
+    }
+    if (positiveCount(providerMetadata, "unparsedTemporalCueCount")) {
+      signals.add(AmbiguityReason.IMPRECISE_DATE);
+    }
 
     for (JsonNode date : proposal.path("dateCandidates")) {
       addReasons(signals, date.path("ambiguityReasons"));
@@ -146,5 +155,10 @@ public final class DeterministicAmbiguityGate {
 
   private boolean hasSmallMargin(List<Double> scores, double minimumMargin) {
     return scores.size() > 1 && scores.get(0) - scores.get(1) < minimumMargin;
+  }
+
+  private boolean positiveCount(JsonNode metadata, String field) {
+    JsonNode count = metadata.path(field);
+    return count.isIntegralNumber() && count.canConvertToInt() && count.asInt() > 0;
   }
 }

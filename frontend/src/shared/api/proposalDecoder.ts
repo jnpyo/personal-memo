@@ -3,13 +3,19 @@ import type {
   ItemKind,
   Proposal,
   ProposalDateCandidate,
+  ProposalEventScheduleCandidate,
   ProposalItemCandidate,
   ProposalSummary,
   ProposalTagCandidate,
   RelationCandidate,
   SemanticType,
 } from './types';
-import { isValidIsoDate, isValidOffsetDateTime } from '../validation/dateTime';
+import {
+  compareOffsetDateTimes,
+  isValidIsoDate,
+  isValidOffsetDateTime,
+  nextIsoDate,
+} from '../validation/dateTime';
 
 const MAX_INT = 2_147_483_647;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -44,6 +50,14 @@ const RELATION_TYPES = new Set<RelationCandidate['relationType']>([
   'CONTINUES',
   'DEPENDS_ON',
   'REFERENCES',
+]);
+const EVENT_SCHEDULE_MODES = new Set<ProposalEventScheduleCandidate['mode']>([
+  'TIMED',
+  'ALL_DAY',
+]);
+const EVENT_END_BOUNDARIES = new Set<NonNullable<ProposalEventScheduleCandidate['end']>['boundary']>([
+  'EXCLUSIVE_AT_VALUE',
+  'INCLUSIVE_THROUGH_VALUE',
 ]);
 const RECOVERY_STATUSES = new Set<ProposalSummary['status']>([
   'REVIEW_REQUIRED',
@@ -171,7 +185,7 @@ function decodeDateCandidate(
 ): ProposalDateCandidate {
   const field = `dateCandidates[${index}]`;
   const candidate = closedRecord(value, field, [
-    ...(schemaVersion === '2' ? ['candidateId'] : []),
+    ...(schemaVersion !== '1' ? ['candidateId'] : []),
     'surfaceText',
     'value',
     'precision',
@@ -198,7 +212,7 @@ function decodeDateCandidate(
 
   return {
     candidateId:
-      schemaVersion === '2'
+      schemaVersion !== '1'
         ? text(candidate.candidateId, `${field}.candidateId`, 100)
         : null,
     surfaceText: text(candidate.surfaceText, `${field}.surfaceText`, 200),
@@ -210,6 +224,65 @@ function decodeDateCandidate(
       candidate.ambiguityReasons,
       `${field}.ambiguityReasons`,
     ),
+  };
+}
+
+function decodeEventScheduleCandidate(
+  value: unknown,
+  itemIndex: number,
+  candidateIndex: number,
+): ProposalEventScheduleCandidate {
+  const field = `itemCandidates[${itemIndex}].eventScheduleCandidates[${candidateIndex}]`;
+  const candidate = closedRecord(value, field, [
+    'candidateId',
+    'mode',
+    'startDateCandidateId',
+    'end',
+    'score',
+  ]);
+  if (
+    typeof candidate.mode !== 'string' ||
+    !EVENT_SCHEDULE_MODES.has(candidate.mode as ProposalEventScheduleCandidate['mode'])
+  ) {
+    fail(`${field}.mode`);
+  }
+
+  let end: ProposalEventScheduleCandidate['end'] = null;
+  if (candidate.end !== null) {
+    const decodedEnd = closedRecord(candidate.end, `${field}.end`, [
+      'dateCandidateId',
+      'boundary',
+    ]);
+    if (
+      typeof decodedEnd.boundary !== 'string' ||
+      !EVENT_END_BOUNDARIES.has(
+        decodedEnd.boundary as NonNullable<ProposalEventScheduleCandidate['end']>['boundary'],
+      )
+    ) {
+      fail(`${field}.end.boundary`);
+    }
+    end = {
+      dateCandidateId: text(
+        decodedEnd.dateCandidateId,
+        `${field}.end.dateCandidateId`,
+        100,
+      ),
+      boundary: decodedEnd.boundary as NonNullable<
+        ProposalEventScheduleCandidate['end']
+      >['boundary'],
+    };
+  }
+
+  return {
+    candidateId: text(candidate.candidateId, `${field}.candidateId`, 100),
+    mode: candidate.mode as ProposalEventScheduleCandidate['mode'],
+    startDateCandidateId: text(
+      candidate.startDateCandidateId,
+      `${field}.startDateCandidateId`,
+      100,
+    ),
+    end,
+    score: score(candidate.score, `${field}.score`),
   };
 }
 
@@ -251,7 +324,10 @@ function decodeItemCandidate(
   const field = `itemCandidates[${index}]`;
   const candidate = closedRecord(value, field, [
     'candidateId',
-    ...(schemaVersion === '2' ? ['dueDateCandidateId'] : []),
+    ...(schemaVersion !== '1' ? ['dueDateCandidateId'] : []),
+    ...(schemaVersion === '3'
+      ? ['eventScheduleCandidates', 'suggestedEventScheduleCandidateId']
+      : []),
     'kind',
     'title',
     'sourceSpan',
@@ -264,10 +340,27 @@ function decodeItemCandidate(
   return {
     candidateId: text(candidate.candidateId, `${field}.candidateId`, 100),
     dueDateCandidateId:
-      schemaVersion === '2'
+      schemaVersion !== '1'
         ? candidate.dueDateCandidateId === null
           ? null
           : text(candidate.dueDateCandidateId, `${field}.dueDateCandidateId`, 100)
+        : null,
+    eventScheduleCandidates:
+      schemaVersion === '3'
+        ? array(candidate.eventScheduleCandidates, `${field}.eventScheduleCandidates`, 5).map(
+            (entry, candidateIndex) =>
+              decodeEventScheduleCandidate(entry, index, candidateIndex),
+          )
+        : [],
+    suggestedEventScheduleCandidateId:
+      schemaVersion === '3'
+        ? candidate.suggestedEventScheduleCandidateId === null
+          ? null
+          : text(
+              candidate.suggestedEventScheduleCandidateId,
+              `${field}.suggestedEventScheduleCandidateId`,
+              100,
+            )
         : null,
     kind: candidate.kind,
     title: text(candidate.title, `${field}.title`, 200),
@@ -308,10 +401,82 @@ function decodeRelationCandidate(value: unknown, index: number): RelationCandida
   };
 }
 
+function validateEventScheduleCandidate(
+  candidate: ProposalEventScheduleCandidate,
+  itemIndex: number,
+  candidateIndex: number,
+  datesById: Map<string, ProposalDateCandidate>,
+): void {
+  const field = `itemCandidates[${itemIndex}].eventScheduleCandidates[${candidateIndex}]`;
+  const start = datesById.get(candidate.startDateCandidateId);
+  if (!start) fail(`${field}.startDateCandidateId`);
+
+  if (candidate.mode === 'ALL_DAY') {
+    if (start.precision !== 'DATE_ONLY' || !start.value) {
+      fail(`${field}.startDateCandidateId`);
+    }
+  } else if (
+    (start.precision !== 'EXACT_TIME' && start.precision !== 'RELATIVE_EXACT') ||
+    !start.value
+  ) {
+    fail(`${field}.startDateCandidateId`);
+  }
+
+  if (!candidate.end) return;
+  const end = datesById.get(candidate.end.dateCandidateId);
+  if (!end) fail(`${field}.end.dateCandidateId`);
+
+  if (candidate.mode === 'TIMED') {
+    if (
+      candidate.end.boundary !== 'EXCLUSIVE_AT_VALUE' ||
+      (end.precision !== 'EXACT_TIME' && end.precision !== 'RELATIVE_EXACT') ||
+      !end.value ||
+      compareOffsetDateTimes(end.value, start.value!) <= 0
+    ) {
+      fail(`${field}.end`);
+    }
+    return;
+  }
+
+  if (end.precision !== 'DATE_ONLY' || !end.value) fail(`${field}.end`);
+  const exclusiveEnd = candidate.end.boundary === 'INCLUSIVE_THROUGH_VALUE'
+    ? nextIsoDate(end.value)
+    : end.value;
+  if (!exclusiveEnd || exclusiveEnd <= start.value!) fail(`${field}.end`);
+}
+
+function sameEventScheduleSemantics(
+  left: ProposalEventScheduleCandidate,
+  right: ProposalEventScheduleCandidate,
+  datesById: Map<string, ProposalDateCandidate>,
+): boolean {
+  if (left.mode !== right.mode) return false;
+  const leftStart = datesById.get(left.startDateCandidateId)!.value!;
+  const rightStart = datesById.get(right.startDateCandidateId)!.value!;
+  const startMatches = left.mode === 'TIMED'
+    ? compareOffsetDateTimes(leftStart, rightStart) === 0
+    : leftStart === rightStart;
+  if (!startMatches || Boolean(left.end) !== Boolean(right.end)) return false;
+  if (!left.end || !right.end) return true;
+  const leftRawEnd = datesById.get(left.end.dateCandidateId)!.value!;
+  const rightRawEnd = datesById.get(right.end.dateCandidateId)!.value!;
+  if (left.mode === 'TIMED') {
+    return compareOffsetDateTimes(leftRawEnd, rightRawEnd) === 0;
+  }
+  const leftEnd = left.end.boundary === 'INCLUSIVE_THROUGH_VALUE'
+    ? nextIsoDate(leftRawEnd)
+    : leftRawEnd;
+  const rightEnd = right.end.boundary === 'INCLUSIVE_THROUGH_VALUE'
+    ? nextIsoDate(rightRawEnd)
+    : rightRawEnd;
+  return leftEnd === rightEnd;
+}
+
 function validateDateBindings(
   schemaVersion: Proposal['schemaVersion'],
   dates: ProposalDateCandidate[],
   items: ProposalItemCandidate[],
+  ambiguityReasons: Set<string>,
 ): void {
   if (schemaVersion === '1') return;
 
@@ -323,6 +488,7 @@ function validateDateBindings(
     datesById.set(date.candidateId, date);
   });
 
+  const eventScheduleCandidateIds = new Set<string>();
   items.forEach((item, index) => {
     if (item.dueDateCandidateId === null) return;
     const date = datesById.get(item.dueDateCandidateId);
@@ -334,6 +500,52 @@ function validateDateBindings(
         date.precision !== 'RELATIVE_EXACT')
     ) {
       fail(`itemCandidates[${index}].dueDateCandidateId`);
+    }
+  });
+
+  if (schemaVersion !== '3') return;
+
+  items.forEach((item, itemIndex) => {
+    if (
+      item.kind !== 'EVENT' &&
+      (item.eventScheduleCandidates.length > 0 || item.suggestedEventScheduleCandidateId !== null)
+    ) {
+      fail(`itemCandidates[${itemIndex}].eventScheduleCandidates`);
+    }
+
+    if (
+      item.eventScheduleCandidates.length > 1 &&
+      !ambiguityReasons.has('CONFLICTING_DATES')
+    ) {
+      fail(`itemCandidates[${itemIndex}].eventScheduleCandidates`);
+    }
+
+    const itemCandidateIds = new Set<string>();
+    const semanticCandidates: ProposalEventScheduleCandidate[] = [];
+    item.eventScheduleCandidates.forEach((candidate, candidateIndex) => {
+      if (
+        itemCandidateIds.has(candidate.candidateId) ||
+        eventScheduleCandidateIds.has(candidate.candidateId)
+      ) {
+        fail(`itemCandidates[${itemIndex}].eventScheduleCandidates[${candidateIndex}].candidateId`);
+      }
+      itemCandidateIds.add(candidate.candidateId);
+      eventScheduleCandidateIds.add(candidate.candidateId);
+      validateEventScheduleCandidate(candidate, itemIndex, candidateIndex, datesById);
+      if (
+        semanticCandidates.some((existing) =>
+          sameEventScheduleSemantics(existing, candidate, datesById),
+        )
+      ) {
+        fail(`itemCandidates[${itemIndex}].eventScheduleCandidates[${candidateIndex}]`);
+      }
+      semanticCandidates.push(candidate);
+    });
+    if (
+      item.suggestedEventScheduleCandidateId !== null &&
+      !itemCandidateIds.has(item.suggestedEventScheduleCandidateId)
+    ) {
+      fail(`itemCandidates[${itemIndex}].suggestedEventScheduleCandidateId`);
     }
   });
 }
@@ -355,7 +567,11 @@ export function decodeProposal(
     'ambiguityReasons',
     'providerMetadata',
   ]);
-  if (proposal.schemaVersion !== '1' && proposal.schemaVersion !== '2') {
+  if (
+    proposal.schemaVersion !== '1' &&
+    proposal.schemaVersion !== '2' &&
+    proposal.schemaVersion !== '3'
+  ) {
     fail('schemaVersion');
   }
   const schemaVersion = proposal.schemaVersion;
@@ -391,7 +607,16 @@ export function decodeProposal(
   const itemCandidates = array(proposal.itemCandidates, 'itemCandidates', 3).map(
     (candidate, index) => decodeItemCandidate(candidate, index, schemaVersion),
   );
-  validateDateBindings(schemaVersion, dateCandidates, itemCandidates);
+  const ambiguityReasons = ambiguityReasonArray(
+    proposal.ambiguityReasons,
+    'ambiguityReasons',
+  );
+  validateDateBindings(
+    schemaVersion,
+    dateCandidates,
+    itemCandidates,
+    new Set(ambiguityReasons),
+  );
 
   return {
     schemaVersion,
@@ -414,7 +639,7 @@ export function decodeProposal(
     relationCandidates: array(proposal.relationCandidates, 'relationCandidates', 10).map(
       decodeRelationCandidate,
     ),
-    ambiguityReasons: ambiguityReasonArray(proposal.ambiguityReasons, 'ambiguityReasons'),
+    ambiguityReasons,
     providerMetadata: record(proposal.providerMetadata, 'providerMetadata'),
   };
 }

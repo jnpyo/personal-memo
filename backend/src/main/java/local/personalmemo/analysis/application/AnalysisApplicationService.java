@@ -1,5 +1,6 @@
 package local.personalmemo.analysis.application;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.sql.Date;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -18,15 +19,20 @@ import local.personalmemo.analysis.api.AnalysisDtos.ApplicationRecoveryView;
 import local.personalmemo.analysis.api.AnalysisDtos.ApplicationView;
 import local.personalmemo.analysis.api.AnalysisDtos.Apply;
 import local.personalmemo.analysis.api.AnalysisDtos.Due;
+import local.personalmemo.analysis.api.AnalysisDtos.EventSchedule;
+import local.personalmemo.analysis.api.AnalysisDtos.Item;
+import local.personalmemo.analysis.api.AnalysisDtos.SelectedRelation;
 import local.personalmemo.analysis.api.AnalysisDtos.Tag;
 import local.personalmemo.analysis.domain.AnalysisApplicationValidator;
 import local.personalmemo.analysis.domain.AnalysisApplicationValidator.ValidatedApply;
 import local.personalmemo.analysis.domain.AnalysisApplicationValidator.ValidatedDue;
+import local.personalmemo.analysis.domain.AnalysisApplicationValidator.ValidatedEventSchedule;
 import local.personalmemo.analysis.domain.AnalysisApplicationValidator.ValidatedItem;
 import local.personalmemo.analysis.domain.AnalysisApplicationValidator.ValidatedSelectedRelation;
 import local.personalmemo.analysis.domain.AnalysisApplicationValidator.ValidatedTag;
 import local.personalmemo.analysis.domain.AnalysisProposalSchemaValidator;
 import local.personalmemo.analysis.domain.AnalysisProposalValidator;
+import local.personalmemo.calendar.application.CalendarFeedProjectionService;
 import local.personalmemo.common.auth.CurrentIdentity;
 import local.personalmemo.common.error.DomainException;
 import local.personalmemo.common.idempotency.IdempotencyService;
@@ -54,6 +60,7 @@ public class AnalysisApplicationService {
   private final AnalysisProposalValidator proposalValidator;
   private final IdempotencyService idempotency;
   private final ObjectMapper json;
+  private final CalendarFeedProjectionService calendarFeeds;
 
   public AnalysisApplicationService(
       JdbcClient db,
@@ -63,7 +70,8 @@ public class AnalysisApplicationService {
       AnalysisProposalSchemaValidator proposalSchemaValidator,
       AnalysisProposalValidator proposalValidator,
       IdempotencyService idempotency,
-      ObjectMapper json) {
+      ObjectMapper json,
+      CalendarFeedProjectionService calendarFeeds) {
     this.db = db;
     this.identity = identity;
     this.memos = memos;
@@ -72,6 +80,7 @@ public class AnalysisApplicationService {
     this.proposalValidator = proposalValidator;
     this.idempotency = idempotency;
     this.json = json;
+    this.calendarFeeds = calendarFeeds;
   }
 
   @Transactional
@@ -142,6 +151,9 @@ public class AnalysisApplicationService {
       if ("TASK".equals(plannedItem.item().kind())) {
         createTaskDetails(plannedItem.id(), plannedItem.item().due());
       }
+      if (plannedItem.item().eventSchedule() != null) {
+        createEventDetails(plannedItem.id(), plannedItem.item().eventSchedule());
+      }
       linkTags(plannedItem.id(), selectedTagIds, applicationId, now);
     }
     persistRelations(selectedRelations, applicationId, now);
@@ -211,13 +223,22 @@ public class AnalysisApplicationService {
   }
 
   private Object applyHashMaterial(UUID proposalId, Apply request) {
+    boolean eventScheduleShape =
+        request.selectionSchemaVersion() != null
+            || (request.items() != null
+                && request.items().stream()
+                    .anyMatch(item -> item != null && item.eventSchedule() != null));
+    if (eventScheduleShape) {
+      return new ApplyRequestV3(
+          "EVENT_SCHEDULE_V1", proposalId, projectEventScheduleApply(request));
+    }
     boolean legacyShape =
         request.selectedRelations() == null
             && request.items() != null
             && request.items().stream()
                 .allMatch(item -> item != null && item.proposalCandidateId() == null);
     if (!legacyShape) {
-      return new ApplyRequestV2("RELATION_SELECTION_V1", proposalId, request);
+      return new ApplyRequestV2("RELATION_SELECTION_V1", proposalId, projectRelationApply(request));
     }
     List<LegacyItem> legacyItems =
         request.items().stream()
@@ -231,6 +252,53 @@ public class AnalysisApplicationService {
             request.title(),
             request.selectedTags(),
             legacyItems));
+  }
+
+  private RelationApply projectRelationApply(Apply request) {
+    List<RelationApplyItem> items = null;
+    if (request.items() != null) {
+      items = new ArrayList<>();
+      for (Item item : request.items()) {
+        items.add(
+            item == null
+                ? null
+                : new RelationApplyItem(
+                    item.proposalCandidateId(), item.kind(), item.title(), item.due()));
+      }
+    }
+    return new RelationApply(
+        request.expectedMemoRevision(),
+        request.selectedType(),
+        request.title(),
+        request.selectedTags(),
+        items,
+        request.selectedRelations());
+  }
+
+  private EventScheduleApply projectEventScheduleApply(Apply request) {
+    List<EventScheduleApplyItem> items = null;
+    if (request.items() != null) {
+      items = new ArrayList<>();
+      for (Item item : request.items()) {
+        items.add(
+            item == null
+                ? null
+                : new EventScheduleApplyItem(
+                    item.proposalCandidateId(),
+                    item.kind(),
+                    item.title(),
+                    item.due(),
+                    item.eventSchedule()));
+      }
+    }
+    return new EventScheduleApply(
+        request.expectedMemoRevision(),
+        request.selectedType(),
+        request.title(),
+        request.selectedTags(),
+        items,
+        request.selectedRelations(),
+        request.selectionSchemaVersion());
   }
 
   private void validateLockedProposal(JsonNode proposal, MemoSnapshot memo) {
@@ -409,7 +477,8 @@ public class AnalysisApplicationService {
                         planned.id(),
                         planned.item().kind(),
                         planned.item().title(),
-                        planned.item().due()))
+                        planned.item().due(),
+                        planned.item().eventSchedule()))
             .toList();
     List<StoredRelation> relations =
         selectedRelations.stream()
@@ -430,7 +499,8 @@ public class AnalysisApplicationService {
         selection.title(),
         selection.selectedTags(),
         items,
-        relations);
+        relations,
+        selection.selectionSchemaVersion());
   }
 
   private void persistRelations(
@@ -646,6 +716,51 @@ public class AnalysisApplicationService {
         .update();
   }
 
+  private void createEventDetails(UUID itemId, ValidatedEventSchedule schedule) {
+    Timestamp startAt =
+        schedule.startInstant() == null ? null : Timestamp.from(schedule.startInstant());
+    Timestamp endAt = schedule.endInstant() == null ? null : Timestamp.from(schedule.endInstant());
+    Date startDate =
+        schedule.startLocalDate() == null ? null : Date.valueOf(schedule.startLocalDate());
+    Date endDate =
+        schedule.endLocalDateExclusive() == null
+            ? null
+            : Date.valueOf(schedule.endLocalDateExclusive());
+    db.sql(
+            """
+            insert into event_details(
+              memo_item_id,
+              owner_id,
+              item_kind,
+              schedule_kind,
+              start_at_utc,
+              end_at_utc,
+              start_local_date,
+              end_local_date_exclusive,
+              source_time_zone
+            ) values (
+              :itemId,
+              :ownerId,
+              'EVENT',
+              :scheduleKind,
+              :startAt,
+              :endAt,
+              :startDate,
+              :endDate,
+              :timeZone
+            )
+            """)
+        .param("itemId", itemId)
+        .param("ownerId", identity.ownerId())
+        .param("scheduleKind", schedule.mode())
+        .param("startAt", startAt)
+        .param("endAt", endAt)
+        .param("startDate", startDate)
+        .param("endDate", endDate)
+        .param("timeZone", schedule.timeZone())
+        .update();
+  }
+
   private void linkTags(UUID itemId, List<UUID> tagIds, UUID applicationId, Timestamp confirmedAt) {
     for (UUID tagId : tagIds) {
       db.sql(
@@ -673,6 +788,7 @@ public class AnalysisApplicationService {
 
   private void reverseDerivedRecords(
       ApplicationRecord application, MemoSnapshot memo, Timestamp undoneAt) {
+    calendarFeeds.cancelForApplication(identity.ownerId(), application.id(), undoneAt.toInstant());
     db.sql(
             """
             delete from memo_item_relations relation
@@ -702,6 +818,21 @@ public class AnalysisApplicationService {
                   and i.application_id = :applicationId
                   and i.owner_id = :ownerId
              )
+            """)
+        .param("applicationId", application.id())
+        .param("ownerId", identity.ownerId())
+        .update();
+    db.sql(
+            """
+            delete from event_details event
+             where event.owner_id = :ownerId
+               and exists (
+                 select 1
+                   from memo_items item
+                  where item.id = event.memo_item_id
+                    and item.application_id = :applicationId
+                    and item.owner_id = :ownerId
+               )
             """)
         .param("applicationId", application.id())
         .param("ownerId", identity.ownerId())
@@ -974,7 +1105,36 @@ public class AnalysisApplicationService {
     }
   }
 
-  private record ApplyRequestV2(String hashVersion, UUID proposalId, Apply request) {}
+  private record ApplyRequestV2(String hashVersion, UUID proposalId, RelationApply request) {}
+
+  private record RelationApply(
+      int expectedMemoRevision,
+      String selectedType,
+      String title,
+      List<Tag> selectedTags,
+      List<RelationApplyItem> items,
+      List<SelectedRelation> selectedRelations) {}
+
+  private record RelationApplyItem(
+      String proposalCandidateId, String kind, String title, Due due) {}
+
+  private record ApplyRequestV3(String hashVersion, UUID proposalId, EventScheduleApply request) {}
+
+  private record EventScheduleApply(
+      int expectedMemoRevision,
+      String selectedType,
+      String title,
+      List<Tag> selectedTags,
+      List<EventScheduleApplyItem> items,
+      List<SelectedRelation> selectedRelations,
+      String selectionSchemaVersion) {}
+
+  private record EventScheduleApplyItem(
+      String proposalCandidateId,
+      String kind,
+      String title,
+      Due due,
+      EventSchedule eventSchedule) {}
 
   private record LegacyApplyRequest(UUID proposalId, LegacyApply request) {}
 
@@ -1019,10 +1179,16 @@ public class AnalysisApplicationService {
       String title,
       List<ValidatedTag> selectedTags,
       List<StoredItem> items,
-      List<StoredRelation> selectedRelations) {}
+      List<StoredRelation> selectedRelations,
+      @JsonInclude(JsonInclude.Include.NON_NULL) String selectionSchemaVersion) {}
 
   private record StoredItem(
-      String proposalCandidateId, UUID memoItemId, String kind, String title, ValidatedDue due) {}
+      String proposalCandidateId,
+      UUID memoItemId,
+      String kind,
+      String title,
+      ValidatedDue due,
+      @JsonInclude(JsonInclude.Include.NON_NULL) ValidatedEventSchedule eventSchedule) {}
 
   private record StoredRelation(
       int proposalIndex,

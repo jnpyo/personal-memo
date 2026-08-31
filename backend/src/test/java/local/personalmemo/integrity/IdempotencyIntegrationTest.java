@@ -88,6 +88,58 @@ class IdempotencyIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void replaysFrozenRelationAwareApplyHashAfterEventScheduleContractIsAdded() throws Exception {
+    UUID proposalId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    UUID applicationId = UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc");
+    String frozenJson =
+        "{\"hashVersion\":\"RELATION_SELECTION_V1\","
+            + "\"proposalId\":\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\",\"request\":{"
+            + "\"expectedMemoRevision\":1,\"selectedType\":\"TASK\","
+            + "\"title\":\"Relation apply\",\"selectedTags\":[],\"items\":[{"
+            + "\"proposalCandidateId\":\"item-1\",\"kind\":\"TASK\","
+            + "\"title\":\"Relation apply\",\"due\":null}],\"selectedRelations\":[]}}";
+    String frozenHash = "96f94c29b242c01076a2ce6cfc76cac6065964c4f68eab969af3763ba7fc6e91";
+    assertThat(Hashing.sha256(frozenJson)).isEqualTo(frozenHash);
+    db.sql(
+            """
+            insert into idempotency_records(
+              owner_id, operation, idempotency_key, request_hash, resource_id, response_json,
+              created_at
+            ) values (
+              :ownerId, 'ANALYSIS_APPLY', :key, :requestHash, :applicationId,
+              cast(:responseJson as jsonb), :createdAt
+            )
+            """)
+        .param("ownerId", OWNER_ID)
+        .param("key", "pre-v21-relation-apply-key")
+        .param("requestHash", frozenHash)
+        .param("applicationId", applicationId)
+        .param(
+            "responseJson",
+            "{\"applicationId\":\"cccccccc-cccc-cccc-cccc-cccccccccccc\",\"status\":\"APPLIED\"}")
+        .param("createdAt", Timestamp.from(Instant.parse("2026-08-05T02:00:00Z")))
+        .update();
+
+    Map<String, Object> item = new LinkedHashMap<>();
+    item.put("proposalCandidateId", "item-1");
+    item.put("kind", "TASK");
+    item.put("title", "Relation apply");
+    item.put("due", null);
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("expectedMemoRevision", 1);
+    body.put("selectedType", "TASK");
+    body.put("title", "Relation apply");
+    body.put("selectedTags", List.of());
+    body.put("items", List.of(item));
+    body.put("selectedRelations", List.of());
+
+    var replay = applyProposal(proposalId, "pre-v21-relation-apply-key", body);
+
+    assertThat(replay.getResponse().getStatus()).isEqualTo(200);
+    assertThat(response(replay).path("applicationId").asText()).isEqualTo(applicationId.toString());
+  }
+
+  @Test
   void malformedApplyArraysRemainValidationErrorsInsteadOfHashingFailures() throws Exception {
     UUID proposalId = UUID.randomUUID();
     Map<String, Object> item = new LinkedHashMap<>();

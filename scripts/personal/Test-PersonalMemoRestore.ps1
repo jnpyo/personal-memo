@@ -2,6 +2,10 @@
 param(
     [Parameter(Mandatory = $true)][string] $BackupFile,
     [string] $EnvFile,
+    [ValidatePattern('^[0-9]+$')][string] $ExpectedBackupFlywayVersion,
+    [ValidatePattern('^[0-9]+$')][string] $ExpectedFlywayVersion,
+    [switch] $RequireZeroCalendarBackfill,
+    [switch] $RequireV23LocalOnlyConsentBackfill,
     [switch] $RemoveAfterVerification
 )
 
@@ -22,7 +26,7 @@ function Assert-PersonalMemoRestoredScalar {
         'exec', '-T', 'postgres', 'psql',
         "--username=$($DatabaseIdentity.Username)",
         "--dbname=$($DatabaseIdentity.Database)",
-        '--set=ON_ERROR_STOP=1', '--tuples-only', '--no-align', '--command', $Query
+        '--no-psqlrc', '--set=ON_ERROR_STOP=1', '--tuples-only', '--no-align', '--command', $Query
     )
     $actual = $result.Trim()
     if ($actual -cne $Expected) {
@@ -52,6 +56,24 @@ $actualHash = (Get-FileHash -LiteralPath $resolvedBackup -Algorithm SHA256).Hash
 if ($actualHash -cne $expectedHash) {
     throw 'Backup checksum verification failed.'
 }
+if ($RequireZeroCalendarBackfill -and
+    ([string]::IsNullOrWhiteSpace($ExpectedBackupFlywayVersion) -or
+        [string]::IsNullOrWhiteSpace($ExpectedFlywayVersion))) {
+    throw 'RequireZeroCalendarBackfill requires both ExpectedBackupFlywayVersion and ExpectedFlywayVersion.'
+}
+if ($RequireZeroCalendarBackfill -and
+    ($ExpectedBackupFlywayVersion -cne '20' -or $ExpectedFlywayVersion -cne '22')) {
+    throw 'The V22 zero-backfill gate requires source Flyway 20 and target Flyway 22.'
+}
+if ($RequireV23LocalOnlyConsentBackfill -and
+    ([string]::IsNullOrWhiteSpace($ExpectedBackupFlywayVersion) -or
+        [string]::IsNullOrWhiteSpace($ExpectedFlywayVersion))) {
+    throw 'RequireV23LocalOnlyConsentBackfill requires both ExpectedBackupFlywayVersion and ExpectedFlywayVersion.'
+}
+if ($RequireV23LocalOnlyConsentBackfill -and
+    ($ExpectedBackupFlywayVersion -cne '22' -or $ExpectedFlywayVersion -cne '23')) {
+    throw 'The V23 local-only consent gate requires source Flyway 22 and target Flyway 23.'
+}
 
 $restoreProject = 'personal-memo-restore-{0}-{1}' -f [DateTime]::UtcNow.ToString('yyyyMMddHHmmss'), ([Guid]::NewGuid().ToString('N').Substring(0, 8))
 $layoutArguments = @{ ProjectName = $restoreProject; RestoreProject = $true }
@@ -79,12 +101,26 @@ try {
         "--dbname=$($databaseIdentity.Database)",
         '--clean', '--if-exists', '--no-owner', '--no-acl', '--exit-on-error', $containerDump
     )
+    Assert-PersonalMemoRestoredScalar `
+        -Layout $layout `
+        -DatabaseIdentity $databaseIdentity `
+        -Query 'select count(*) from flyway_schema_history where not success;' `
+        -Expected '0' `
+        -Invariant 'the restored backup has no failed Flyway migration'
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedBackupFlywayVersion)) {
+        Assert-PersonalMemoRestoredScalar `
+            -Layout $layout `
+            -DatabaseIdentity $databaseIdentity `
+            -Query 'select version from flyway_schema_history where success and version is not null order by installed_rank desc limit 1;' `
+            -Expected $ExpectedBackupFlywayVersion `
+            -Invariant 'restored backup Flyway version before migration'
+    }
     Invoke-PersonalMemoCompose -Layout $layout -CommandArguments @('up', '-d', '--build', '--wait', 'backend')
     Invoke-PersonalMemoCompose -Layout $layout -CommandArguments @(
         'exec', '-T', 'postgres', 'psql',
         "--username=$($databaseIdentity.Username)",
         "--dbname=$($databaseIdentity.Database)",
-        '--set=ON_ERROR_STOP=1', '--command=TRUNCATE TABLE spring_session CASCADE;'
+        '--no-psqlrc', '--set=ON_ERROR_STOP=1', '--command=TRUNCATE TABLE spring_session CASCADE;'
     )
     Assert-PersonalMemoRestoredScalar `
         -Layout $layout `
@@ -120,23 +156,81 @@ where owner.id is null;
         'exec', '-T', 'backend', 'wget', '-q', '-O', '-', 'http://127.0.0.1:8080/actuator/health'
     )
 
-    $countQuery = @(
-        "select 'users' as table_name,count(*)::bigint as row_count from users",
-        "union all select 'memos',count(*)::bigint from memos",
-        "union all select 'memo_revisions',count(*)::bigint from memo_revisions",
-        "union all select 'analysis_runs',count(*)::bigint from analysis_runs",
-        "union all select 'analysis_applications',count(*)::bigint from analysis_applications",
-        "union all select 'tags',count(*)::bigint from tags",
-        "union all select 'task_details',count(*)::bigint from task_details",
-        "union all select 'flyway_schema_history',count(*)::bigint from flyway_schema_history",
-        'order by table_name;'
-    ) -join ' '
-    Invoke-PersonalMemoCompose -Layout $layout -CommandArguments @(
-        'exec', '-T', 'postgres', 'psql',
-        "--username=$($databaseIdentity.Username)",
-        "--dbname=$($databaseIdentity.Database)",
-        '--set=ON_ERROR_STOP=1', '--command', $countQuery
-    )
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedFlywayVersion)) {
+        Assert-PersonalMemoRestoredScalar `
+            -Layout $layout `
+            -DatabaseIdentity $databaseIdentity `
+            -Query 'select version from flyway_schema_history where success and version is not null order by installed_rank desc limit 1;' `
+            -Expected $ExpectedFlywayVersion `
+            -Invariant 'latest successful Flyway version'
+    }
+    Assert-PersonalMemoRestoredScalar `
+        -Layout $layout `
+        -DatabaseIdentity $databaseIdentity `
+        -Query 'select count(*) from flyway_schema_history where not success;' `
+        -Expected '0' `
+        -Invariant 'the migrated restore has no failed Flyway migration'
+    if ($RequireZeroCalendarBackfill) {
+        Assert-PersonalMemoRestoredScalar `
+            -Layout $layout `
+            -DatabaseIdentity $databaseIdentity `
+            -Query @"
+select count(*)
+from (values
+  (to_regclass('public.event_details')),
+  (to_regclass('public.calendar_feeds')),
+  (to_regclass('public.calendar_feed_entries'))
+) required(relation)
+where required.relation is null;
+"@ `
+            -Expected '0' `
+            -Invariant 'all V21 and V22 calendar tables exist'
+        Assert-PersonalMemoRestoredScalar `
+            -Layout $layout `
+            -DatabaseIdentity $databaseIdentity `
+            -Query @"
+select
+  (select count(*) from event_details)
+  + (select count(*) from calendar_feeds)
+  + (select count(*) from calendar_feed_entries);
+"@ `
+            -Expected '0' `
+            -Invariant 'V21 and V22 migrations do not backfill calendar data'
+    }
+    if ($RequireV23LocalOnlyConsentBackfill) {
+        Assert-PersonalMemoRestoredScalar `
+            -Layout $layout `
+            -DatabaseIdentity $databaseIdentity `
+            -Query @"
+select count(*)
+from (values
+  ('publication_scope'),
+  ('public_consent_policy_version'),
+  ('public_consent_granted_at')
+) required(column_name)
+where not exists (
+  select 1
+  from information_schema.columns actual
+  where actual.table_schema = 'public'
+    and actual.table_name = 'calendar_feeds'
+    and actual.column_name = required.column_name
+);
+"@ `
+            -Expected '0' `
+            -Invariant 'all V23 calendar feed publication-consent columns exist'
+        Assert-PersonalMemoRestoredScalar `
+            -Layout $layout `
+            -DatabaseIdentity $databaseIdentity `
+            -Query @"
+select count(*)
+from calendar_feeds
+where publication_scope <> 'LOCAL_ONLY'
+   or public_consent_policy_version is not null
+   or public_consent_granted_at is not null;
+"@ `
+            -Expected '0' `
+            -Invariant 'V23 keeps every restored feed local-only without a consent pin'
+    }
     $verified = $true
     Write-Host "Restore verification passed in isolated project $restoreProject."
 } finally {

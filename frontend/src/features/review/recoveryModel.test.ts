@@ -14,6 +14,8 @@ const proposal: Proposal = {
     {
       candidateId: 'item-1',
       dueDateCandidateId: null,
+      eventScheduleCandidates: [],
+      suggestedEventScheduleCandidateId: null,
       kind: 'RECORD',
       title: '보류한 메모',
       sourceSpan: null,
@@ -92,6 +94,8 @@ describe('recovery model', () => {
         {
           candidateId: 'item-task',
           dueDateCandidateId: 'date-1',
+          eventScheduleCandidates: [],
+          suggestedEventScheduleCandidateId: null,
           kind: 'TASK',
           title: '발표 준비',
           sourceSpan: null,
@@ -111,6 +115,63 @@ describe('recovery model', () => {
       candidateId: 'date-1',
       value: '2026-11-25',
     });
+  });
+
+  it('restores v3 EVENT alternatives without selecting the suggested schedule', () => {
+    const eventProposal: Proposal = {
+      ...proposal,
+      schemaVersion: '3',
+      suggestedTitle: { value: '디스코드 접속하기', confidence: 0.9, needsConfirmation: true },
+      typeCandidates: [{ value: 'EVENT', score: 0.9 }],
+      dateCandidates: [
+        {
+          candidateId: 'date-start',
+          surfaceText: '오늘 오후 6시',
+          value: '2026-08-05T18:00:00+09:00',
+          precision: 'EXACT_TIME',
+          timeSpecified: true,
+          confidence: 0.9,
+          ambiguityReasons: [],
+        },
+      ],
+      itemCandidates: [
+        {
+          candidateId: 'item-event',
+          dueDateCandidateId: null,
+          eventScheduleCandidates: [
+            {
+              candidateId: 'schedule-1',
+              mode: 'TIMED',
+              startDateCandidateId: 'date-start',
+              end: null,
+              score: 0.85,
+            },
+          ],
+          suggestedEventScheduleCandidateId: 'schedule-1',
+          kind: 'EVENT',
+          title: '디스코드 접속하기',
+          sourceSpan: null,
+          action: '접속',
+          object: '디스코드',
+          confidence: 0.9,
+        },
+      ],
+    };
+
+    const recovered = deriveRecoveryState(
+      { applicationId: null, status: 'NONE' },
+      [{
+        ...postponed,
+        proposalId: 'proposal-v3',
+        status: 'REVIEW_REQUIRED',
+        proposal: eventProposal,
+      }],
+    );
+
+    expect(recovered.review?.items[0].eventScheduleCandidates).toHaveLength(1);
+    expect(recovered.review?.items[0].suggestedEventScheduleCandidateId).toBe('schedule-1');
+    expect(recovered.review?.items[0].eventSchedule).toBeNull();
+    expect(recovered.review?.items[0].eventScheduleProposalCandidateId).toBeNull();
   });
 
   it.each(['NONE', 'UNDONE'] as const)('does not expose undo for %s server state', (status) => {

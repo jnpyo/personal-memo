@@ -26,6 +26,25 @@ server:
   error:
     include-message: never
 app:
+  calendar-feed:
+    publication:
+      enabled: ${APP_CALENDAR_FEED_PUBLICATION_ENABLED:false}
+      public-origin: ${APP_CALENDAR_FEED_PUBLIC_ORIGIN:}
+      consent-policy-version: ${APP_CALENDAR_FEED_PUBLIC_CONSENT_POLICY_VERSION:}
+  analysis:
+    invocation:
+      mode: ${APP_ANALYSIS_INVOCATION_MODE:UNCERTAINTY_ONLY}
+      approved-corrections-enabled: ${APP_ANALYSIS_APPROVED_CORRECTIONS_ENABLED:false}
+      approved-correction-context-k: ${APP_ANALYSIS_APPROVED_CORRECTION_CONTEXT_K:3}
+    local-model:
+      # The application default remains the deterministic/Fake gateway. The personal Compose
+      # overlay supplies the only enabled values at this checkpoint.
+      enabled: ${APP_ANALYSIS_LOCAL_MODEL_ENABLED:false}
+      endpoint: ${APP_ANALYSIS_LOCAL_MODEL_ENDPOINT:http://127.0.0.1:11434}
+      allowed-docker-host-relay-origins:
+        - ${APP_ANALYSIS_LOCAL_MODEL_ALLOWED_DOCKER_HOST_RELAY_ORIGIN:http://host.docker.internal:11434}
+      model: ${APP_ANALYSIS_LOCAL_MODEL_NAME:}
+      model-digest: ${APP_ANALYSIS_LOCAL_MODEL_DIGEST:}
   auth:
     registration-enabled: ${AUTH_REGISTRATION_ENABLED:true}
     google:

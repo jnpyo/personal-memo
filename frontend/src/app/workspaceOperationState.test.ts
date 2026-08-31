@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   hasPendingServerOperation,
   isCurrentScopedRequest,
   isLatestWorkspaceRequest,
+  refreshAfterMemoSourceEdit,
 } from './workspaceOperationState';
 
 describe('workspace server-operation lock', () => {
@@ -10,6 +11,12 @@ describe('workspace server-operation lock', () => {
     ['workspace mutation', { workspaceBusy: true, pendingTaskId: null, authOperation: null }],
     ['task status mutation', { workspaceBusy: false, pendingTaskId: 'task-a', authOperation: null }],
     ['account mutation', { workspaceBusy: false, pendingTaskId: null, authOperation: 'LOGOUT' as const }],
+    ['calendar sharing mutation', {
+      workspaceBusy: false,
+      pendingTaskId: null,
+      authOperation: null,
+      calendarSharingPending: true,
+    }],
   ])('stays locked during a pending %s', (_label, input) => {
     expect(hasPendingServerOperation(input)).toBe(true);
   });
@@ -27,6 +34,18 @@ describe('workspace refresh generation', () => {
   it('allows only the latest-started request to commit data, error, or loading state', () => {
     expect(isLatestWorkspaceRequest(4, 5)).toBe(false);
     expect(isLatestWorkspaceRequest(5, 5)).toBe(true);
+  });
+
+  it('refreshes the event projection after a successful memo source edit', async () => {
+    const refreshMemos = vi.fn(async () => undefined);
+    const refreshEvents = vi.fn(async () => undefined);
+    const refreshRecovery = vi.fn(async () => undefined);
+
+    await refreshAfterMemoSourceEdit({ refreshMemos, refreshEvents, refreshRecovery });
+
+    expect(refreshMemos).toHaveBeenCalledOnce();
+    expect(refreshEvents).toHaveBeenCalledOnce();
+    expect(refreshRecovery).toHaveBeenCalledOnce();
   });
 });
 

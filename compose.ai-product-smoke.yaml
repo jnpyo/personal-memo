@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    pull_policy: never
+    environment:
+      POSTGRES_DB: personal_memo_ai_smoke
+      POSTGRES_USER: personal_memo_ai_smoke
+      POSTGRES_PASSWORD: ${AI_PRODUCT_SMOKE_DATABASE_PASSWORD:?Set AI_PRODUCT_SMOKE_DATABASE_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U personal_memo_ai_smoke -d personal_memo_ai_smoke"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+
+  backend:
+    image: ${AI_PRODUCT_SMOKE_BACKEND_IMAGE:?Set AI_PRODUCT_SMOKE_BACKEND_IMAGE}
+    pull_policy: never
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/personal_memo_ai_smoke
+      SPRING_DATASOURCE_USERNAME: personal_memo_ai_smoke
+      SPRING_DATASOURCE_PASSWORD: ${AI_PRODUCT_SMOKE_DATABASE_PASSWORD:?Set AI_PRODUCT_SMOKE_DATABASE_PASSWORD}
+      AUTH_REGISTRATION_ENABLED: "true"
+      SESSION_COOKIE_SECURE: "false"
+      GOOGLE_AUTH_ENABLED: "false"
+      GOOGLE_REGISTRATION_ENABLED: "false"
+      GOOGLE_CLIENT_ID: ""
+      GOOGLE_CLIENT_SECRET: ""
+      GOOGLE_REDIRECT_URI: ""
+      APP_CALENDAR_FEED_PUBLICATION_ENABLED: "false"
+      APP_CALENDAR_FEED_PUBLIC_ORIGIN: ""
+      APP_CALENDAR_FEED_PUBLIC_CONSENT_POLICY_VERSION: ""
+      APP_ANALYSIS_LOCAL_MODEL_ENABLED: ${AI_PRODUCT_SMOKE_LOCAL_MODEL_ENABLED:?Set AI_PRODUCT_SMOKE_LOCAL_MODEL_ENABLED}
+      APP_ANALYSIS_INVOCATION_MODE: ${AI_PRODUCT_SMOKE_INVOCATION_MODE:?Set AI_PRODUCT_SMOKE_INVOCATION_MODE}
+      APP_ANALYSIS_APPROVED_CORRECTIONS_ENABLED: ${AI_PRODUCT_SMOKE_APPROVED_CORRECTIONS_ENABLED:?Set AI_PRODUCT_SMOKE_APPROVED_CORRECTIONS_ENABLED}
+      APP_ANALYSIS_APPROVED_CORRECTION_CONTEXT_K: "3"
+      APP_ANALYSIS_LOCAL_MODEL_ENDPOINT: http://host.docker.internal:11435
+      APP_ANALYSIS_LOCAL_MODEL_ALLOWED_DOCKER_HOST_RELAY_ORIGIN: http://host.docker.internal:11435
+      APP_ANALYSIS_LOCAL_MODEL_NAME: ${AI_PRODUCT_SMOKE_LOCAL_MODEL_NAME:-}
+      APP_ANALYSIS_LOCAL_MODEL_DIGEST: ${AI_PRODUCT_SMOKE_LOCAL_MODEL_DIGEST:-}
+      APP_ANALYSIS_CLOUD_EXECUTION_TIMEOUT: "45s"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${AI_PRODUCT_SMOKE_BACKEND_PORT:?Set AI_PRODUCT_SMOKE_BACKEND_PORT}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/actuator/health"]
+      interval: 3s
+      timeout: 2s
+      start_period: 20s
+      retries: 40

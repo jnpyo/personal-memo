@@ -34,6 +34,9 @@ public final class KoreanDateParser {
       Pattern.compile("(?<!\\d)(\\d{1,2})월\\s*(\\d{1,2})일");
   private static final Pattern DAY_ONLY_DEADLINE =
       Pattern.compile("(?<![\\d월])([012]?\\d|3[01])일까지");
+  private static final Pattern RELATIVE_DAY_TIME =
+      Pattern.compile(
+          "(?<![\\p{L}\\p{N}])(오늘|내일|모레)\\s*(오전|오후)\\s*(\\d{1,2})시(?:\\s*(\\d+)분)?(?:\\s*(?:에|부터|까지))?(?=$|\\s|[,.;!?])");
   private static final Pattern NEXT_WEEK_DAY_TIME =
       Pattern.compile(
           "(?<![\\p{L}\\p{N}])다음\\s*주\\s*([월화수목금토일])요일\\s*(오전|오후)\\s*(\\d{1,2})시(?:\\s*(\\d+)분)?(?:\\s*(?:에|부터|까지))?(?=$|\\s|[,.;!?])");
@@ -53,6 +56,12 @@ public final class KoreanDateParser {
       Pattern.compile("(?<![\\p{L}\\p{N}])다음\\s*(?:회의|수업|약속|행사|미팅|발표|시험|면접|진료|면담|상담)\\s*전(?:까지)?");
   private static final Pattern APPROXIMATE_NEXT_MONTH = Pattern.compile("다음\\s*달(?:에)?");
   private static final Pattern YESTERDAY = Pattern.compile("어제");
+  private static final Pattern UNPARSED_TIME_LIKE =
+      Pattern.compile(
+          "(?<![\\p{L}\\p{N}])(?:(?:오늘|내일|모레)\\s*)?(?:(?:오전|오후)\\s*)?"
+              + "(?:(?:[01]?\\d|2[0-3])시(?:\\s*(?:[0-5]?\\d)분)?|"
+              + "(?:[01]?\\d|2[0-3]):[0-5]\\d)"
+              + "(?:\\s*(?:에|부터|까지))?(?=$|\\s|[,.;!?])");
 
   public List<ParsedDate> parse(String content, Instant baseInstant, String timeZoneIdentifier) {
     Objects.requireNonNull(content, "content");
@@ -95,6 +104,12 @@ public final class KoreanDateParser {
         candidates,
         RulePriority.DAY_ONLY_DEADLINE,
         matcher -> parseDayOnlyDeadline(matcher, baseDate));
+    collect(
+        content,
+        RELATIVE_DAY_TIME,
+        candidates,
+        RulePriority.RELATIVE_DAY_TIME,
+        matcher -> parseRelativeDayTime(matcher, baseDate, timeZone));
     collect(
         content,
         APPROXIMATE_NEXT_WEEK_DAY_TIME,
@@ -149,9 +164,24 @@ public final class KoreanDateParser {
         candidates,
         RulePriority.YESTERDAY,
         matcher -> parseYesterday(matcher, baseDate));
+    collect(
+        content, UNPARSED_TIME_LIKE, candidates, RulePriority.UNPARSED_TIME_LIKE, this::unknown);
 
     candidates.sort(candidateOrder());
     return List.copyOf(removeOverlaps(candidates));
+  }
+
+  public int unparsedTemporalCueCount(List<ParsedDate> dates) {
+    Objects.requireNonNull(dates, "dates");
+    int count = 0;
+    for (ParsedDate date : dates) {
+      Objects.requireNonNull(date, "dates must not contain null");
+      if (date.precision() == DatePrecision.UNKNOWN
+          && UNPARSED_TIME_LIKE.matcher(date.surfaceText()).matches()) {
+        count++;
+      }
+    }
+    return count;
   }
 
   private void collect(
@@ -262,6 +292,41 @@ public final class KoreanDateParser {
           0.68,
           EnumSet.of(AmbiguityReason.MISSING_YEAR));
     } catch (DateTimeException exception) {
+      return unknown(matcher);
+    }
+  }
+
+  private ParsedDate parseRelativeDayTime(Matcher matcher, LocalDate baseDate, ZoneId timeZone) {
+    try {
+      int twelveHour = Integer.parseInt(matcher.group(3));
+      int minute = matcher.group(4) == null ? 0 : Integer.parseInt(matcher.group(4));
+      if (twelveHour < 1 || twelveHour > 12) {
+        return unknown(matcher);
+      }
+      int hour = twelveHour % 12 + ("오후".equals(matcher.group(2)) ? 12 : 0);
+      int dayOffset =
+          switch (matcher.group(1)) {
+            case "오늘" -> 0;
+            case "내일" -> 1;
+            case "모레" -> 2;
+            default -> throw new DateTimeException("Unsupported Korean relative day");
+          };
+      LocalDateTime localDateTime =
+          LocalDateTime.of(baseDate.plusDays(dayOffset), LocalTime.of(hour, minute));
+      List<ZoneOffset> validOffsets = timeZone.getRules().getValidOffsets(localDateTime);
+      if (validOffsets.size() != 1) {
+        return unknown(matcher);
+      }
+      ZonedDateTime interpreted =
+          ZonedDateTime.ofStrict(localDateTime, validOffsets.getFirst(), timeZone);
+      return candidate(
+          matcher,
+          interpreted.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+          DatePrecision.RELATIVE_EXACT,
+          true,
+          0.98,
+          EnumSet.noneOf(AmbiguityReason.class));
+    } catch (DateTimeException | NumberFormatException exception) {
       return unknown(matcher);
     }
   }
@@ -443,6 +508,7 @@ public final class KoreanDateParser {
             new RulePattern(MONTH_AND_DAY, RulePriority.MONTH_AND_DAY),
             new RulePattern(KOREAN_MONTH_AND_DAY, RulePriority.KOREAN_MONTH_AND_DAY),
             new RulePattern(DAY_ONLY_DEADLINE, RulePriority.DAY_ONLY_DEADLINE),
+            new RulePattern(RELATIVE_DAY_TIME, RulePriority.RELATIVE_DAY_TIME),
             new RulePattern(
                 APPROXIMATE_NEXT_WEEK_DAY_TIME, RulePriority.APPROXIMATE_NEXT_WEEK_DAY_TIME),
             new RulePattern(
@@ -453,7 +519,8 @@ public final class KoreanDateParser {
             new RulePattern(APPROXIMATE_WEEKEND, RulePriority.APPROXIMATE_WEEKEND),
             new RulePattern(EVENT_RELATIVE_DEADLINE, RulePriority.EVENT_RELATIVE_DEADLINE),
             new RulePattern(APPROXIMATE_NEXT_MONTH, RulePriority.APPROXIMATE_NEXT_MONTH),
-            new RulePattern(YESTERDAY, RulePriority.YESTERDAY))) {
+            new RulePattern(YESTERDAY, RulePriority.YESTERDAY),
+            new RulePattern(UNPARSED_TIME_LIKE, RulePriority.UNPARSED_TIME_LIKE))) {
       Matcher matcher = rule.pattern().matcher(content);
       while (matcher.find()) {
         candidates.add(new PrioritizedDate(unknown(matcher), rule.priority()));
@@ -469,6 +536,7 @@ public final class KoreanDateParser {
     MONTH_AND_DAY(30),
     KOREAN_MONTH_AND_DAY(40),
     DAY_ONLY_DEADLINE(50),
+    RELATIVE_DAY_TIME(51),
     APPROXIMATE_NEXT_WEEK_DAY_TIME(52),
     UNSUPPORTED_NEXT_WEEK_DAY_TIME(53),
     NEXT_WEEK_DAY_TIME(55),
@@ -477,7 +545,8 @@ public final class KoreanDateParser {
     APPROXIMATE_WEEKEND(75),
     EVENT_RELATIVE_DEADLINE(78),
     APPROXIMATE_NEXT_MONTH(80),
-    YESTERDAY(90);
+    YESTERDAY(90),
+    UNPARSED_TIME_LIKE(100);
 
     private final int order;
 

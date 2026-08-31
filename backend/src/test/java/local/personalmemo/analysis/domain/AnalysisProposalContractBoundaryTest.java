@@ -102,7 +102,7 @@ class AnalysisProposalContractBoundaryTest {
     assertInvalid(
         () ->
             validator.validate(
-                proposal, MEMO_ID, 1, CONTENT.length(), analyzer.provenance(), "field-policy-v2"));
+                proposal, MEMO_ID, 1, CONTENT.length(), analyzer.provenance(), "field-policy-v1"));
   }
 
   @Test

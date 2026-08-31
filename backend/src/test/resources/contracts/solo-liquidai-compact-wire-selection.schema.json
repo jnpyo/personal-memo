@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://personal-memo.local/contracts/solo-liquidai-compact-wire-selection.schema.json",
+  "title": "Solo LiquidAI compact wire selection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "v",
+    "p",
+    "t"
+  ],
+  "properties": {
+    "v": {
+      "type": "string",
+      "enum": ["1"]
+    },
+    "p": {
+      "type": "integer",
+      "enum": [-1, 0, 1, 2]
+    },
+    "t": {
+      "type": "array",
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "type": "integer",
+        "enum": [0, 1, 2]
+      }
+    }
+  }
+}

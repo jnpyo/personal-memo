@@ -7,7 +7,9 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 
 COPY . .
 
-ENV CI=true
+ARG VITE_OWNER_REMOTE_APP_HOSTNAME=
+ENV CI=true \
+    VITE_OWNER_REMOTE_APP_HOSTNAME=${VITE_OWNER_REMOTE_APP_HOSTNAME}
 RUN npm run lint
 RUN npm run test
 RUN npm run build

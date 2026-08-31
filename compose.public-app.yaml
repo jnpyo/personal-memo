@@ -1,0 +1,42 @@
+services:
+  frontend:
+    build:
+      args:
+        VITE_OWNER_REMOTE_APP_HOSTNAME: ${PUBLIC_APP_HOSTNAME:?Set PUBLIC_APP_HOSTNAME to the exact public app hostname}
+    networks:
+      - default
+      - app-publication
+
+  app-public-edge:
+    build:
+      context: ./app-edge
+    environment:
+      PUBLIC_APP_HOSTNAME: ${PUBLIC_APP_HOSTNAME:?Set PUBLIC_APP_HOSTNAME to the exact public app hostname}
+    depends_on:
+      frontend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${PERSONAL_MEMO_APP_EDGE_PORT:-8788}:8080"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      # nginx-unprivileged renders the hostname-only template here at container start.
+      - /etc/nginx/conf.d:uid=101,gid=101,mode=0750
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - app-publication
+      - app-loopback
+
+networks:
+  app-publication:
+    internal: true
+  # Docker Desktop for Windows does not publish host ports from an internal-only network. This
+  # edge-only bridge supplies the gateway required for the exact 127.0.0.1 binding; no application
+  # or database service joins it.
+  app-loopback: {}

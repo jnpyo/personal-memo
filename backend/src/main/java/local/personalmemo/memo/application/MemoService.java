@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import local.personalmemo.calendar.application.CalendarFeedProjectionService;
 import local.personalmemo.common.auth.CurrentIdentity;
 import local.personalmemo.common.error.DomainException;
 import local.personalmemo.common.idempotency.IdempotencyService;
@@ -37,11 +38,17 @@ public class MemoService {
   private final JdbcClient db;
   private final CurrentIdentity identity;
   private final IdempotencyService idempotency;
+  private final CalendarFeedProjectionService calendarFeeds;
 
-  public MemoService(JdbcClient db, CurrentIdentity identity, IdempotencyService idempotency) {
+  public MemoService(
+      JdbcClient db,
+      CurrentIdentity identity,
+      IdempotencyService idempotency,
+      CalendarFeedProjectionService calendarFeeds) {
     this.db = db;
     this.identity = identity;
     this.idempotency = idempotency;
+    this.calendarFeeds = calendarFeeds;
   }
 
   @Transactional
@@ -179,6 +186,7 @@ public class MemoService {
 
     int nextRevision = current.currentRevision() + 1;
     Timestamp now = Timestamp.from(Instant.now());
+    calendarFeeds.cancelForMemo(identity.ownerId(), id, now.toInstant());
     Timestamp clientRecordedAt =
         Timestamp.from(
             command.clientUpdatedAt() == null
@@ -289,6 +297,7 @@ public class MemoService {
     MemoSnapshot current = findCurrent(id, true);
     if (current.isActive()) {
       Timestamp now = Timestamp.from(Instant.now());
+      calendarFeeds.cancelForMemo(identity.ownerId(), id, now.toInstant());
       db.sql(
               """
               update memos
@@ -416,7 +425,8 @@ public class MemoService {
         memo.status(),
         memo.analysisState(),
         memo.createdAt(),
-        memo.pinned());
+        memo.pinned(),
+        memo.sourceTimeZone());
   }
 
   private void validateTimeZone(String timeZone) {

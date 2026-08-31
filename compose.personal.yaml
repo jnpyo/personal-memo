@@ -10,6 +10,19 @@ services:
       PERSONAL_MEMO_BOOTSTRAP_EMAIL: ${PERSONAL_MEMO_BOOTSTRAP_EMAIL:-}
       PERSONAL_MEMO_BOOTSTRAP_DISPLAY_NAME: ${PERSONAL_MEMO_BOOTSTRAP_DISPLAY_NAME:-}
       PERSONAL_MEMO_BOOTSTRAP_TIME_ZONE: ${PERSONAL_MEMO_BOOTSTRAP_TIME_ZONE:-Asia/Seoul}
+      # Single-owner provisional beta only. These values are deliberately pinned here instead of
+      # delegated to .env.personal so a model or endpoint change requires a reviewed source change.
+      APP_ANALYSIS_LOCAL_MODEL_ENABLED: "true"
+      APP_ANALYSIS_INVOCATION_MODE: "AI_PREFERRED"
+      APP_ANALYSIS_APPROVED_CORRECTIONS_ENABLED: "true"
+      APP_ANALYSIS_APPROVED_CORRECTION_CONTEXT_K: "3"
+      APP_ANALYSIS_LOCAL_MODEL_ENDPOINT: "http://host.docker.internal:11434"
+      APP_ANALYSIS_LOCAL_MODEL_ALLOWED_DOCKER_HOST_RELAY_ORIGIN: "http://host.docker.internal:11434"
+      APP_ANALYSIS_LOCAL_MODEL_NAME: "hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q8_0"
+      APP_ANALYSIS_LOCAL_MODEL_DIGEST: "677b7229e7816d6bbdf3f7b777a5321f9719ecd3ab6e2658a2ff3798d3185822"
+      # The gateway performs tags -> chat -> tags with keep_alive=0. Keep the outer durable
+      # execution bound above the 30s per-request transport timeout while remaining below its 60s cap.
+      APP_ANALYSIS_CLOUD_EXECUTION_TIMEOUT: "45s"
 
   frontend:
     ports:

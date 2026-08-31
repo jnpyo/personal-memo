@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://personal-memo.local/schemas/cloudflare-external-qualification-receipt-v1.json",
+  "title": "CloudflareExternalQualificationReceiptV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "classification",
+    "decision",
+    "recordedAt",
+    "hostnameSha256",
+    "probeFixtureId",
+    "probeFixtureSha256",
+    "exactPositiveProbeCount",
+    "emptyNoStoreOriginDenyProbeCount",
+    "boundedRemoteCatchAllDenyProbeCount",
+    "rateLimitAttemptCount",
+    "rateLimitObservation",
+    "bodylessRateLimitProbeCount",
+    "totalExternalProbeCount",
+    "cloudflareCacheStatusCounts",
+    "cloudflareCacheHitCount",
+    "maximumObservedLatencyMilliseconds",
+    "ownedLogSentinel",
+    "externalArtifactReflectionSentinel",
+    "cloudflaredConnectorLogSentinel",
+    "cloudflareCustomerProviderLogSentinel",
+    "tunnelReplicaVerification"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "status": {
+      "const": "TRANSPORT_PATH_CACHE_PASS_LOG_AND_REPLICA_REQUIRED"
+    },
+    "classification": {
+      "const": "SOLO_PROVISIONAL/REPORT_ONLY"
+    },
+    "decision": {
+      "const": "NO_GO"
+    },
+    "recordedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "hostnameSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "probeFixtureId": {
+      "const": "cloudflare-external-synthetic-v1"
+    },
+    "probeFixtureSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "exactPositiveProbeCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30
+    },
+    "emptyNoStoreOriginDenyProbeCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30
+    },
+    "boundedRemoteCatchAllDenyProbeCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30
+    },
+    "rateLimitAttemptCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30
+    },
+    "rateLimitObservation": {
+      "enum": [
+        "OBSERVED_BODYLESS_429",
+        "NOT_OBSERVED_WITHIN_BOUNDED_ATTEMPTS"
+      ]
+    },
+    "bodylessRateLimitProbeCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "totalExternalProbeCount": {
+      "type": "integer",
+      "minimum": 4,
+      "maximum": 60
+    },
+    "cloudflareCacheStatusCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["BYPASS", "DYNAMIC"],
+      "properties": {
+        "BYPASS": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60
+        },
+        "DYNAMIC": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60
+        }
+      }
+    },
+    "cloudflareCacheHitCount": {
+      "const": 0
+    },
+    "maximumObservedLatencyMilliseconds": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 25000
+    },
+    "ownedLogSentinel": {
+      "const": "PASS"
+    },
+    "externalArtifactReflectionSentinel": {
+      "const": "PASS"
+    },
+    "cloudflaredConnectorLogSentinel": {
+      "const": "REQUIRED_NOT_VERIFIED"
+    },
+    "cloudflareCustomerProviderLogSentinel": {
+      "const": "REQUIRED_NOT_VERIFIED"
+    },
+    "tunnelReplicaVerification": {
+      "const": "REQUIRED_NOT_VERIFIED"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

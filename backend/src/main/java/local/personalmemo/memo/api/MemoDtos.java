@@ -34,5 +34,6 @@ public final class MemoDtos {
       String status,
       String analysisState,
       Instant createdAt,
-      boolean pinned) {}
+      boolean pinned,
+      String sourceTimeZone) {}
 }
