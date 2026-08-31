@@ -15,6 +15,7 @@ import local.personalmemo.analysis.domain.DeterministicAmbiguityGate;
 import local.personalmemo.analysis.domain.KoreanDateParser;
 import local.personalmemo.analysis.domain.KoreanDateParser.ParsedDate;
 import local.personalmemo.analysis.domain.KoreanItemExtractor;
+import local.personalmemo.analysis.domain.KoreanItemExtractor.ClassificationBasis;
 import local.personalmemo.analysis.domain.KoreanItemExtractor.ExtractedItem;
 import local.personalmemo.analysis.domain.KoreanItemExtractor.Extraction;
 import local.personalmemo.analysis.domain.LocalAnalyzer;
@@ -30,8 +31,8 @@ import tools.jackson.databind.node.ObjectNode;
 @Component
 public class FakeAnalyzer implements LocalAnalyzer {
   private static final AnalysisProvenance PROVENANCE =
-      new AnalysisProvenance("fake-v6", "none", "none", "none");
-  private static final String DETERMINISTIC_RULES_VERSION = "korean-rules-v4";
+      new AnalysisProvenance("fake-v9", "none", "none", "none");
+  private static final String DETERMINISTIC_RULES_VERSION = "korean-rules-v7";
   private static final int MAX_DATE_CANDIDATES = 5;
   private static final int MAX_ITEM_CANDIDATES = 3;
   private static final Pattern OPERATING_SYSTEMS_ALIAS =
@@ -65,6 +66,7 @@ public class FakeAnalyzer implements LocalAnalyzer {
       UUID memoId, int revision, String content, Instant baseInstant, String timeZone) {
     List<ParsedDate> detectedDates = dateParser.parse(content, baseInstant, timeZone);
     List<ParsedDate> dates = detectedDates.stream().limit(MAX_DATE_CANDIDATES).toList();
+    int unparsedTemporalCueCount = dateParser.unparsedTemporalCueCount(detectedDates);
     AnalysisShape shape = classify(content, detectedDates);
     LinkedHashSet<AmbiguityReason> signals = new LinkedHashSet<>();
     shape.signals().stream().sorted(Comparator.comparingInt(Enum::ordinal)).forEach(signals::add);
@@ -100,9 +102,7 @@ public class FakeAnalyzer implements LocalAnalyzer {
     proposal.set("itemCandidates", createItemCandidates(shape.items(), dates, title));
     proposal.set("relationCandidates", json.createArrayNode());
     proposal.set("ambiguityReasons", createAmbiguityReasons(signals));
-    AnalysisRoute route = ambiguityGate.route(ambiguityGate.routingSignals(proposal));
-    proposal.set(
-        "providerMetadata",
+    ObjectNode providerMetadata =
         json.createObjectNode()
             .put("analyzerVersion", PROVENANCE.analyzerVersion())
             .put("deterministicRulesVersion", DETERMINISTIC_RULES_VERSION)
@@ -110,12 +110,17 @@ public class FakeAnalyzer implements LocalAnalyzer {
             .put("promptVersion", PROVENANCE.promptVersion())
             .put("localModelVersion", PROVENANCE.localModelVersion())
             .put("embeddingModelVersion", PROVENANCE.embeddingModelVersion())
-            .put("route", route.name())
             .put("detectedDateCandidateCount", detectedDates.size())
             .put("emittedDateCandidateCount", dates.size())
             .put("detectedItemCandidateCount", shape.detectedItemCount())
             .put("emittedItemCandidateCount", Math.min(shape.items().size(), MAX_ITEM_CANDIDATES))
-            .put("toolCalls", 0));
+            .put("classificationBasis", shape.classificationBasis().name())
+            .put("unparsedTemporalCueCount", unparsedTemporalCueCount)
+            .put("unrecognizedActionCueCount", shape.unrecognizedActionCueCount())
+            .put("toolCalls", 0);
+    proposal.set("providerMetadata", providerMetadata);
+    AnalysisRoute route = ambiguityGate.route(ambiguityGate.routingSignals(proposal));
+    providerMetadata.put("route", route.name());
     return proposal;
   }
 
@@ -155,7 +160,28 @@ public class FakeAnalyzer implements LocalAnalyzer {
     }
     if (compact.matches(".*(?:\\d{1,2}\\.\\d{1,2}).*(?:운영체제|OS)\\s*과제\\s*$")) {
       return shape(
-          List.of("UNKNOWN"), List.of(), Set.of(AmbiguityReason.MISSING_ACTION), null, 0.52);
+          List.of("UNKNOWN"),
+          withDateFreeScaffoldTitle(content, dates, extractedItems),
+          Set.of(AmbiguityReason.MISSING_ACTION),
+          null,
+          0.52,
+          extraction.detectedItemCount(),
+          extraction.classificationBasis(),
+          extraction.unrecognizedActionCueCount());
+    }
+    if (extraction.classificationBasis() == ClassificationBasis.DEFAULT_FALLBACK) {
+      return shape(
+          List.of("UNKNOWN"),
+          // Keep one source-grounded scaffold for the bounded local-model patch. UNKNOWN remains
+          // the actual classification, and AnalysisService removes this scaffold if enrichment
+          // does not produce a valid semantic change.
+          extractedItems,
+          extraction.signals(),
+          null,
+          0.52,
+          extraction.detectedItemCount(),
+          extraction.classificationBasis(),
+          extraction.unrecognizedActionCueCount());
     }
 
     List<String> extractedTypes = extractedItems.stream().map(ItemShape::kind).distinct().toList();
@@ -173,7 +199,37 @@ public class FakeAnalyzer implements LocalAnalyzer {
         extraction.signals(),
         null,
         confidence,
-        extraction.detectedItemCount());
+        extraction.detectedItemCount(),
+        extraction.classificationBasis(),
+        extraction.unrecognizedActionCueCount());
+  }
+
+  private List<ItemShape> withDateFreeScaffoldTitle(
+      String content, List<ParsedDate> dates, List<ItemShape> items) {
+    if (items.size() != 1) {
+      return items;
+    }
+    String title = content.strip();
+    for (ParsedDate date : dates) {
+      title = title.replace(date.surfaceText(), " ");
+    }
+    title = bounded(title.replaceAll("\\s+", " ").strip(), 200);
+    if (title.isBlank()) {
+      return items;
+    }
+    String scaffoldTitle = title;
+    return items.stream()
+        .map(
+            item ->
+                new ItemShape(
+                    item.kind(),
+                    scaffoldTitle,
+                    item.action(),
+                    item.object(),
+                    item.startOffset(),
+                    item.endOffset(),
+                    item.confidence()))
+        .toList();
   }
 
   private boolean isPastEvent(List<ItemShape> items, String compact) {
@@ -225,7 +281,35 @@ public class FakeAnalyzer implements LocalAnalyzer {
       String newTopic,
       double confidence,
       int detectedItemCount) {
-    return new AnalysisShape(types, items, signals, newTopic, confidence, detectedItemCount);
+    return shape(
+        types,
+        items,
+        signals,
+        newTopic,
+        confidence,
+        detectedItemCount,
+        ClassificationBasis.EXPLICIT_RULE,
+        0);
+  }
+
+  private AnalysisShape shape(
+      List<String> types,
+      List<ItemShape> items,
+      Set<AmbiguityReason> signals,
+      String newTopic,
+      double confidence,
+      int detectedItemCount,
+      ClassificationBasis classificationBasis,
+      int unrecognizedActionCueCount) {
+    return new AnalysisShape(
+        types,
+        items,
+        signals,
+        newTopic,
+        confidence,
+        detectedItemCount,
+        classificationBasis,
+        unrecognizedActionCueCount);
   }
 
   private String suggestedTitle(
@@ -431,7 +515,9 @@ public class FakeAnalyzer implements LocalAnalyzer {
       Set<AmbiguityReason> signals,
       String newTopic,
       double titleConfidence,
-      int detectedItemCount) {}
+      int detectedItemCount,
+      ClassificationBasis classificationBasis,
+      int unrecognizedActionCueCount) {}
 
   private record ItemShape(
       String kind,

@@ -7,6 +7,7 @@ import {
   SessionScopeChangedError,
 } from './client';
 import { ReviewOutcomeContractError } from './reviewOutcomeDecoder';
+import { AnalysisPathEvidenceSummaryContractError } from './analysisPathEvidenceSummaryDecoder';
 import type { ApplyProposalRequest, MemoView, Proposal } from './types';
 
 const memo: MemoView = {
@@ -17,6 +18,7 @@ const memo: MemoView = {
   status: 'ACTIVE',
   analysisState: 'NOT_STARTED',
   createdAt: '2026-08-05T00:00:00.000Z',
+  sourceTimeZone: 'Asia/Seoul',
 };
 
 afterEach(() => {
@@ -32,6 +34,13 @@ function okResponse(body: unknown = memo): Response {
 
 function csrfResponse(token = 'csrf-test-token'): Response {
   return okResponse({ headerName: 'X-CSRF-TOKEN', parameterName: '_csrf', token });
+}
+
+function calendarResponse(body: string): Response {
+  return new Response(body, {
+    status: 200,
+    headers: { 'Content-Type': 'text/calendar; charset=UTF-8' },
+  });
 }
 
 function testClient(defaultResponse: unknown = memo) {
@@ -94,6 +103,35 @@ function validProposalV2() {
   };
 }
 
+function validProposalV3() {
+  return {
+    ...validProposalV2(),
+    schemaVersion: '3',
+    itemCandidates: [
+      {
+        candidateId: 'item-1',
+        dueDateCandidateId: null,
+        eventScheduleCandidates: [
+          {
+            candidateId: 'event-schedule-1',
+            mode: 'ALL_DAY',
+            startDateCandidateId: 'date-1',
+            end: null,
+            score: 0.85,
+          },
+        ],
+        suggestedEventScheduleCandidateId: 'event-schedule-1',
+        kind: 'EVENT',
+        title: '운영체제 일정',
+        sourceSpan: null,
+        action: '참석',
+        object: '운영체제 일정',
+        confidence: 0.9,
+      },
+    ],
+  };
+}
+
 function validReviewOutcomeSummary() {
   return {
     schemaVersion: '1',
@@ -132,6 +170,102 @@ function validReviewOutcomeSummary() {
   };
 }
 
+function validAnalysisPathEvidenceSummary() {
+  return {
+    schemaVersion: '1',
+    aggregationPolicyVersion: 'analysis-path-evidence-summary-v1',
+    cohort: {
+      basis: 'ANALYSIS_RUN_CREATED_AT',
+      days: 14,
+      fromInclusive: '2026-07-25T00:00:00Z',
+      toExclusive: '2026-08-08T00:00:00Z',
+      maxRuns: 1_000,
+    },
+    runs: { total: 0, withDispatch: 0, withoutDispatch: 0 },
+    localDecisionEvidence: { current: 0, legacy: 0 },
+    dispatchRoutes: {
+      localModel: 0,
+      externalMemoTransfer: 0,
+      builtInFake: 0,
+      legacyOrOther: 0,
+    },
+    lifecycle: { prepared: 0, running: 0, finalized: 0 },
+    invocationModes: { legacyUnknown: 0, uncertaintyOnly: 0, aiPreferred: 0 },
+    invocationReasons: {
+      legacyUnknown: 0,
+      semanticUncertainty: 0,
+      aiPreferredPolicy: 0,
+    },
+    localModelContributions: {
+      notRecorded: 0,
+      pending: 0,
+      acceptedChanged: 0,
+      acceptedUnchanged: 0,
+      localFallback: 0,
+    },
+    approvedCorrectionSnapshots: { withSignals: 0, totalSignals: 0 },
+    fallbackReasons: {
+      defaultRecordFallback: 0,
+      unparsedTemporalCue: 0,
+      unrecognizedActionCue: 0,
+      lowTypeMargin: 0,
+      tagUncertainty: 0,
+      dateUncertainty: 0,
+      unresolvedReference: 0,
+      incompleteTask: 0,
+      multiIntent: 0,
+      candidateLimit: 0,
+      localConflict: 0,
+    },
+    changedFields: {
+      suggestedTitle: 0,
+      typeCandidates: 0,
+      dateCandidates: 0,
+      tagCandidates: 0,
+      itemCandidates: 0,
+      relationCandidates: 0,
+      ambiguityReasons: 0,
+    },
+  };
+}
+
+function validCalendarFeedSummary() {
+  return {
+    id: '11111111-1111-4111-8111-111111111111',
+    displayName: '가족 공유',
+    disclosureMode: 'BUSY_ONLY',
+    status: 'ACTIVE',
+    version: 1,
+    eventCount: 1,
+    createdAt: '2026-08-25T00:00:00Z',
+    updatedAt: '2026-08-25T00:00:00Z',
+    rotatedAt: '2026-08-25T00:00:00Z',
+    revokedAt: null,
+    publicationScope: 'LOCAL_ONLY',
+    publicConsentPolicyVersion: null,
+    publicConsentGrantedAt: null,
+  };
+}
+
+function validCalendarFeedDetail() {
+  return {
+    ...validCalendarFeedSummary(),
+    entries: [{
+      id: '22222222-2222-4222-8222-222222222222',
+      eventId: '33333333-3333-4333-8333-333333333333',
+      title: '디스코드 접속',
+      state: 'ACTIVE',
+      sequence: 0,
+      scheduleKind: 'TIMED',
+      startAt: '2026-08-25T09:00:00Z',
+      endAt: null,
+      startDate: null,
+      endDateExclusive: null,
+      sourceTimeZone: 'Asia/Seoul',
+    }],
+  };
+}
+
 describe('memo API client', () => {
   it('loads graph and current memo detail through uncached owner-scoped reads', async () => {
     const { client, applicationFetch } = testClient(memo);
@@ -159,6 +293,329 @@ describe('memo API client', () => {
       '/api/v1/memos/memo-1',
       expectedRead,
     );
+  });
+
+  it('loads a bounded confirmed-event list through an uncached owner-scoped read', async () => {
+    const { client, applicationFetch } = testClient([]);
+    client.setSessionOwner('user-a');
+
+    await client.events(999);
+
+    expect(applicationFetch).toHaveBeenCalledWith('/api/v1/events?limit=100', {
+      cache: 'no-store',
+      credentials: 'same-origin',
+      signal: expect.any(AbortSignal),
+      headers: {
+        'Content-Type': 'application/json',
+        [EXPECTED_OWNER_ID_HEADER]: 'user-a',
+      },
+    });
+  });
+
+  it('loads metadata-only calendar feed management reads with owner and no-store scope', async () => {
+    const detail = validCalendarFeedDetail();
+    const applicationFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/capabilities')) {
+        return okResponse({
+          mode: 'LOCAL_ONLY',
+          publicOrigin: null,
+          consentPolicyVersion: null,
+        });
+      }
+      if (url.endsWith('/eligible-events')) {
+        return okResponse({ items: [], truncated: false });
+      }
+      if (url === '/api/v1/calendar-feeds') return okResponse([validCalendarFeedSummary()]);
+      return okResponse(detail);
+    });
+    const client = createApiClient(applicationFetch);
+    client.setSessionOwner('user-a');
+
+    await client.calendarFeedPublicationCapability();
+    await client.calendarFeedEligibleEvents();
+    await client.calendarFeeds();
+    await client.calendarFeed('feed/with space');
+
+    const expectedRead = {
+      cache: 'no-store',
+      credentials: 'same-origin',
+      signal: expect.any(AbortSignal),
+      headers: {
+        'Content-Type': 'application/json',
+        [EXPECTED_OWNER_ID_HEADER]: 'user-a',
+      },
+    };
+    expect(applicationFetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/calendar-feeds/capabilities',
+      expectedRead,
+    );
+    expect(applicationFetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/calendar-feeds/eligible-events',
+      expectedRead,
+    );
+    expect(applicationFetch).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/calendar-feeds',
+      expectedRead,
+    );
+    expect(applicationFetch).toHaveBeenNthCalledWith(
+      4,
+      '/api/v1/calendar-feeds/feed%2Fwith%20space',
+      expectedRead,
+    );
+  });
+
+  it('sends every calendar feed mutation with CSRF, owner scope and caller idempotency', async () => {
+    const detail = validCalendarFeedDetail();
+    const { client, applicationFetch } = testClient(detail);
+    client.setSessionOwner('user-a');
+    const secret = 'a'.repeat(43);
+
+    await client.createCalendarFeed({
+      displayName: '가족 공유',
+      disclosureMode: 'BUSY_ONLY',
+      eventIds: ['event-a'],
+      bearerSecret: secret,
+    }, 'create-key');
+    await client.updateCalendarFeed('feed/a', {
+      displayName: '가족 일정',
+      disclosureMode: 'TITLE',
+      expectedVersion: 1,
+    }, 'update-key');
+    await client.rotateCalendarFeed('feed/a', {
+      bearerSecret: secret,
+      expectedVersion: 1,
+    }, 'rotate-key');
+    await client.enableExternalCalendarFeedPublication('feed/a', {
+      bearerSecret: secret,
+      expectedVersion: 1,
+      consentPolicyVersion: 'calendar-feed-public-v1',
+    }, 'public-key');
+    await client.revokeCalendarFeed('feed/a', { expectedVersion: 1 }, 'revoke-key');
+    await client.addCalendarFeedEvent('feed/a', {
+      eventId: 'event-b',
+      expectedVersion: 1,
+    }, 'add-key');
+    await client.removeCalendarFeedEvent(
+      'feed/a',
+      'entry/a',
+      { expectedVersion: 1 },
+      'remove-key',
+    );
+
+    expect(applicationFetch.mock.calls.map(([url, init]) => ({
+      url,
+      method: init?.method,
+      key: new Headers(init?.headers).get('Idempotency-Key'),
+      csrf: new Headers(init?.headers).get('X-CSRF-TOKEN'),
+      owner: new Headers(init?.headers).get(EXPECTED_OWNER_ID_HEADER),
+      body: init?.body,
+      cache: init?.cache,
+    }))).toEqual([
+      {
+        url: '/api/v1/calendar-feeds',
+        method: 'POST',
+        key: 'create-key',
+        csrf: 'csrf-test-token',
+        owner: 'user-a',
+        body: JSON.stringify({
+          displayName: '가족 공유',
+          disclosureMode: 'BUSY_ONLY',
+          eventIds: ['event-a'],
+          bearerSecret: secret,
+        }),
+        cache: 'no-store',
+      },
+      {
+        url: '/api/v1/calendar-feeds/feed%2Fa',
+        method: 'PATCH',
+        key: 'update-key',
+        csrf: 'csrf-test-token',
+        owner: 'user-a',
+        body: JSON.stringify({
+          displayName: '가족 일정',
+          disclosureMode: 'TITLE',
+          expectedVersion: 1,
+        }),
+        cache: 'no-store',
+      },
+      {
+        url: '/api/v1/calendar-feeds/feed%2Fa/rotate',
+        method: 'POST',
+        key: 'rotate-key',
+        csrf: 'csrf-test-token',
+        owner: 'user-a',
+        body: JSON.stringify({ bearerSecret: secret, expectedVersion: 1 }),
+        cache: 'no-store',
+      },
+      {
+        url: '/api/v1/calendar-feeds/feed%2Fa/external-publication/enable',
+        method: 'POST',
+        key: 'public-key',
+        csrf: 'csrf-test-token',
+        owner: 'user-a',
+        body: JSON.stringify({
+          bearerSecret: secret,
+          expectedVersion: 1,
+          consentPolicyVersion: 'calendar-feed-public-v1',
+        }),
+        cache: 'no-store',
+      },
+      {
+        url: '/api/v1/calendar-feeds/feed%2Fa/revoke',
+        method: 'POST',
+        key: 'revoke-key',
+        csrf: 'csrf-test-token',
+        owner: 'user-a',
+        body: JSON.stringify({ expectedVersion: 1 }),
+        cache: 'no-store',
+      },
+      {
+        url: '/api/v1/calendar-feeds/feed%2Fa/events',
+        method: 'POST',
+        key: 'add-key',
+        csrf: 'csrf-test-token',
+        owner: 'user-a',
+        body: JSON.stringify({ eventId: 'event-b', expectedVersion: 1 }),
+        cache: 'no-store',
+      },
+      {
+        url: '/api/v1/calendar-feeds/feed%2Fa/events/entry%2Fa/remove',
+        method: 'POST',
+        key: 'remove-key',
+        csrf: 'csrf-test-token',
+        owner: 'user-a',
+        body: JSON.stringify({ expectedVersion: 1 }),
+        cache: 'no-store',
+      },
+    ]);
+  });
+
+  it('rejects a calendar feed response that exposes the bearer secret', async () => {
+    const detail = { ...validCalendarFeedDetail(), bearerSecret: 'a'.repeat(43) };
+    const client = createApiClient(async () => okResponse(detail));
+    client.setSessionOwner('user-a');
+
+    await expect(client.calendarFeed('feed-a')).rejects.toMatchObject({
+      name: 'CalendarFeedContractError',
+    });
+  });
+
+  it('loads an authenticated calendar Blob through an uncached owner-scoped read', async () => {
+    const calendar = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'BEGIN:VEVENT',
+      'SUMMARY:디스코드 접속',
+      'END:VEVENT',
+      'END:VCALENDAR',
+      '',
+    ].join('\r\n');
+    const applicationFetch = vi.fn(async (
+      ...request: [RequestInfo | URL, RequestInit?]
+    ) => {
+      void request;
+      return calendarResponse(calendar);
+    });
+    const client = createApiClient(applicationFetch);
+    const controller = new AbortController();
+    client.setSessionOwner('user-a');
+
+    const result = await client.eventCalendarExport(controller.signal);
+
+    expect(result).not.toBeNull();
+    if (result === null) throw new Error('Expected a calendar Blob');
+    expect(await result.text()).toBe(calendar);
+    expect(result.type).toBe('text/calendar;charset=utf-8');
+    expect(applicationFetch).toHaveBeenCalledWith('/api/v1/events/calendar.ics', {
+      cache: 'no-store',
+      credentials: 'same-origin',
+      signal: expect.any(AbortSignal),
+      headers: {
+        Accept: 'text/calendar',
+        'Content-Type': 'application/json',
+        [EXPECTED_OWNER_ID_HEADER]: 'user-a',
+      },
+    });
+    const requestSignal = applicationFetch.mock.calls[0]?.[1]?.signal;
+    expect(requestSignal).not.toBe(controller.signal);
+    controller.abort();
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it('normalizes an empty authenticated calendar export to null', async () => {
+    const applicationFetch = vi.fn(async (
+      ...request: [RequestInfo | URL, RequestInit?]
+    ) => {
+      void request;
+      return new Response(null, { status: 204 });
+    });
+    const client = createApiClient(applicationFetch);
+    client.setSessionOwner('user-a');
+
+    await expect(client.eventCalendarExport()).resolves.toBeNull();
+    expect(applicationFetch).toHaveBeenCalledWith('/api/v1/events/calendar.ics', {
+      cache: 'no-store',
+      credentials: 'same-origin',
+      signal: expect.any(AbortSignal),
+      headers: {
+        Accept: 'text/calendar',
+        'Content-Type': 'application/json',
+        [EXPECTED_OWNER_ID_HEADER]: 'user-a',
+      },
+    });
+  });
+
+  it('rejects a non-calendar success response before it can be downloaded', async () => {
+    const client = createApiClient(async () => okResponse({ unexpected: true }));
+    client.setSessionOwner('user-a');
+
+    await expect(client.eventCalendarExport()).rejects.toThrow(
+      'Invalid calendar export response',
+    );
+  });
+
+  it('discards a calendar Blob when the owner changes while its body is being decoded', async () => {
+    let resolveBlob!: (blob: Blob) => void;
+    const delayedBlob = new Promise<Blob>((resolve) => {
+      resolveBlob = resolve;
+    });
+    const response = calendarResponse('BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n');
+    const blobSpy = vi.spyOn(response, 'blob').mockImplementation(() => delayedBlob);
+    const client = createApiClient(async () => response);
+    client.setSessionOwner('user-a');
+
+    const request = client.eventCalendarExport();
+    await vi.waitFor(() => expect(blobSpy).toHaveBeenCalledTimes(1));
+    client.invalidateSession();
+    resolveBlob(new Blob(['BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n'], {
+      type: 'text/calendar;charset=utf-8',
+    }));
+
+    await expect(request).rejects.toBeInstanceOf(SessionScopeChangedError);
+  });
+
+  it('normalizes a session-aborted calendar fetch to a scope-change failure', async () => {
+    let requestStarted = false;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestStarted = true;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+        }, { once: true });
+      });
+    });
+    const client = createApiClient(fetchMock);
+    client.setSessionOwner('user-a');
+
+    const request = client.eventCalendarExport();
+    await vi.waitFor(() => expect(requestStarted).toBe(true));
+    client.invalidateSession();
+
+    await expect(request).rejects.toBeInstanceOf(SessionScopeChangedError);
   });
 
   it('loads an encoded, uncached neighborhood page with the caller abort signal', async () => {
@@ -459,7 +916,7 @@ describe('memo API client', () => {
         relationType: 'RELATED_TO',
         score: 0.8,
       }],
-    } as Proposal;
+    } as unknown as Proposal;
     const { client, applicationFetch } = testClient([{
       proposalIndex: 0,
       targetType: 'TAG',
@@ -525,7 +982,7 @@ describe('memo API client', () => {
         cache: 'no-store',
         headers: {
           'Content-Type': 'application/json',
-          [ANALYSIS_PROPOSAL_SCHEMA_VERSION_HEADER]: '2',
+          [ANALYSIS_PROPOSAL_SCHEMA_VERSION_HEADER]: '3',
         },
       },
     );
@@ -538,7 +995,7 @@ describe('memo API client', () => {
         cache: 'no-store',
         headers: {
           'Content-Type': 'application/json',
-          [ANALYSIS_PROPOSAL_SCHEMA_VERSION_HEADER]: '2',
+          [ANALYSIS_PROPOSAL_SCHEMA_VERSION_HEADER]: '3',
         },
       },
     );
@@ -681,6 +1138,56 @@ describe('memo API client', () => {
     );
   });
 
+  it('loads an uncached owner-scoped analysis path summary without mutation headers', async () => {
+    const { client, fetchMock, applicationFetch } = testClient(
+      validAnalysisPathEvidenceSummary(),
+    );
+    client.setSessionOwner('user-a');
+
+    await client.analysisPathEvidenceSummary(14);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(applicationFetch).toHaveBeenCalledWith(
+      '/api/v1/analysis-path-evidence/summary?days=14',
+      {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        signal: expect.any(AbortSignal),
+        headers: {
+          'Content-Type': 'application/json',
+          [EXPECTED_OWNER_ID_HEADER]: 'user-a',
+        },
+      },
+    );
+  });
+
+  it('bounds the analysis path evidence window to the server contract', async () => {
+    const { client, applicationFetch } = testClient(validAnalysisPathEvidenceSummary());
+    client.setSessionOwner('user-a');
+
+    await client.analysisPathEvidenceSummary(0);
+    await client.analysisPathEvidenceSummary(120);
+    await client.analysisPathEvidenceSummary(14.9);
+    await client.analysisPathEvidenceSummary(Number.NaN);
+
+    expect(applicationFetch.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v1/analysis-path-evidence/summary?days=1',
+      '/api/v1/analysis-path-evidence/summary?days=90',
+      '/api/v1/analysis-path-evidence/summary?days=14',
+      '/api/v1/analysis-path-evidence/summary?days=14',
+    ]);
+  });
+
+  it('rejects an unsupported analysis path contract before it reaches the workspace', async () => {
+    const unsupported = { ...validAnalysisPathEvidenceSummary(), schemaVersion: '2' };
+    const { client } = testClient(unsupported);
+    client.setSessionOwner('user-a');
+
+    await expect(client.analysisPathEvidenceSummary()).rejects.toBeInstanceOf(
+      AnalysisPathEvidenceSummaryContractError,
+    );
+  });
+
   it('invalidates local scope and emits a dedicated event on server owner mismatch', async () => {
     const browserEvents = new EventTarget();
     vi.stubGlobal('window', browserEvents);
@@ -776,11 +1283,26 @@ describe('memo API client', () => {
   });
 
   it('rejects unsupported proposal versions before they reach review state', async () => {
-    const { client } = testClient({ ...validProposal(), schemaVersion: '3' });
+    const { client } = testClient({ ...validProposal(), schemaVersion: '4' });
 
     await expect(client.proposal('proposal-1')).rejects.toMatchObject({
       name: 'ProposalContractError',
       field: 'schemaVersion',
+    });
+  });
+
+  it('decodes v3 EVENT alternatives without turning the suggestion into a selection', async () => {
+    const { client } = testClient(validProposalV3());
+
+    await expect(client.proposal('proposal-1')).resolves.toMatchObject({
+      schemaVersion: '3',
+      itemCandidates: [
+        {
+          candidateId: 'item-1',
+          suggestedEventScheduleCandidateId: 'event-schedule-1',
+          eventScheduleCandidates: [{ candidateId: 'event-schedule-1' }],
+        },
+      ],
     });
   });
 
@@ -798,7 +1320,7 @@ describe('memo API client', () => {
       cache: 'no-store',
       headers: {
         'Content-Type': 'application/json',
-        [ANALYSIS_PROPOSAL_SCHEMA_VERSION_HEADER]: '2',
+        [ANALYSIS_PROPOSAL_SCHEMA_VERSION_HEADER]: '3',
       },
     });
   });

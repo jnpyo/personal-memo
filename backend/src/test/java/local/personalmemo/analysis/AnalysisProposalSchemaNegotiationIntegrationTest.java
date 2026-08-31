@@ -50,6 +50,68 @@ class AnalysisProposalSchemaNegotiationIntegrationTest extends PostgresIntegrati
     assertThat(currentProposal.at("/itemCandidates/0/dueDateCandidateId").asText())
         .isEqualTo("date-1");
 
+    var maximum =
+        mvc.perform(
+                get("/api/v1/analysis-proposals/{id}", proposalId)
+                    .header(PROPOSAL_SCHEMA_VERSION_HEADER, "3"))
+            .andReturn();
+    assertProposalResponseHeaders(maximum.getResponse());
+    JsonNode maximumProposal = response(maximum);
+    assertThat(maximumProposal.path("schemaVersion").asText()).isEqualTo("2");
+    assertThat(maximumProposal.at("/itemCandidates/0/eventScheduleCandidates").isMissingNode())
+        .isTrue();
+
+    assertThat(storedProposal(proposalId)).isEqualTo(storedBefore);
+  }
+
+  @Test
+  void storedVersionThreeProjectsStrictlyToVersionTwoAndVersionOne() throws Exception {
+    UUID proposalId = createBoundProposal("schema-v3-projection");
+    promoteStoredProposalToVersionThree(proposalId);
+    JsonNode storedBefore = storedProposal(proposalId);
+    proposalSchemaValidator.validate(storedBefore);
+
+    var versionThree =
+        mvc.perform(
+                get("/api/v1/analysis-proposals/{id}", proposalId)
+                    .header(PROPOSAL_SCHEMA_VERSION_HEADER, "3"))
+            .andReturn();
+    assertProposalResponseHeaders(versionThree.getResponse());
+    assertThat(response(versionThree).path("schemaVersion").asText()).isEqualTo("3");
+    assertThat(response(versionThree).at("/itemCandidates/0/eventScheduleCandidates").isArray())
+        .isTrue();
+    assertThat(
+            response(versionThree)
+                .at("/itemCandidates/0/suggestedEventScheduleCandidateId")
+                .isNull())
+        .isTrue();
+
+    var versionTwo =
+        mvc.perform(
+                get("/api/v1/analysis-proposals/{id}", proposalId)
+                    .header(PROPOSAL_SCHEMA_VERSION_HEADER, "2"))
+            .andReturn();
+    assertProposalResponseHeaders(versionTwo.getResponse());
+    JsonNode projectedV2 = response(versionTwo);
+    assertThat(projectedV2.path("schemaVersion").asText()).isEqualTo("2");
+    assertThat(projectedV2.at("/dateCandidates/0/candidateId").asText()).isEqualTo("date-1");
+    assertThat(projectedV2.at("/itemCandidates/0/dueDateCandidateId").asText()).isEqualTo("date-1");
+    assertThat(projectedV2.at("/itemCandidates/0/eventScheduleCandidates").isMissingNode())
+        .isTrue();
+    assertThat(
+            projectedV2.at("/itemCandidates/0/suggestedEventScheduleCandidateId").isMissingNode())
+        .isTrue();
+    proposalSchemaValidator.validate(projectedV2);
+
+    var versionOne = mvc.perform(get("/api/v1/analysis-proposals/{id}", proposalId)).andReturn();
+    assertProposalResponseHeaders(versionOne.getResponse());
+    JsonNode projectedV1 = response(versionOne);
+    assertThat(projectedV1.path("schemaVersion").asText()).isEqualTo("1");
+    assertThat(projectedV1.at("/dateCandidates/0/candidateId").isMissingNode()).isTrue();
+    assertThat(projectedV1.at("/itemCandidates/0/dueDateCandidateId").isMissingNode()).isTrue();
+    assertThat(projectedV1.at("/itemCandidates/0/eventScheduleCandidates").isMissingNode())
+        .isTrue();
+    proposalSchemaValidator.validate(projectedV1);
     assertThat(storedProposal(proposalId)).isEqualTo(storedBefore);
   }
 
@@ -90,7 +152,7 @@ class AnalysisProposalSchemaNegotiationIntegrationTest extends PostgresIntegrati
     var unsupportedSingle =
         mvc.perform(
                 get("/api/v1/analysis-proposals/{id}", UUID.randomUUID())
-                    .header(PROPOSAL_SCHEMA_VERSION_HEADER, "3"))
+                    .header(PROPOSAL_SCHEMA_VERSION_HEADER, "4"))
             .andReturn();
     assertThat(unsupportedSingle.getResponse().getStatus()).isEqualTo(422);
     assertThat(response(unsupportedSingle).path("code").asText())
@@ -108,17 +170,17 @@ class AnalysisProposalSchemaNegotiationIntegrationTest extends PostgresIntegrati
   }
 
   @Test
-  void rejectsAnUnsupportedStoredProposalVersionBeforeReturningTheRequestedV2() throws Exception {
+  void rejectsAnUnsupportedStoredProposalVersionBeforeReturningTheRequestedV3() throws Exception {
     UUID proposalId = createBoundProposal("schema-corrupt");
     db.sql(
             "update analysis_proposals "
-                + "set proposal_json=jsonb_set(proposal_json,'{schemaVersion}',to_jsonb(cast('3' as text))) "
+                + "set proposal_json=jsonb_set(proposal_json,'{schemaVersion}',to_jsonb(cast('4' as text))) "
                 + "where id=:proposalId and owner_id=:ownerId")
         .param("proposalId", proposalId)
         .param("ownerId", OWNER_ID)
         .update();
 
-    assertThatThrownBy(() -> analysisService.proposal(proposalId, "2"))
+    assertThatThrownBy(() -> analysisService.proposal(proposalId, "3"))
         .isInstanceOf(IllegalStateException.class)
         .hasMessage("Stored analysis proposal has an unsupported schema version.");
   }
@@ -145,6 +207,26 @@ class AnalysisProposalSchemaNegotiationIntegrationTest extends PostgresIntegrati
             .query(String.class)
             .single();
     return json.readTree(proposal);
+  }
+
+  private void promoteStoredProposalToVersionThree(UUID proposalId) {
+    db.sql(
+            "update analysis_proposals set proposal_json="
+                + "jsonb_set(jsonb_set(jsonb_set(proposal_json,"
+                + "'{schemaVersion}',to_jsonb(cast('3' as text))),"
+                + "'{itemCandidates,0,eventScheduleCandidates}','[]'::jsonb),"
+                + "'{itemCandidates,0,suggestedEventScheduleCandidateId}','null'::jsonb) "
+                + "where id=:proposalId and owner_id=:ownerId")
+        .param("proposalId", proposalId)
+        .param("ownerId", OWNER_ID)
+        .update();
+    db.sql(
+            "update analysis_runs set schema_version='3' "
+                + "where owner_id=:ownerId and id=(select analysis_run_id from analysis_proposals "
+                + "where id=:proposalId and owner_id=:ownerId)")
+        .param("proposalId", proposalId)
+        .param("ownerId", OWNER_ID)
+        .update();
   }
 
   private void assertProposalResponseHeaders(

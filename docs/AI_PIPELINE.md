@@ -8,14 +8,15 @@ The first implementation must support a mock analyzer. Real model selection come
 
 ## Current implementation status
 
-The repository now implements the model-free portion of Milestone 2:
+The repository implements the deterministic Milestone 2 path plus one guarded, personal-overlay
+local-model fallback:
 
 - a revision-context Korean date parser with explicit `UNKNOWN` fallback;
 - versioned 12-case regression and 12-case `VISIBLE_CHALLENGE` Korean memo suites, a version-2
   fixture contract with date mention/surface and item/source-span gold, and a raw-content-free
   deterministic baseline report;
 - an enum-based ambiguity gate that routes to `LOCAL_REVIEW` or `CLOUD_ENRICH`;
-- `FakeAnalyzer` and a no-network, no-tool, mutation-free `FakeCloudAnalysisGateway`;
+- `FakeAnalyzer` and a default no-network, no-tool, mutation-free `FakeCloudAnalysisGateway`;
 - a server-owned `CloudGatewayDescriptor` and typed `CloudAnalysisResult` boundary, exact
   owner/policy/timestamp consent enforcement for `EXTERNAL_MEMO_CONTENT`, and persisted transfer,
   gateway, provider, model, consent-policy, and outcome evidence;
@@ -34,6 +35,12 @@ The repository now implements the model-free portion of Milestone 2:
   is `STARTED`, executor rejection is definitively `NOT_STARTED`, and a submitted termination without
   an observed start remains `UNKNOWN`; local termination, remote result, process loss, stale
   finalization, and fenced-out completion keep separate truth;
+- V19 raw-free fallback evidence: versioned deterministic decision shape and reason codes plus model
+  contribution status/semantic changed fields are stored without copying memo, prompt, or response;
+- V20 personal invocation evidence and approved-type hints: `model-invocation-v1` preserves the
+  semantic route separately from `UNCERTAINTY_ONLY`/`AI_PREFERRED`; an opted-in personal dispatch
+  snapshots at most three current-memo UTF-16 anchors derived from same-owner type-corrected or
+  user-resolved Apply rows and scrubs the offset-only JSON at finalization;
 - production-profile bounded recovery: every 30 seconds, a scheduler selects at most 25
   `PREPARED` or expired-lease `RUNNING` dispatches, obtains owner and the existing idempotency key
   only from owner-consistent database rows, and reuses the same claim/invoke/finalize lifecycle;
@@ -51,15 +58,44 @@ The repository now implements the model-free portion of Milestone 2:
 - explicit user resolution of `UNKNOWN` types and partial item application;
 - a raw-content-free, owner-scoped review outcome summary derived read-only from stored proposals
   and latest validated selections.
+- a separate owner-scoped, count-only model-evidence summary over all recent analysis runs and their
+  optional dispatch. It reads only server-owned enums/counts and fixed JSON-containment booleans,
+  remains lazy in the UI, and cannot mutate routing or promote a rule.
 - an explicitly invoked external blind harness that accepts only an outside-repository,
   independently human-curated version-2 release and emits aggregate-only Fake-analyzer metrics from
   a clean, pinned commit. No blind dataset or passing metric threshold is included in this repository.
 - strict preparation contracts for two independent version-2 review manifests and an ID-only
   version-3 TASK-due binding overlay. No real manifests, human adjudication, version-3 dataset,
   binding score, or passing result exists; `EVALUATION_LABEL_POLICY.md` remains a draft.
+- an explicitly selected, test-only Solo LiquidAI runner family that calls an already-installed model
+  only through its fixed localhost Ollama endpoint and evaluates only the 24 public synthetic
+  fixtures. It preserves v1–v5 direct generation, v6 guarded selection, v7-A output-cap, v7-B
+  prompt-overhead, and v8-A compact-wire evidence separately. Every runner remains outside the
+  product analyzer/gateway, database, API, review, and Apply paths.
+- a preserved deterministic guarded skill evaluation that keeps `FakeAnalyzer` authoritative and validates a
+  deterministic projection. V6, v7-A, v7-B, and v8-A accepted no LiquidAI contribution and fell back
+  for all 24 cases; after the compact-wire diagnostic the LiquidAI shadow decision is `NO_GO` and the
+  direct authoritative model decision remains `NO_GO`.
+- a personal-overlay-only `ollama-local-gateway-v2` that uses `AI_PREFERRED` after the deterministic proposal
+  is fully validated, uses `LOCAL_MACHINE_MEMO_CONTENT`, and accepts `KEEP` or a narrow exact-substring semantic patch over
+  grounded candidates. Redirects, proxies, tools, endpoint/model/digest drift, truncation, and
+  schema/domain violations fail closed to revalidated local detailed review. The adapter may receive
+  a bounded textual `thinking` field from Ollama, validates its size, then ignores it; only the
+  visible `content` is parsed under the strict JSON/schema/domain contract. Non-text, oversized, or
+  additional response fields still fail closed. Only a default-`RECORD` fallback is normalized to
+  `UNKNOWN`; existing explicit grounded candidates are preserved.
+- a permanent, explicitly invoked product-path smoke that compares the fixed three-case public
+  synthetic fixture through isolated Fake and exact LiquidAI stacks. It uses tmpfs PostgreSQL and an
+  owned `127.0.0.1:11435` Ollama, calls only register/memo/analysis-run/proposal-read APIs, emits only
+  a strict aggregate receipt after cleanup, and never calls Apply or a personal/external product
+  service. Its 2026-08-28 result is `PASS_NARROW_PRODUCT_PATH` but semantic improvement is
+  `NOT_DEMONSTRATED`; it leaves provider/training/LoRA `NO_GO` and RAG unused.
 
-No real local model, Ollama/LiquidAI adapter, or cloud provider is connected. There is no consent
-grant/revoke HTTP API or external provider configuration. The analysis HTTP operation remains
+The normal application default remains Fake plus `UNCERTAINTY_ONLY`, while `compose.personal.yaml`
+pins the only enabled Ollama/LiquidAI adapter to `http://host.docker.internal:11434`, the reviewed
+exact model identity, `AI_PREFERRED`, and approved-correction anchors.
+No cloud provider is connected. The public-fixture test runner remains separate from this adapter.
+There is no consent grant/revoke HTTP API. The analysis HTTP operation remains
 synchronous: its caller waits for final review or stale-revision handling even though the gateway
 attempt runs in a bounded in-process executor outside database transactions. The production profile
 also enables a bounded periodic recovery worker, so a committed dispatch can resume after a caller
@@ -67,8 +103,10 @@ interruption or process restart without changing the public contract. V17 persis
 per-attempt lifecycle and monotonic local elapsed evidence, but does not expose it through the public
 POST, DTOs, proposal, `providerMetadata`, UI, or evaluation report. The current Fake has no model, so
 any local termination observation is `NOT_APPLICABLE` with null model-token and cost numbers even
-when execution start is uncertain; an observation-free process loss remains `UNKNOWN`. Real-model
-numeric usage/cost
+when execution start is uncertain; an observation-free process loss remains `UNKNOWN`. The adapter's
+`num_predict=1024` is a provisional hidden-reasoning budget required for an observed STOP response;
+it does not relax the separately enforced bounded visible model-output, HTTP response, or canonical
+proposal sizes. Real-model numeric usage/cost
 reporting, aggregation, budget enforcement, related-memo retrieval, fuzzy/vector search, and
 embeddings remain unimplemented. The roadmap's real-provider adapter remains deferred by the
 project decision until explicitly authorized.
@@ -88,13 +126,16 @@ Raw memo
   → deterministic local classification
   → schema, domain, and owner-reference validation
   → deterministic field-level ambiguity assessment
-      → local proposal, or
-      → immutable gateway binding and consent gate
+      → default mode: local proposal when complete, or
+      → personal AI-preferred mode: immutable local gateway binding for every validated proposal
+      → immutable gateway binding and transfer-policy gate
           → bounded owner-active exact tag/alias retrieval and deterministic K=8 context
+          → optional same-owner APPLIED type-correction lookup and offset-only K=3 anchor snapshot
           → durable run/dispatch prepare commit
           → claim with descriptor/binding comparison, fence, lease, and deadline
           → create one V17 internal ledger row for the claimed fence
-          → bounded gateway execution outside a database transaction
+           → bounded gateway execution outside a database transaction
+               → personal overlay only: exact pinned localhost semantic patch
           → record local observation and revision/fence-rechecking finalize
               → typed enrichment result or validated local fallback, or
               → committed STALE result
@@ -105,6 +146,17 @@ Raw memo
 ```
 
 Analysis and application are separate operations. No model is allowed to write canonical domain data directly.
+Model input exists only in bounded execution memory. V19 evidence, attempt rows, provider metadata,
+ordinary logs, browser storage, and any training dataset receive no copied raw memo/prompt/response.
+User-corrected Apply selections are not learned automatically. The personal overlay may use only
+the V20 bounded, type-only inference hint authorized by ADR 0008; recurring rule promotion still
+requires reviewed public synthetic positive/negative fixtures. Fine-tuning, LoRA, vector storage,
+and background RAG ingestion remain prohibited.
+The Solo LiquidAI shadow runner is not a product-runtime branch of this pipeline: it does not enter
+an application service, public API, persistence, review, or Apply path, and it reads no PostgreSQL or
+personal memo. In test scope it intentionally reuses the production `FakeAnalyzer`, canonical-schema
+and domain validators, routing policy, and evaluation code so the comparison exercises those shared
+boundaries without publishing a product proposal.
 
 ## Local analyzer contract
 
@@ -219,6 +271,11 @@ top-1/top-2 conflict merely because their scores are close.
 - multiple or contradictory dates
 - relative expression without a usable base context
 
+`korean-rules-v7` resolves an explicit `오늘|내일|모레 + 오전|오후 + 1–12시` expression with optional
+minutes against the immutable revision's captured instant and source zone as `RELATIVE_EXACT`, but
+only when the local time has one unambiguous valid offset. A date-less `6시` remains `UNKNOWN`; the
+analyzer does not infer today or PM.
+
 ### Reference ambiguity
 
 - unresolved expressions such as `그거`, `저번 것`, `교수님이 말한 것`
@@ -231,9 +288,10 @@ top-1/top-2 conflict merely because their scores are close.
 - several actions mixed in one memo
 
 The current deterministic gate thresholds and structured-proposal reconstruction rules belong to
-routing policy `field-policy-v1`; changing a gate threshold, cloud-signal set, or reconstruction
-rule requires a new policy version. Lexical classification, reference extraction, date parsing, and
-explicit TASK due binding are separately identified by `fake-v6` and `korean-rules-v4`; changing
+routing policy `field-policy-v2`; changing a gate threshold, cloud-signal set, or reconstruction
+rule requires a new policy version. Lexical classification, reference extraction, date parsing,
+default-fallback coverage detection, guarded affirmative `접속하기`, and explicit TASK due binding are
+separately identified by `fake-v9` and `korean-rules-v7`; changing
 those inputs does not rename an otherwise unchanged gate. Runtime configuration and user-specific
 thresholds remain a later milestone.
 
@@ -282,6 +340,12 @@ The descriptor contains `transferMode`, `gatewayVersion`, `providerId`, `modelVe
 `consentPolicyVersion`; its deterministic binding ID is persisted before execution. These values and
 the final `cloudOutcome` are stamped by the application service into `analysis_runs`; a gateway
 response cannot spoof them through proposal metadata.
+
+For the personal Ollama adapter, `gatewayVersion` is the adapter version plus the prompt-contract
+version, `providerId` is `ollama-local@<exact model tag>`, and `modelVersion` is the exact 64-hex model
+digest. Changing any of those changes the durable binding and closes recovery before another model
+call. The chat request also pins top-level `truncate=false` and `shift=false`; context overflow must
+fail instead of silently discarding input.
 
 - `NO_NETWORK` needs no user consent. The current `FakeCloudAnalysisGateway` uses this mode,
   performs no external transfer, has no tools, and returns a defensive copy.
@@ -355,7 +419,7 @@ but keep remote result truth `UNKNOWN`; an unobserved process loss has unknown d
 milliseconds, and its model-token/cost evidence is also `UNKNOWN`. While a row is in flight,
 model-token and cost evidence is `PENDING`. A local termination observation for the model-free
 `NO_NETWORK` Fake is `NOT_APPLICABLE` with null numeric fields regardless of execution-start
-uncertainty. A future real-model attempt is `NOT_APPLICABLE` only when execution is definitively
+uncertainty. A model-backed attempt is `NOT_APPLICABLE` only when execution is definitively
 `NOT_STARTED`; uncertain execution or remote completion is `UNKNOWN`. An observed real-model result is
 currently `NOT_REPORTED` with null numbers because the gateway result contract does not carry usage or
 price. The database validates a future `REPORTED` numeric shape, but no runtime path writes model-token
@@ -419,10 +483,11 @@ must delimit it as untrusted source data; text inside a memo never overrides sys
 
 Proposal schema negotiation changes only the read representation. A client that omits
 `X-Analysis-Proposal-Schema-Version`, or sends `1`, receives strict v1 so an installed older PWA can
-continue reviewing proposals after a server upgrade. The current PWA sends `2`; new stored proposals
-then remain v2 while historical stored v1 remains v1. The downgrade removes only the two v2 binding
-fields from an in-memory copy, never rewrites the JSONB/hash, and responses use `no-store` plus
-`Vary: X-Analysis-Proposal-Schema-Version`.
+continue reviewing proposals after a server upgrade. The current PWA sends `3`. A max-v2 client
+receives stored v2 unchanged and stored v3 with its EVENT candidate/suggestion fields removed; a
+max-v1 client additionally receives no date IDs or TASK due references. Historical v1/v2 proposals
+are never synthesized upward. Downgrade changes only an in-memory copy, never rewrites JSONB/hash,
+and responses use `no-store` plus `Vary: X-Analysis-Proposal-Schema-Version`.
 
 ## Structured proposal
 
@@ -476,12 +541,12 @@ The current version-2 result contains fields conceptually equivalent to:
   "relationCandidates": [],
   "ambiguityReasons": [],
   "providerMetadata": {
-    "analyzerVersion": "fake-v6",
-    "deterministicRulesVersion": "korean-rules-v4",
+    "analyzerVersion": "fake-v9",
+    "deterministicRulesVersion": "korean-rules-v7",
     "promptVersion": "none",
     "localModelVersion": "none",
     "embeddingModelVersion": "none",
-    "routingPolicyVersion": "field-policy-v1",
+    "routingPolicyVersion": "field-policy-v2",
     "toolCalls": 0
   }
 }
@@ -503,6 +568,50 @@ every new LOCAL, cloud-success, and fallback object from one bounded server allo
 therefore inherits trusted local provenance rather than arbitrary provider fields. Before schema
 validation, the compact serialized proposal is capped at 65,536 UTF-8 bytes (64 KiB) and
 `providerMetadata` at 8,192 UTF-8 bytes (8 KiB).
+
+### Proposal schema v3 EVENT contract preparation
+
+Schema v3 adds two required item fields without changing the current producer:
+
+```json
+{
+  "eventScheduleCandidates": [
+    {
+      "candidateId": "event-time-1",
+      "mode": "ALL_DAY",
+      "startDateCandidateId": "date-start",
+      "end": {
+        "dateCandidateId": "date-last-day",
+        "boundary": "INCLUSIVE_THROUGH_VALUE"
+      },
+      "score": 0.82
+    }
+  ],
+  "suggestedEventScheduleCandidateId": null
+}
+```
+
+Every reference is proposal-local by ID. Version 1 and version 2 forbid both fields. Non-EVENT items
+must carry `[]` and null in v3. TIMED candidates reference only `EXACT_TIME` or `RELATIVE_EXACT` dates;
+ALL_DAY candidates reference only `DATE_ONLY`. A nullable end declares either
+`EXCLUSIVE_AT_VALUE`, meaning its candidate is already the canonical exclusive boundary, or
+all-day-only `INCLUSIVE_THROUGH_VALUE`, whose normalized exclusive boundary is the following calendar
+day. Overflow, a non-later normalized end, dangling/imprecise/mode-incompatible references, duplicate
+IDs or semantic alternatives, and multiple distinct alternatives without `CONFLICTING_DATES` fail
+domain validation. A missing end remains null.
+
+The nullable suggestion exists so a future policy cannot silently select by list position or score.
+The current domain gate rejects every non-null suggestion. Current `fake-v9` and the localhost
+semantic-patch adapter remain v2 producers. The PWA can display a v3 list but every EVENT review draft
+still starts unscheduled; only a user action copies one candidate into the editable selection. Apply
+remains explicit and selection schema v2.
+
+The separate EVENT temporal-label overlay contract and validator are structural preparation only.
+They contain no checked-in labels, reviewer evidence, adjudication, metric result, numeric threshold,
+or `PASS`; the existing dataset-v3 TASK-due overlay grants no EVENT authority. Independent human
+policy approval, two independent reviews and adjudication, predeclared thresholds, a held-out release,
+source-zone-aware prefill validation, and a separate activation decision are required before any v3
+producer or review preselection.
 
 On a `HYBRID` run the server additionally overwrites bounded metadata for cloud transfer mode,
 gateway/provider/model/consent-policy versions, outcome, received routing policy/reasons, zero tool
@@ -539,8 +648,9 @@ is accepted only for an older client when the proposal relation array is already
 the application's relation rows before their source items and preserves target memo/tag identities.
 These canonical item-to-MEMO/TAG relations are intentionally absent from the current graph: mapping
 four directed relation types onto MEMO/TAG graph edges is a separate product decision. Fake output,
-evaluation fixtures, and `review-default-v3` remain unchanged; any non-empty relation proposal stays
-`UNCLASSIFIABLE` in review-outcome evidence.
+evaluation fixtures, and `review-default-v3` remain unchanged; any non-empty relation proposal,
+temporal-candidate-bearing v3 proposal, or schedule-bearing selection stays `UNCLASSIFIABLE` in
+review-outcome evidence.
 
 ## Read-only review outcome evidence
 
@@ -558,19 +668,21 @@ The endpoint keeps three independent dimensions:
 - semantic comparison of the latest validated selection with a versioned reconstruction of the
   default review draft (`EXACT`, `CORRECTED`, `USER_RESOLVED`, or `UNCLASSIFIABLE`).
 
-`review-default-v3` reconstructs v2 drafts from explicit due references and retains the former
+`review-default-v3` reconstructs v2/v3 TASK drafts from explicit due references and retains the former
 conservative projection only for recoverable v1 proposals. Missing, unused, imprecise, or
-type-incompatible v2 date mappings require user resolution rather than a guessed due.
+type-incompatible date mappings require user resolution rather than a guessed due. It does not turn
+proposal-v3 EVENT alternatives or suggestions into a schedule default.
 
 `EXACT` means only that the user applied the default selection without a semantic change. It is not
 an AI correctness label. `CORRECTED` records changed type/title/tag/item/due fields;
 `USER_RESOLVED` records a proposal that lacked a directly applicable default, such as a tied or
-`UNKNOWN` type or no item; `UNCLASSIFIABLE` is the fail-closed bucket for relation-bearing proposals
-outside the current comparison policy, unknown historical shapes, inconsistent revisions, or other
-comparisons the policy cannot prove. Relation Apply is supported, but `review-default-v3` has no
-adjudicated relation-selection target. Reject and postpone state also must not be treated as corrected
-gold labels: rejected runs do not store a corrected target, and a later transition overwrites the
-current `POSTPONED` state.
+`UNKNOWN` type or no item; `UNCLASSIFIABLE` is the fail-closed bucket for relation-bearing proposals,
+temporal-candidate-bearing v3 proposals, schedule-bearing selections, unknown historical shapes,
+inconsistent revisions, or other comparisons the policy cannot prove. Relation and schedule Apply
+are supported, but `review-default-v3` has no
+adjudicated relation-selection or EVENT temporal target. Reject and postpone state also must not be
+treated as corrected gold labels: rejected runs do not store a corrected target, and a later
+transition overwrites the current `POSTPONED` state.
 
 The server reads a 1,001st row only to enforce a hard 1,000-proposal cardinality bound. It returns an
 explicit error instead of publishing a silent partial aggregate. This row cap is not a serialized-byte
@@ -580,9 +692,10 @@ classification in tested batches or a bounded stream. Results are grouped by ser
 analyzer/prompt/local-model/embedding-model/routing-policy provenance and are served with
 `Cache-Control: no-store`.
 
-This evidence makes personal review behavior observable, but it does not open the real-LLM gate.
+This evidence makes personal review behavior observable, but it does not open the authoritative or
+external-provider LLM gate. The V19 personal adapter remains `SOLO_PROVISIONAL`/`REPORT_ONLY`.
 V15/V16/V17 plus the bounded production recovery worker supply durable pre-call, descriptor-bound,
-context-snapshotted, attempt-observed, out-of-transaction Fake/test execution and restart recovery;
+context-snapshotted, attempt-observed, out-of-transaction configured-gateway execution and restart recovery;
 they do not authorize a real provider or expose the internal dispatch contract over HTTP. Completed independent
 adjudication of the
 version-2 date/item gold, an approved and independently reviewed version-3 binding label
@@ -592,6 +705,40 @@ and API, provider-side token deduplication, and the remaining criteria in
 [EVALUATION.md](EVALUATION.md) are still required. Real-provider usage/cost collection and budget
 enforcement, an approved attempt-retention/purge policy, related-memo retrieval, fuzzy/vector search,
 and embedding context also remain separate work.
+
+## Read-only analysis path evidence
+
+`GET /api/v1/analysis-path-evidence/summary` is separate from review-outcome comparison. Its rolling cohort
+starts from the authenticated owner's `analysis_runs.created_at` rows and left joins the optional
+dispatch, so both dispatched and non-dispatched analyses remain countable. A hard 1,000-run bound
+fails without returning a partial aggregate. The half-open UTC interval is exactly `days × 24`
+hours; the unordered 1,001-row sentinel avoids sorting an oversized cohort because every returned
+counter is order-independent and no partial result is ever served.
+
+The repository selects only lifecycle, current/legacy local-decision versions, invocation
+mode/reason, local-model contribution enum, approved-correction signal count, and fixed booleans for
+configured dispatch routes, V19 fallback reasons, and changed fields. The exact built-in Fake tuple
+is matched inside SQL; descriptor strings do not leave the repository. The query does not select the
+memo, proposal, selection, validated local proposal, evidence JSON, provider output, any
+ID/hash/offset/token/credential, or a per-run value. The response is a closed count-only DTO served
+with `Cache-Control: no-store`.
+
+The route counters distinguish a recorded local-model configuration, external-memo-transfer
+configuration, exact built-in Fake, and legacy/other paths. A configured path, dispatch row,
+`PENDING`, or `LOCAL_FALLBACK` does not prove that a model was attempted. Only local-model-route
+`ACCEPTED_CHANGED` and `ACCEPTED_UNCHANGED` say that a successful result was accepted into the
+proposal; neither says that the result is correct or better. A nonzero approved-correction snapshot
+means only that bounded server-owned signals were fixed to the dispatch, not that the model used
+them.
+
+The corresponding “분석 경로 진단” UI is collapsed and sends no request until the owner first opens
+it. Reopening does not silently fetch again; an explicit `진단 새로고침` creates a new point-in-time
+read.
+
+This source slice adds no migration and does not invoke a model, alter `UNCERTAINTY_ONLY` or
+`AI_PREFERRED`, learn or promote a rule, call Apply, or create RAG/training data. It remains
+`SOLO_PROVISIONAL`/`REPORT_ONLY`; personal deployment requires a separate owner-authorized rebuild
+and product smoke.
 
 ## Personalization without fine-tuning
 
@@ -605,6 +752,21 @@ MVP/P1 personalization uses stored behavior rather than model fine-tuning.
 - user-specific routing thresholds when enough data exists
 
 Do not train a model on a user's notes during the MVP.
+The visible, unadjudicated 24-case public synthetic shadow set is also excluded from future training
+and validation data. Every preserved v1–v8-A shadow report decides `NO_GO_FOR_TRAINING`; v2–v8-A also
+record LoRA `NO_GO`. No fine-tuning or training tool was installed, invoked, or authorized. The user
+has chosen not to pursue fine-tuning or LoRA. V7-A increased the output cap, v7-B reduced prompt
+overhead, and v8-A used a strict compact wire, but all three still ended LENGTH 24/24 with zero
+accepted LiquidAI contribution. The authoritative LiquidAI shadow decision is therefore `NO_GO`.
+The later personal semantic-patch path is a separate user-approved
+`SOLO_PROVISIONAL`/`REPORT_ONLY` boundary. ADR 0008 additionally permits bounded inference-time
+approved-type anchors without creating a corpus or trainer; deterministic rule hardening remains
+the dependency-reduction path. Broader public/de-identified RAG is not automatic
+follow-up: first identify a retrieval-solvable need, then use an explicit source allow-list and fixed
+document, retrieval-count, and context budgets. The current truncation is not such a need, so RAG was
+not used. It cannot retrieve personal memos, the personal PostgreSQL database, or canonical product
+state. Every comparison remains proposal-only, no-Apply, schema/domain validated, Fake-compared,
+`SOLO_PROVISIONAL`, and `REPORT_ONLY` until a separate product decision changes those boundaries.
 
 ## Tag evolution maintenance
 
@@ -637,9 +799,12 @@ for:
 
 Track precision of high-confidence local routing separately from overall accuracy. The primary safety metric is the rate of wrong local decisions that were presented as unambiguous.
 
-`fake-v6` / `korean-rules-v4` keeps the generalized weekday/time, approximate-date, reference,
+`fake-v9` / `korean-rules-v7` keeps the generalized weekday/time, approximate-date, reference,
 event, and multi-intent rules while extracting sequential item facets and source-aligned UTF-16
-spans from the immutable raw revision without copying a challenge sentence. It also emits
+spans from the immutable raw revision without copying a challenge sentence. It recognizes guarded
+affirmative `접속하기` as a TASK action while keeping negative or descriptive forms unresolved. It
+adds the explicit relative-day meridiem rule above; a bare time such as `6시` stays `UNKNOWN` and
+does not become a precise due date. It also emits
 proposal-local date IDs and only structurally safe TASK due references. Evaluation dataset v2 and
 its report still have no binding gold, so the capability is
 `SUPPORTED_NOT_SCORED_DATASET_V2`; binding quality cannot be a hard metric until independently
@@ -649,6 +814,220 @@ rather than silently treating them as success. The public visible challenge and 
 rates remain report-only; they are not a blind or general Korean accuracy claim. The generated
 public report contains case identifiers and labels for transparent diagnostics, never fixture or
 personal memo text.
+
+### Solo LiquidAI shadow diagnostic
+
+`SoloLiquidAiShadowBaselineRunner` is excluded from normal Maven/CI selection and requires an
+external orchestrator to establish the exact loopback endpoint, pinned model/digest and source
+preflight, device sampling, and process/resource cleanup. The runner uses only the 12 regression and
+12 `VISIBLE_CHALLENGE` public synthetic cases, compares LiquidAI and Fake independently against the
+same fixed gold, and writes aggregate-only reports. It never reads the personal database, uses a
+product API, persists a proposal, or invokes Apply.
+
+#### Baseline v1 (preserved)
+
+The preserved v1 report is `backend/target/evaluation/solo-liquidai-shadow-baseline.json`, SHA-256
+`360660c5e283f719465262088e91b168a88dea27944a0e61c5fcd065a830b020`. It is labeled
+`SOLO_PROVISIONAL`, `REPORT_ONLY`, and `NOT_CONFIGURED`. Of 24 scored requests, 18 returned completed
+responses and passed the narrow inference schema; 3/24 assembled proposals passed the canonical
+schema and 1/24 passed domain validation. LiquidAI produced 9 wrong-local cases, 11 invented precise
+dates, 1 missing overflow signal, and 2 unresolved-field hallucinations. Successful-response wall
+latency was p50 `15451.417 ms`, p95/max `33236.766 ms`, and mean `17431.567 ms`, versus Fake p50
+`0.453 ms` and p95 `1.581 ms` over 24 cases. Ollama observed `3166835834` allocated bytes and context
+length `8192`.
+
+The external device-wide sampler recorded 853 samples, baseline `3501 MiB`, peak `6990 MiB`, peak
+utilization `92%`, and post-run `3543 MiB`; these are non-exclusive device observations and cannot be
+attributed solely to the model. The decision at this stage was `NO_GO_FOR_TRAINING`, with
+prompt/schema iteration `RECOMMENDED`. V8-A later closed that historical path with LiquidAI `NO_GO`
+and skill-only as the current default. The fixtures are visible, not independently human-adjudicated,
+not blind, and not training data; the run authorizes no product adapter, provider, or fine-tuning.
+
+#### Prompt/schema iteration v2
+
+The completed v2 development run kept the exact installed
+`hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q8_0` model at digest
+`677b7229e7816d6bbdf3f7b777a5321f9719ecd3ab6e2658a2ff3798d3185822`, the same visible 12+12
+public synthetic fixtures, sequential no-retry/no-tool execution, canonical JSON Schema, production
+domain validation, proposal-only boundary, and Fake comparison. It changed only test-side
+prompt/inference-schema and integrity controls. The report
+`backend/target/evaluation/solo-liquidai-shadow-baseline-v2.json` has SHA-256
+`7507690bc6f80c937f382ce428a210540cede1fde621249b5441755b18cb4f26`; companion postflight/isolation
+evidence is recorded in `solo-liquidai-shadow-baseline-v2-attestation.json`, and the frozen execution
+source bundle has SHA-256 `2f19402e7ee004de93a4508fecd6b55f344445ce381636742de00b55bd79e76d`.
+
+The v2 result remains `SOLO_PROVISIONAL`, `REPORT_ONLY`, `NOT_CONFIGURED`, and
+`PUBLIC_VISIBLE_PROMPT_SCHEMA_DEVELOPMENT_ONLY`. LiquidAI returned 24/24 responses; 20/24 passed the
+inference schema, 20/24 the canonical schema, and 10/24 production domain validation. Route accuracy
+was `0.541667`, with 4 wrong-local cases, 0 invented precise dates, 0 local-overflow cases, 1 missing
+overflow signal, and 0 unresolved-field hallucinations. Failure-category counters were 4 inference,
+4 canonical, and 14 domain invalid observations (22 overlapping category observations, not 22 unique
+cases). Fake passed canonical schema and domain validation 24/24, route accuracy was `1.0`, and all
+listed safety-error counters were zero.
+
+LiquidAI all-attempt minimum/p50/p95/max/mean wall latency was
+`9896.043`/`16754.523`/`24241.698`/`24655.245`/`17540.866 ms`; successful-response latency was
+`9895.774`/`16754.176`/`24241.137`/`24654.879`/`17540.185 ms`. Fake latency was
+`0.377`/`0.547`/`11.795`/`114.698`/`5.872 ms`. The device was an NVIDIA GeForce RTX 5080 with driver
+`610.88` and `16303 MiB` total memory. Ollama reported `3166835834` bytes entirely in VRAM at context
+length `8192`; the report correctly leaves peak VRAM/utilization `NOT_AVAILABLE`. The attestation's 9
+coarse device-wide manual samples observed baseline `3197 MiB`, maximum used `6671 MiB`, and maximum
+utilization `89%`. They are neither process/model-exclusive nor a peak claim.
+
+The test-only v2 inference schema deliberately made `dueDateCandidateId` and `sourceSpan` null-only,
+so both are `DISABLED_NULL_ONLY_IN_SHADOW_V2`, not demonstrated capabilities; relation output was
+disabled as an empty proposal array, and tag ranking was not scored. The attested network path was
+`MACHINE_LOCAL_DOCKER_HOST_BRIDGE`: runner `127.0.0.1:11435` to a container-local relay, then
+`host.docker.internal:11435` at expected host gateway `192.168.65.254`, with Windows Ollama listening
+only on `127.0.0.1:11435` and no published container port. This is not OS-level internet-egress
+isolation, and the attestation makes no such claim.
+
+Postflight recorded runner/relay exit, zero loaded models, unchanged exact model tag/digest, no owned
+Ollama process or listener, removed scoped temporary directory, and no persisted Ollama logs. Within
+the observed runner code/process/network scope, product HTTP calls, canonical reads/writes, and Apply
+were all zero; this is not a claim about unrelated machine history. The strict public-visible
+development acceptance is `NOT_MET`, not `PASS` or provider readiness. Training remains
+`NO_GO_FOR_TRAINING`, LoRA is `NO_GO`, and no training/fine-tuning, product adapter, provider use,
+target-phone readiness, or release gate is authorized.
+
+#### Prompt/schema iterations v3 and v4 (preserved)
+
+The later test-only iterations preserved v1/v2 rather than replacing them. The v3 report
+`backend/target/evaluation/solo-liquidai-shadow-baseline-v3.json` is `33530` bytes with SHA-256
+`f6d6e8de0fc7aad342c0bd68487f1e416f922c75e6ba87cd8463c9b990468fa8`; its companion is
+`solo-liquidai-shadow-baseline-v3-attestation.json`. The v4 report
+`backend/target/evaluation/solo-liquidai-shadow-baseline-v4.json` is `34697` bytes with SHA-256
+`ce95d1c3a765ffd6805a1062b8cfa26e476f0f1c8dc3cf843407b856a17741f5`; its companion is
+`solo-liquidai-shadow-baseline-v4-attestation.json`. Both remain `SOLO_PROVISIONAL`, `REPORT_ONLY`,
+`NOT_CONFIGURED`, acceptance `NOT_MET`, training `NO_GO_FOR_TRAINING`, and LoRA `NO_GO`.
+
+V4 completed response and inference-schema validation `24/24`, but semantic IR, canonical schema,
+and domain validation were only `1/24` each. It recorded 69 failure observations over 23 unique cases
+with 46 overlaps, 23 wrong-local cases, 0 invented precise dates, 1 local-overflow case, and 1 missing
+overflow signal. All-attempt p50/p95 latency was `22542.110`/`30973.996 ms`. These preserved
+development observations are not `PASS` results.
+
+#### Atomic-slot prompt/schema iteration v5
+
+The finalized v5 report is
+`backend/target/evaluation/solo-liquidai-shadow-baseline-v5.json`, `35035` bytes, SHA-256
+`ba9c069d85c038d5c5603f8ddddfeae03aa8778cca7a949180142fee9b873102`. Companion postflight and
+restoration evidence is `solo-liquidai-shadow-baseline-v5-attestation.json`; its digest is
+intentionally not embedded in this documentation. The run kept the same model/digest, visible 24-case
+public synthetic set, sequential no-retry/no-tool mode, canonical JSON Schema, production domain
+validation, proposal-only/no-Apply boundary, and Fake comparison. It did not read or change personal
+memos, PostgreSQL, canonical data, product APIs, or provider configuration.
+
+| Metric | Fake | LiquidAI v5 |
+| --- | ---: | ---: |
+| scored requests / responses | 24 / 24 | 24 / 24 |
+| inference-schema valid | not a Fake boundary | 24 / 24 |
+| semantic IR valid | not a Fake boundary | 8 / 24 |
+| canonical-schema valid | 24 / 24 | 8 / 24 |
+| domain valid | 24 / 24 | 7 / 24 |
+| route accuracy | 1.0 | 0.375 |
+| wrong-local | 0 | 16 |
+| invented precise date | 0 | 2 |
+| local overflow | 0 | 1 |
+| missing overflow signal | 0 | 1 |
+
+V5 recorded 49 overlapping failure observations across 17 unique cases: semantic IR invalid 16,
+canonical-schema invalid 16, and domain invalid 17, with overlap count 32. LiquidAI all-attempt
+p50/p95/max/mean latency was `17172.783`/`31117.602`/`31305.739`/`18804.994 ms`. Ollama reported
+`3166835834` allocated bytes at context length `8192`. The non-exclusive device sampler collected 906
+samples with 0 misses: baseline/first/last/maximum used memory was
+`3260`/`3243`/`3249`/`7196 MiB`, and maximum observed utilization was `93%`. These device-wide values
+are not process/model-exclusive, and the model-exclusive peak remains `NOT_AVAILABLE`.
+
+Compared with v4, semantic/canonical/domain validity improved `1/1/1→8/8/7`, failure observations
+fell `69→49`, unique failed cases `23→17`, wrong-local `23→16`, and p50
+`22542.110→17172.783 ms`. Invented precise-date errors worsened `0→2`, p95 changed
+`30973.996→31117.602 ms`, and both overflow findings remained. The v5 attestation records restored
+runner, relay, model allocation, listener/process, and scoped temporary-resource state, unchanged
+exact model tag/digest, and zero product HTTP, canonical read/write, and Apply activity in the observed
+scope. Acceptance is therefore still `NOT_MET`, training `NO_GO_FOR_TRAINING`, and LoRA `NO_GO`.
+V5 does not authorize a product adapter, provider, training, or automatic Apply.
+
+#### Deterministic guarded skill v6
+
+The completed v6 report is
+`backend/target/evaluation/solo-liquidai-deterministic-skill-v6.json`, exactly `45708` bytes with
+SHA-256 `a761cd89276ebecbed8a09f2aa6b37d041f16944bbf8491fd87d1f1201a0b35f`. Companion postflight and
+restoration evidence is `solo-liquidai-deterministic-skill-v6-attestation.json`; its digest is
+intentionally not embedded here. The execution is public-visible
+`SOLO_PROVISIONAL`/`REPORT_ONLY`/`PUBLIC_VISIBLE_DEVELOPMENT_ONLY`, not blind or independently
+human-adjudicated evidence.
+
+`FakeAnalyzer` remained the authoritative proposal producer. `ShadowDeterministicSkill` validated
+and projected that proposal, while LiquidAI could only select one already-existing item-title ordinal
+for `/suggestedTitle/value`; topic ordinals were diagnostic and could not mutate proposal fields.
+Invalid model envelopes were rejected as a whole and used the skill/Fake fallback without repair or
+retry. All 24 model selection requests ended as `MODEL_TRUNCATED_RESPONSE`: completed response,
+schema-valid selection, accepted model contribution, and title improvement counts were all `0`, while
+rejection and fallback counts were both `24`.
+
+Fake, skill-only, and LiquidAI-guarded arms each passed canonical schema and production domain
+validation `24/24`, route accuracy `1.0`, with wrong-local, safety-error, Fake-to-skill deep mismatch,
+and model protected-mutation counts all `0`. `GuardedSystem MET` therefore measures only the
+deterministic Fake/skill fallback boundary and gives LiquidAI no validity credit. Model contribution
+acceptance is `NOT_MET`, and development acceptance is also `NOT_MET`.
+
+P95 wall latency was Fake `9.509 ms`, deterministic skill projection `0.923 ms`, model selector
+`491.271 ms`, and end-to-end `497.976 ms`. Ollama reported `2977033092` bytes allocated in VRAM at
+context length `2048`. The run read or changed no personal memo, personal PostgreSQL, canonical data,
+product API, or Apply path; RAG was `false`. Fine-tuning and LoRA were not performed, no training tool
+was installed, training remains `NO_GO_FOR_TRAINING`, and LoRA remains `NO_GO`. Companion evidence
+records runner/relay exit, an unloaded model, zero Ollama process/listener, Docker Desktop restored to
+its original `OFF` state, an unchanged canonical Docker fingerprint, and removed scoped temporary
+resources.
+
+V6 did not demonstrate LiquidAI success or authorize a product adapter, provider, training, or
+automatic Apply. The subsequent bounded diagnostics are recorded below.
+
+#### Output-cap diagnostic v7-A
+
+V7-A changed only the selector prediction cap from `64` to `128`. Its report is `5925` bytes with
+SHA-256 `5b6a578b2b2222fc6180a4f70af7718526ccce2e127b070a404477a30c19d20f`; the companion
+attestation is `7874` bytes with SHA-256
+`bccc6a0856ea9055f199d381e7be28e0e8587373687ab1d148f3617e69c4c617`. STOP/LENGTH/accepted/
+fallback counts were `0/24/0/24`, prompt tokens were `9765`, and selector p95 was `923.668 ms`.
+Increasing the cap did not produce one completed envelope.
+
+#### Prompt-overhead diagnostic v7-B
+
+V7-B reduced prompt input to `5973` tokens, `3792` fewer than v7-A and `158` fewer per case. Its
+selector p95 was `823.686 ms`. The report is `7081` bytes with SHA-256
+`c81939c516a002aef5b53f867d9bf9cb9f176a8204894e870e0134ccc66c6b37`; the attestation is
+`9743` bytes with SHA-256 `ff057509f5cc24dce0cbf25337a9d841f3d293821c1d73280b94dfdbccbe233d`.
+STOP/LENGTH/accepted/fallback remained `0/24/0/24`, so this run demonstrates overhead reduction only,
+not model contribution.
+
+#### Compact-wire diagnostic v8-A
+
+V8-A used a strict compact `{v,p,t}` selection wire and an unmodified deterministic mapper. The
+final report is `backend/target/evaluation/solo-liquidai-compact-wire-diagnostic-v8a.json`, `11150`
+bytes with SHA-256 `bd9f4419fb26b8a2950b80722eef746fff41e4418a8c52ccb94aafc7333365e3`.
+Its companion `solo-liquidai-compact-wire-diagnostic-v8a-attestation.json` is `12184` bytes with
+SHA-256 `97e7c67a9a1f01140be7ad25734ce7080002b367ea7c87772c8a4c8287b4cdab`.
+
+All 24 attempts reached the evaluation cap of `128` and ended LENGTH: STOP/LENGTH/accepted/fallback
+were `0/24/0/24`. Prompt tokens were `6093`, only `120` total and `5` per case above v7-B. Fake p95
+was `10.131 ms`; selector p95 was `855.907 ms`, a ratio of `84.482×`. Guarded schema and domain
+validation remained `24/24` through deterministic fallback, and leakage and protected-mutation
+counters were zero. These validity values are not attributed to LiquidAI.
+
+The non-exclusive device-wide sampler collected 59 observations with no misses: baseline/max used
+memory was `3033`/`6175 MiB` and maximum utilization was `92%`. No model-exclusive peak is claimed.
+The run performed no fine-tuning, LoRA, RAG, personal-memo/PostgreSQL/canonical access, product API,
+or Apply. Postflight restored Ollama, Docker Desktop, model/listener/process, and scoped temporary
+resources to their original state.
+
+V7-A cap expansion, v7-B overhead reduction, and v8-A compact wire all failed to resolve 24/24
+truncation. The final diagnostic decision is `NO_GO`; product/provider readiness is false, training
+remains `NO_GO_FOR_TRAINING`, and LoRA remains `NO_GO`. The default path is deterministic skill-only
+hardening for authoritative behavior. ADR 0007's later personal semantic-patch fallback does not
+change this diagnostic verdict or grant training/provider authority. RAG is deferred unless a separate retrieval-solvable requirement is documented and then
+may use only a bounded allow-listed public/de-identified corpus.
 
 The separately held blind boundary is documented in [EVALUATION.md](EVALUATION.md). It is local and
 explicit only, uses the deterministic `FakeAnalyzer` without network access, and writes a different

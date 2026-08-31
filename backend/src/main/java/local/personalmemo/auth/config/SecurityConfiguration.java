@@ -14,6 +14,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.web.server.servlet.CookieSameSiteSupplier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
@@ -29,6 +30,7 @@ import org.springframework.security.web.authentication.session.ChangeSessionIdAu
 import org.springframework.security.web.authentication.session.CompositeSessionAuthenticationStrategy;
 import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.security.web.context.NullSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
@@ -99,6 +101,40 @@ public class SecurityConfiguration {
   }
 
   @Bean
+  @Order(1)
+  @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
+  SecurityFilterChain calendarFeedSecurityFilterChain(HttpSecurity http) throws Exception {
+    http.securityMatcher("/calendar/v1/feed.ics")
+        .securityContext(
+            context -> context.securityContextRepository(new NullSecurityContextRepository()))
+        .sessionManagement(
+            session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+        .requestCache(cache -> cache.disable())
+        .csrf(csrf -> csrf.disable())
+        .logout(logout -> logout.disable())
+        .httpBasic(httpBasic -> httpBasic.disable())
+        .formLogin(formLogin -> formLogin.disable())
+        .authorizeHttpRequests(
+            authorize ->
+                authorize
+                    .requestMatchers(HttpMethod.GET, "/calendar/v1/feed.ics")
+                    .permitAll()
+                    .requestMatchers(HttpMethod.HEAD, "/calendar/v1/feed.ics")
+                    .permitAll()
+                    .anyRequest()
+                    .denyAll())
+        .exceptionHandling(
+            handling ->
+                handling
+                    .authenticationEntryPoint(
+                        (request, response, exception) -> publicCalendarNotFound(response))
+                    .accessDeniedHandler(
+                        (request, response, exception) -> publicCalendarNotFound(response)));
+    return http.build();
+  }
+
+  @Bean
+  @Order(2)
   @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
   SecurityFilterChain securityFilterChain(
       HttpSecurity http,
@@ -202,5 +238,11 @@ public class SecurityConfiguration {
                   .failureHandler(googleFailure.getObject()));
     }
     return http.build();
+  }
+
+  private void publicCalendarNotFound(HttpServletResponse response) {
+    response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+    response.setHeader("Cache-Control", "no-store");
+    response.setHeader("Referrer-Policy", "no-referrer");
   }
 }

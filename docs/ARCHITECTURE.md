@@ -35,6 +35,14 @@ singleton row, verifies that no claimed user exists, creates the internal UUID/s
 credential, and consumes the gate in one transaction. Password input is attached-console-only and
 the browser, model, Agent tools, environment, and command line cannot invoke or supply it.
 
+This topology defines the private-beta boundary only for one operator-provisioned owner on a
+trusted RFC1918 LAN, online-only, behind local-CA HTTPS with no public port forwarding. Registration
+and private-overlay Google authentication stay disabled; backend and PostgreSQL ports stay
+unpublished. The application default is deterministic-first and invokes a gateway only for
+incomplete coverage. The explicitly configured personal overlay instead uses `AI_PREFERRED` and
+sends every validated current revision to the pinned machine-local model. Multi-user or internet-facing
+beta requires a new architecture/deployment decision and the public-account/edge controls below.
+
 ## Data authority
 
 - The server database is canonical in the MVP.
@@ -69,6 +77,7 @@ frontend/src/
 │  ├─ analysis-review/
 │  ├─ graph/
 │  ├─ tasks/
+│  ├─ events/
 │  ├─ tags/
 │  ├─ search/
 │  ├─ sync/
@@ -89,7 +98,8 @@ frontend/src/
 - fast raw capture and local pending state
 - analysis review and selection
 - graph visualization and bounded expansion
-- task/search views
+- task/search views and the bounded confirmed-schedule event list
+- explicit EVENT schedule review; start unscheduled and require a user choice before Apply
 - future on-device deterministic/model analysis in a worker (not implemented)
 - current online mutation UX with idempotent server requests; a full synchronization outbox is P1
 - future Web Push subscription management (not implemented)
@@ -103,8 +113,9 @@ frontend/src/
 - reminder scheduling authority
 - applying raw model output directly to domain state
 
-No local model is currently downloaded or executed. A future approved local-model slice must keep it
-out of the initial JavaScript bundle and may use this fallback order:
+No model is downloaded to or executed by the browser. The personal overlay may reach an already
+installed Windows Ollama model through the machine-local Docker host bridge; it stays out of the
+JavaScript bundle. The client-side fallback order remains a future option:
 
 ```text
 WebGPU-capable local analyzer
@@ -125,6 +136,7 @@ backend/.../
 ├─ taxonomy/
 ├─ graph/
 ├─ task/
+├─ event/
 ├─ reminder/
 ├─ search/
 ├─ sync/
@@ -142,31 +154,43 @@ Each module may contain `api`, `application`, `domain`, and `infrastructure` pac
 - `taxonomy`: tags, aliases, provisional topics, centroids and taxonomy proposals
 - `graph`: bounded canonical home projection, hard-priority selection, full-corpus 1-hop pagination,
   and owner-scoped detail navigation
-- `task`: derived task/event records and state transitions
+- `task`: derived TASK records and state transitions
+- `event`: canonical EVENT schedule persistence and bounded owner-scoped read projection
 - `reminder`: schedule, Web Push and retry
 - `search`: owner-scoped exact lexical memo retrieval; future fuzzy/semantic retrieval remains
   outside the current slice
 - `sync`: client mutation handling and later cursor synchronization
 - `audit`: provenance, analysis applications and undo
 
-The analysis contract accepts recoverable proposal schema v1 and current schema v2. Version 2
-identifies date candidates and lets a TASK candidate reference one precise due-date candidate; the
-review projection never derives that relation from array order. Both shapes remain untrusted JSONB
-until the ordinary owner-scoped, idempotent application transaction succeeds. The existing run
-schema-version column and proposal JSONB carry this evolution, so no relational migration or
-historical JSON rewrite is introduced for the v2 contract.
+The analysis contract accepts recoverable proposal schema v1/v2 plus dark-compatible maximum v3.
+Version 2 identifies date candidates and lets a TASK candidate reference one precise due-date
+candidate. Version 3 additionally represents bounded per-EVENT schedule alternatives through IDs,
+explicit timed/all-day intent, optional end, and explicit all-day inclusive/exclusive end semantics.
+No relation is derived from array order. Every shape remains untrusted JSONB until the ordinary
+owner-scoped, idempotent application transaction succeeds. The existing run schema-version column
+and proposal JSONB carry this evolution, so no relational migration or historical JSON rewrite is
+introduced for the proposal contract.
+
+Current `fake-v9` / `korean-rules-v7` adds one grounded parser rule without changing that schema:
+an explicit `오늘|내일|모레 + 오전|오후 + 1–12시` phrase (optional minutes) is resolved against the
+immutable revision instant/source zone as `RELATIVE_EXACT`. A date-less `6시` stays `UNKNOWN`; the
+server does not infer today or PM. The relative local time must map to one unambiguous source-zone
+offset or it remains unresolved.
 
 Proposal reads negotiate only the response representation. A missing
-`X-Analysis-Proposal-Schema-Version` header, or value `1`, projects stored v2 JSON to strict v1 in
-memory so an installed older PWA remains usable; value `2` preserves the stored version. The server
-never upgrades historical v1 JSON, never rewrites the persisted proposal or hash during projection,
-and returns `Cache-Control: no-store` plus `Vary` on the schema header.
+`X-Analysis-Proposal-Schema-Version` header, or value `1`, projects any higher stored version to
+strict v1 in memory so an installed older PWA remains usable. Value `2` removes v3 EVENT fields but
+preserves v2 date IDs/TASK due references; value `3` preserves any supported stored version. The
+server never synthesizes an upgrade, never rewrites the persisted proposal or hash during
+projection, and returns `Cache-Control: no-store` plus `Vary` on the schema header.
 
-The apply request's due `timeZone` remains a validated compatibility field, not an authority over
-canonical context. Inside the application transaction the backend replaces it with the locked
-immutable memo revision's `source_time_zone` before task persistence. This keeps date-only overdue
-semantics tied to capture context even when review happens later on another device or in another
-zone.
+The apply request's due and EVENT schedule `timeZone` fields remain validated compatibility fields,
+not authorities over canonical context. Inside the application transaction the backend replaces
+them with the locked immutable memo revision's `source_time_zone` before task/event persistence.
+This keeps date-only overdue and displayed event context tied to capture context even when review
+happens later on another device or in another zone. The timed EVENT validator requires each explicit
+offset to be valid for its local date-time in that immutable source zone. It rejects DST gaps and
+accepts either explicitly chosen valid offset during an overlap.
 
 Relation application follows the same untrusted-proposal boundary. A no-store owner-scoped read
 resolves only bounded display labels for the stored relation array; it does not grant authority.
@@ -177,6 +201,183 @@ transaction. An explicit empty relation selection is valid partial application. 
 is accepted only for a proposal with no relation candidates. Undo deletes the application's
 relation rows before source items and never deletes target memos or tags still referenced by another
 application.
+
+## Canonical EVENT schedule boundary
+
+Milestone 6A.1 keeps proposal schema v2 unchanged. That proposal can identify precise date
+candidates and bind one to TASK due, but it does not carry an EVENT temporal binding. The PWA
+therefore initializes every EVENT review item with no schedule. A user may explicitly reuse a
+precise `DATE_ONLY`, `EXACT_TIME`, or `RELATIVE_EXACT` candidate as a convenience or enter a schedule
+directly. The review layer never associates EVENT and date by array order, and an unscheduled
+title-only EVENT remains a valid confirmed item.
+
+When the reviewed Apply includes an EVENT schedule, `selectionSchemaVersion: "2"` is required. The
+domain boundary accepts either a whole-second timed offset start with an optional later end or an all-day date
+with an optional later exclusive end. It rejects schedule-on-non-EVENT and due-on-non-TASK shapes.
+The existing owner/revision lock, idempotency record, application transaction, and undo unit remain
+authoritative; model/provider output cannot call Apply.
+
+V21 stores that explicit selection in canonical `event_details`, separate from `task_details`. The
+owner-and-kind composite foreign key requires the source item to be the same owner's EVENT, while
+`coalesce(..., FALSE)` temporal-shape/range checks reject malformed SQL-null combinations. There is
+no backfill, so existing title-only EVENT rows have no detail row and no invented start/end.
+
+`GET /api/v1/events` is a `no-store`, bounded read projection over `event_details`, current active
+memos, unarchived current-revision EVENT items, and `APPLIED` applications. It exposes only the item
+identity, title, schedule shape, and canonical source zone. Raw memo, proposal, selection,
+application/memo provenance, foreign-owner rows, stale revisions, undone/archived/trashed items, and
+unscheduled EVENTs remain outside the response.
+
+Milestone 6B adds a second projection over the same query, not another source of truth.
+`GET /api/v1/events/calendar.ics` probes at most 101 rows, rejects a partial export above 100, and
+returns 204 when there is no RFC component to emit. The pure serializer produces a maximum 128 KiB
+UTF-8/CRLF RFC 5545 snapshot with stable opaque non-UUID UIDs, immutable item-creation DTSTAMP,
+sequence 0, UTC TIMED values, `VALUE=DATE` ALL_DAY values, explicit ends only, RFC TEXT escaping, and
+75-octet folding. Unsafe control text, malformed Unicode, fractional schedule seconds, or out-of-range
+years fail closed.
+
+The PWA does not navigate to the API. Its ordinary owner/session-epoch request boundary reads one
+no-store Blob, renders only plain text, and downloads those exact bytes through a short-lived object
+URL. The service worker remains network-only for the route. The projection contains no raw memo,
+TASK, taxonomy, relation, AI/application evidence, internal UUID, alarm, recurrence, or share token,
+and executing it performs no canonical write.
+
+Milestone 6C adds a separate calendar-feed module rather than widening `EventService`.
+Its authenticated management side derives owner identity from the session and applies CSRF,
+expected-owner and idempotency guards to every mutation; update/rotate/external-publication-enable/
+revoke/add/remove of an existing feed additionally use optimistic versioning, while create has no
+pre-existing version. A client-generated 32-byte secret reaches only create/rotate/
+external-publication-enable input; the service stores a domain-separated SHA-256 verifier and returns
+metadata-only responses. Explicit feed entries persist
+a recipient-only random public UID, sequence, last approved temporal shape, and ACTIVE/CANCELLED
+state. Canonical memo edit/trash and application undo update that projection before their source
+mutation; restore never reshares automatically. The owner is capped at 100 lifetime feeds including
+revoked rows, and each feed at 100 lifetime entries including cancellation tombstones; 6C provides no
+delete or capacity-reclamation path.
+
+The publication side is a different dependency direction. A first-order stateless security chain
+handles only `GET|HEAD /calendar/v1/feed.ics?token=...`, computes a verifier, derives feed/owner solely
+from the matched server row, checks its explicit publication scope against the deployment mode and
+current consent policy, and never calls `CurrentIdentity`, creates a session, accepts an owner
+header, or writes last-access state. It rechecks current canonical eligibility for ACTIVE rows and
+serializes only recipient UID, DTSTAMP/SEQUENCE, explicit temporal values, a disclosure-bounded
+SUMMARY, and cancellation status. An impossible ineligible `ACTIVE` projection fails the whole read
+as the same generic response instead of producing a partial calendar. Malformed, unknown, rotated,
+revoked, disabled-owner, missing/stale consent, deployment/scope mismatch, and projection-integrity
+failures have the same empty no-store 404 boundary.
+The authenticated 6B serializer and UID remain separate.
+
+These slices remain `SOLO_PROVISIONAL`/`REPORT_ONLY`. The owner-authorized personal stack is now V23
+and remains `LOCAL_ONLY`. Its private same-origin proxy may route the fixed feed path without logging
+query arguments, but that is not an internet subscription edge. Actual public activation and real
+calendar-client validation remain `NOT_AUTHORIZED`.
+
+Milestone 6D.1 implements the source authority-discovery boundary. An authenticated, no-store
+`GET /api/v1/calendar-feeds/capabilities` returns the exact discriminated union
+`{mode: "LOCAL_ONLY", publicOrigin: null, consentPolicyVersion: null}` or
+`{mode: "PUBLIC_HTTPS", publicOrigin: "https://<public-fqdn>[:port]",
+consentPolicyVersion: "calendar-feed-public-v1"}`. `LOCAL_ONLY` is the
+fail-closed public-publication default. Spring binds disabled/blank properties by default and fails
+startup for inconsistent or noncanonical enabled configuration. A `PUBLIC_HTTPS` origin is a maximum
+255-character lowercase HTTPS multi-label ASCII hostname with an optional non-default port; userinfo, IP literals,
+`localhost` and its subdomains, path, query, fragment, trailing slash, and explicit `:443` are
+rejected. This syntactic check proves neither public-suffix ownership nor DNS reachability. The
+origin and policy identifier come from server-owned configuration, not browser location, request headers, feed state,
+memo content, or caller input.
+
+The PWA strictly decodes all three fields. Only `PUBLIC_HTTPS` uses the returned server origin. A valid
+`LOCAL_ONLY` response may deliberately assemble the fixed path from the exact current private/local
+HTTP(S) origin, but the UI labels that URL local/isolated and warns against external distribution.
+Request failure or a missing/malformed response is not converted to `LOCAL_ONLY` and cannot silently
+fall back to private same-origin.
+
+ADR 0015 adds a separate V23 per-feed authority gate. Existing and newly created rows remain
+`LOCAL_ONLY` with null consent. An authenticated owner must accept the exact current policy and
+supply a fresh client-generated bearer through an idempotent external-publication mutation.
+Verifier rotation, `PUBLIC_HTTPS` scope, policy/time pin and one version increment commit together;
+the old bearer is never promoted. A deployment switch therefore makes legacy local feeds
+unavailable instead of public. Policy drift also closes a public feed until fresh re-consent. A
+public feed cannot change disclosure mode through the ordinary update path. Revoke permanently
+invalidates the feed and clears its public scope/pin. Membership remains explicit and no future
+event is selected automatically.
+
+This 6D.1 backend/property/controller and frontend decoder/UI implementation was first deployed to
+the personal V22 stack without publication environment entries. That V22 private smoke verified
+health, zero failed migration, the unauthenticated 401/no-store boundary, and synthetic private
+GET/HEAD without token logging; it did not use a personal session to execute the authenticated 200
+response. The later owner-authorized V23 migration/rebuild completed with the same fail-closed
+`LOCAL_ONLY` deployment mode. Public activation, real-client interoperability smoke, alarms/reminders,
+recurrence, and external calendar writes remain `NOT_AUTHORIZED`.
+
+### 6D public-edge preflight topology
+
+The source preflight adds a new dependency direction without widening the private frontend:
+
+```text
+future reviewed HTTPS operator (not configured or authorized)
+                       │
+                       ▼
+Windows 127.0.0.1:${PERSONAL_MEMO_CALENDAR_EDGE_PORT:-8787}
+                       │
+             calendar-feed-edge
+        exact GET|HEAD feed target only
+                       │ private internal network
+                       ▼
+                  Spring Boot
+
+private PWA/API listener ── not connected to this edge
+PostgreSQL               ── not published
+```
+
+`compose.public-feed.yaml` creates only the loopback edge and its internal backend network. It leaves
+the backend capability at `LOCAL_ONLY`. The edge matches the exact raw canonical-token query target,
+accepts no body, forwards no caller credentials/cookies/referer/forwarding headers, and logs only a
+fixed safe route/method classification. Local rejection and intercepted upstream errors become a
+generic empty 404; rate rejection is bodyless 429. The isolated test topology replaces Spring
+Boot/PostgreSQL with a disposable Nginx stub and generated synthetic tokens, so it never enters a
+personal data path. The recorded isolated run passed query/path/header/custom-method bearer sentinel
+absence from owned edge/upstream logs, which is not external-operator log proof.
+
+The preflight origin hop provisionally enforces 60 requests/minute with burst 20, 8 concurrent
+connections, and 2s/5s/10s proxy connect/send/read timeouts. An external tunnel or proxy can make all
+clients share one immediate peer at this hop, so these are global containment bounds rather than an
+external per-client policy. Their individual timeout semantics do not form a total external deadline
+or an end-to-end SLA.
+
+`compose.public-feed-activation.yaml` is intentionally separate and must be the last overlay. Only a
+second, separately approved cutover supplies the reviewed `PUBLIC_HTTPS` origin and exact consent
+policy version from ignored
+`.env.public-feed`. DNS, trusted TLS, operator routing and logs, external limits, and external-client
+behavior are outside the overlay. Rollback disables the external route first, recreates the backend
+without the activation overlay to restore `LOCAL_ONLY`, and then removes the loopback edge if needed;
+there is no database migration or canonical rollback.
+
+## Dark-compatible EVENT temporal-binding boundary
+
+Milestone 6A.2a defines proposal schema v3 without activating a producer. A v3 item carries a
+bounded `eventScheduleCandidates` list and nullable `suggestedEventScheduleCandidateId`. Each strict
+alternative has a unique ID, explicit mode, a start date-candidate reference, optional end
+descriptor, and score. The end descriptor says whether its value is already exclusive or, for
+all-day only, names the included final day whose normalized exclusive boundary is the next calendar
+day. Missing ends remain missing; inclusive conversion is never inferred from proximity or order.
+
+Schema and domain validation reject dangling/imprecise/mode-incompatible references, duplicate IDs
+or semantic alternatives, non-later normalized ranges, overflow, candidates on non-EVENT items, and
+multiple alternatives without `CONFLICTING_DATES`. The current domain gate also rejects every
+non-null suggestion. Current `fake-v9` and the localhost semantic-patch adapter keep emitting v2.
+
+The PWA can decode and display v3 alternatives but initializes every EVENT schedule to null. A user
+must explicitly choose a displayed alternative before it becomes editable, then use the existing
+Apply action. Thus v3 display support is not a preselection path and creates no canonical data.
+Temporal-candidate-bearing v3 proposals and schedule-bearing selections remain fail-closed
+`UNCLASSIFIABLE` in outcome comparison.
+
+A separate strict EVENT label-overlay contract and structural validator contain no checked-in
+labels, reviewer manifest, adjudication, metric result, threshold, or `PASS`. Producer activation
+requires independent human policy approval, two independent label passes and adjudication, frozen
+thresholds chosen before candidate output, a held-out release, source-zone-aware prefill validation,
+and a separate product/deployment decision. The existing TASK-due dataset-v3 overlay grants no EVENT
+authority.
 
 ## Cloud Agent orchestration
 
@@ -193,19 +394,50 @@ time no later than the authorization-check instant. V13 revokes legacy boolean-o
 future-dated grant is also rejected. There is no consent grant/revoke API and no external provider
 configured in this checkpoint.
 
+`LOCAL_MACHINE_MEMO_CONTENT` is neither `NO_NETWORK` nor external-cloud consent. Checked-in Compose
+enables it only in the personal overlay, while configuration validation independently enforces a
+machine-local origin and an exact configured model/digest. That overlay pins
+`http://host.docker.internal:11434`, the exact LiquidAI tag/digest, the same exact relay origin, and
+a 45-second outer execution timeout. The transport accepts only `/api/tags` and `/api/chat`,
+uses a direct client with redirects disabled, exposes no tools, and verifies the installed model both
+before and after generation. Current adapter binding `ollama-local-gateway-v2` accepts an optional
+bounded textual Ollama `thinking` field only to validate and discard it. The visible `content` must
+still pass strict JSON, proposal schema, and domain validation; non-text, oversized, extra-field,
+malformed, or truncated responses fail closed. The normal application configuration still selects
+the Fake gateway.
+
 Before the first gateway call, the V16 retrieval step examines at most 10 tag proposals and at most
 20 distinct normalized canonical-name/alias terms. One owner-scoped SQL query matches only the
 authenticated owner's active tags and aliases by exact normalized equality. Unique resolution uses
 the complete returned match set. Only then do deterministic ordering and UUID deduplication retain at
 most K=8 candidates. The resulting `CloudAnalysisRequest` context is a hint only; final owner/reference
-validation remains authoritative. This step does not read raw memo or related-memo content and uses
-no fuzzy search, vector search, embedding, Ollama/LiquidAI, or real provider.
+validation remains authoritative. This retrieval step does not read raw memo or related-memo content
+and uses no fuzzy search, vector search, or embedding. The later personal local-model execution gets
+the current immutable revision only as bounded in-memory input; it is not a retrieval source. The
+explicit public-fixture localhost runner remains separate from this architecture path.
 
 The gateway returns a defensive success proposal or a typed failure enum without provider error
 text. Missing consent, typed failure, descriptor/enrichment exception, or invalid enriched output
 uses the revalidated local proposal, persists a `HYBRID` / `REVIEW_REQUIRED` run with server-owned
 transfer/gateway/provider/model/policy/outcome evidence, and forces detailed UI review. It does not
 modify raw or canonical data.
+
+The personal model may only select one existing grounded item, a replacement kind, and exact
+memo substrings for action/object/time. A deterministic mapper rebuilds and revalidates the full
+proposal; it cannot accept model-selected owner, identifiers, title, canonical tags, relations, due
+date, tool calls, or mutation. Failure, timeout, wrong model/digest, truncation, protocol/schema/domain
+violation, or an unpatchable input ends as a revalidated local detailed-review proposal. A
+default-`RECORD` fallback is normalized to `UNKNOWN`; an existing explicit grounded candidate remains.
+Its
+`num_predict=1024` is a provisional hidden-reasoning budget observed to permit STOP; visible output,
+transport response, and proposal byte limits remain separate and lower.
+
+V19 stores only a versioned deterministic decision projection, fallback codes, model contribution
+status, and semantic changed-field names. V20 separately stores the versioned invocation mode/reason
+so `AI_PREFERRED` never invents semantic ambiguity. V20 may also snapshot at most three offset-only
+approved-type anchors for one dispatch; finalization scrubs that snapshot and retains only its
+hash/version/count. Historical memo text and selection JSON never enter the model prompt. This is a
+bounded inference-time hint, not a RAG corpus, automatic rule update, fine-tune, or LoRA loop.
 
 Every new LOCAL, cloud-success, and fallback proposal rebuilds `providerMetadata` from the same
 bounded server allow-list; success output cannot preserve arbitrary provider fields. V14 carries the
@@ -294,7 +526,7 @@ specific provider.
 Cloud-analysis recovery has one narrow background job. It is enabled only in the `prod` profile and
 scans at most 25 eligible dispatches every 30 seconds. The scan is database-backed and owner-explicit;
 it does not depend on an HTTP security context. The existing idempotency advisory lock, binding
-check, lease/fence/deadline bounds, out-of-transaction Fake invocation, and revision-rechecking
+check, lease/fence/deadline bounds, out-of-transaction configured-gateway invocation, and revision-rechecking
 finalize are reused rather than duplicated. A process-local guard also prevents overlapping cycles
 within one application instance. This is recovery of already prepared work, not a general-purpose
 queue, and caller-driven same-key recovery remains supported. V17's attempt ledger follows the same
@@ -436,6 +668,8 @@ result list only as an explicitly stale UI snapshot until the user restarts at p
 - Google identities are keyed by `(provider, subject)`. Linking requires an authenticated session and explicit link intent; reported-email equality never performs an implicit merge.
 - Passwords use Spring Security's delegating adaptive encoder and are never logged or returned.
 - Every domain query and mutation obtains the owner UUID from `SecurityContext`; request DTOs cannot choose an owner.
+- EVENT Apply uses the same owner/revision/idempotency/CSRF boundary as other confirmed data, and
+  schedule readback is owner-scoped and `no-store`.
 - Auth and API responses are not cached by the service worker, and no authentication material is persisted in browser storage.
 - Cloud secrets remain server-side.
 - Memo content is untrusted input.
@@ -500,7 +734,48 @@ PostgreSQL
 Google OpenID Connect (optional external identity provider)
 ```
 
+The private deployment reached V22 on 2026-08-27 after a separately authorized backup, restore
+rehearsal, forward migration, rebuild, and private health/unknown-token smoke. That procedure created
+or inspected no personal schedule/feed row and exposed no calendar route through a public edge.
+The later owner-authorized Milestone 6D.1 rebuild placed the server-owned public-origin API and strict
+UI boundary in the personal V22 image with no publication environment, preserving `LOCAL_ONLY` and
+leaving the public edge closed. The later 6D public-edge preflight source adds only the isolated
+loopback topology described above; no public hostname, DNS/TLS operator, external route, or personal
+data verification has been activated.
+The subsequent owner-authorized V23 migration/rebuild completed with the personal deployment still
+`LOCAL_ONLY`; actual public activation and real calendar-client validation remain `NOT_AUTHORIZED`.
+
 One backend process hosts the API and authentication endpoints and the current bounded gateway
 invocation pool. If autonomous background work is approved, the same process may also host its
 database-backed consumers initially; separate them only when measured load or failure isolation
 requires it. Redis is not needed: session state remains in PostgreSQL for this stage.
+
+## Access-gated owner-only remote topology
+
+ADR 0018 adds a second public topology without widening the calendar edge. Cloudflare terminates TLS
+for one exact application hostname, applies an exact-owner Access policy and entire-host cache bypass,
+then routes a dedicated named Tunnel to a dedicated Manual Windows connector and
+`127.0.0.1:8788`. The connector reaches only an unprivileged `app-public-edge`. That edge shares the
+internal `app-publication` network with the frontend. For Windows Docker Desktop host-loopback
+publishing it alone also joins the non-internal `app-loopback` bridge; frontend, backend, and
+PostgreSQL do not. The bridge's possible outbound reachability is a residual risk, bounded by the
+edge's unprivileged/read-only execution, `cap_drop: ALL`, `no-new-privileges`, and fixed frontend
+upstream. Backend and PostgreSQL remain unpublished and outside both edge networks.
+
+The edge normalizes Host and forwarded scheme/port, removes caller and Cloudflare identity/network
+claims, allow-lists application headers, and reconstructs the Cookie header from only the first
+bounded exact `SESSION` and `XSRF-TOKEN` values. `CF_Authorization` and arbitrary cookies are not
+forwarded. It preserves only the body/CSRF/idempotency values needed by the existing same-origin
+application. Spring session authentication, CSRF, owner derivation,
+revision checks, domain/JSON validation, and explicit Apply remain the authority. The edge blocks the
+public feed, Actuator, internal paths, registration, Google/OAuth for the initial remote beta, unknown
+SPA paths, unsupported methods, and unsafe requests without the exact public Origin. The registration
+deny includes Spring-style semicolon matrix parameters. Immutable caching additionally requires both
+a fingerprinted asset path and a final `200`/`206`/`304`, so hash-shaped 4xx/5xx responses are
+`no-store`.
+
+The private frontend log and outer edge log reduce paths and methods to finite route classes; neither
+records client address, raw URI/query, identifiers, cookies, referrer, authorization, or Access JWT.
+The calendar and application connectors have separate service names, protected roots, tokens,
+metrics ports, readiness checks, and connector-first rollback. Source/local synthetic readiness does
+not activate the remote route or authorize Cloudflare processing of personal traffic.

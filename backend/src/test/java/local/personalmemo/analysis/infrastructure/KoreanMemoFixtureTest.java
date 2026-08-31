@@ -107,7 +107,8 @@ class KoreanMemoFixtureTest {
           assertThat(textValues(proposal.path("itemCandidates"), "kind"))
               .containsExactly("INFORMATION", "TASK");
       case "missing-action" -> {
-        assertThat(proposal.path("itemCandidates")).isEmpty();
+        assertThat(proposal.path("itemCandidates")).hasSize(1);
+        assertThat(proposal.at("/itemCandidates/0/kind").asText()).isEqualTo("RECORD");
         assertThat(proposal.at("/typeCandidates/0/value").asText()).isEqualTo("UNKNOWN");
       }
       case "conflicting-dates" -> {

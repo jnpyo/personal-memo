@@ -33,7 +33,7 @@ describe('PWA update prompt', () => {
     );
 
     expect(markup).toContain('작성 중인 입력을 확인한 뒤');
-    expect(markup).toContain('지금 업데이트');
+    expect(markup).toContain('새 화면 적용');
     expect(markup).toContain('나중에');
   });
 
@@ -49,7 +49,7 @@ describe('PWA update prompt', () => {
       />,
     );
 
-    expect(markup).toContain('업데이트 중…');
+    expect(markup).toContain('화면 업데이트 중…');
     expect(markup.match(/disabled=""/g)).toHaveLength(2);
   });
 
@@ -66,7 +66,7 @@ describe('PWA update prompt', () => {
     );
 
     expect(markup).toContain('업데이트하지 못했습니다');
-    expect(markup).toContain('지금 업데이트');
+    expect(markup).toContain('새 화면 적용');
   });
 
   it('blocks activation while proposal edits exist only in memory', () => {

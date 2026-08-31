@@ -228,6 +228,54 @@ class KoreanItemExtractorTest {
               assertThat(item.action()).isNull();
               assertThat(source(content, item)).isEqualTo(content);
             });
+    assertThat(result.classificationBasis())
+        .isEqualTo(KoreanItemExtractor.ClassificationBasis.DEFAULT_FALLBACK);
+    assertThat(result.unrecognizedActionCueCount()).isZero();
+    assertThat(result.signals()).containsExactly(AmbiguityReason.MISSING_ACTION);
+  }
+
+  @Test
+  void recognizesAnAffirmativeConnectActionWithGroundedFields() {
+    String content = "6시 디스코드 접속하기";
+
+    var result = extract(content);
+
+    assertThat(result.detectedItems())
+        .singleElement()
+        .satisfies(
+            item -> {
+              assertThat(item.kind()).isEqualTo("TASK");
+              assertThat(item.action()).isEqualTo("접속하기");
+              assertThat(item.object()).isEqualTo("디스코드");
+              assertThat(source(content, item)).isEqualTo("디스코드 접속하기");
+            });
+    assertThat(result.classificationBasis())
+        .isEqualTo(KoreanItemExtractor.ClassificationBasis.EXPLICIT_RULE);
+    assertThat(result.unrecognizedActionCueCount()).isZero();
+    assertThat(result.signals()).isEmpty();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"접속하기 싫다", "접속하기 좋은 시간"})
+  void excludesNegatedOrDescriptiveActionFormsFromTheUnrecognizedCueCount(String content) {
+    var result = extract(content);
+
+    assertThat(result.classificationBasis())
+        .isEqualTo(KoreanItemExtractor.ClassificationBasis.DEFAULT_FALLBACK);
+    assertThat(result.unrecognizedActionCueCount()).isZero();
+    assertThat(result.signals()).containsExactly(AmbiguityReason.MISSING_ACTION);
+  }
+
+  @Test
+  void keepsAnExplicitRecordSuffixLocallyClassifiable() {
+    String content = "접속 기록";
+
+    var result = extract(content);
+
+    assertThat(result.detectedItems().getFirst().kind()).isEqualTo("RECORD");
+    assertThat(result.classificationBasis())
+        .isEqualTo(KoreanItemExtractor.ClassificationBasis.EXPLICIT_RULE);
+    assertThat(result.unrecognizedActionCueCount()).isZero();
     assertThat(result.signals()).isEmpty();
   }
 
@@ -244,6 +292,9 @@ class KoreanItemExtractorTest {
               assertThat(item.action()).isNotNull();
               assertThat(source(content, item)).isEqualTo(content);
             });
+    assertThat(result.classificationBasis())
+        .isEqualTo(KoreanItemExtractor.ClassificationBasis.EXPLICIT_RULE);
+    assertThat(result.unrecognizedActionCueCount()).isZero();
   }
 
   @Test
@@ -265,6 +316,8 @@ class KoreanItemExtractorTest {
     assertThat(recordResult.kind()).isEqualTo("RECORD");
     assertThat(recordResult.object()).isEqualTo("스쿼트 80kg 5세트");
     assertThat(source(record, recordResult)).isEqualTo(record);
+    assertThat(extract(record).classificationBasis())
+        .isEqualTo(KoreanItemExtractor.ClassificationBasis.EXPLICIT_RULE);
   }
 
   @Test

@@ -43,9 +43,11 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
   only for the explicitly selected source-item/target pairs; unavailable targets fail closed.
 - All applied analysis can be undone without deleting the original.
 
-### Graph-first retrieval
+### Today-first action and graph-backed retrieval
 
-- The entry screen is a graph of meaningful active topics and memos.
+- The mobile entry screen prioritizes quick capture, today's unfinished tasks, and confirmed events.
+- The graph remains a secondary retrieval view for meaningful active topics and memos rather than
+  the first visual hierarchy.
 - The graph renders a curated neighborhood, not the entire corpus.
 - System types such as TASK and INFORMATION are represented by filters and node styling, not giant hub nodes.
 - Search can reveal and expand a memo hidden inside a collapsed cluster.
@@ -74,10 +76,15 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 - The account panel shows usable sign-in methods and prevents removal of the final method.
 - Signing out returns to the authentication screen and makes owner data inaccessible to the browser session.
 
-### 2. Graph home
+### 2. Today-first mobile home
 
-- Show 50–100 active nodes by default.
-- Prioritize recent notes, unfinished tasks, upcoming events, pinned items, and important topic tags.
+- Keep quick capture and a compact view of today's unfinished tasks and confirmed events in the first
+  scan path.
+- Show a read-only availability summary derived from existing in-memory connection, recovery,
+  loading, and error state. It may describe what the current page can do, but it must not claim
+  database, Ollama, Cloudflare Tunnel, Access, or provider health.
+- Keep graph access visible but secondary. When opened, show 50–100 active nodes by default and
+  prioritize recent notes, unfinished tasks, upcoming events, pinned items, and important topic tags.
 - Tapping a node highlights its local neighborhood and opens a detail drawer.
 - Zooming changes detail level: clusters → tags → individual memos.
 
@@ -96,9 +103,22 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 
 ### 3. Quick capture
 
-- A persistent input affordance is available from the graph home.
+- A persistent input affordance is available from the Today-first mobile home and secondary views.
 - Saving creates a raw memo immediately.
 - Analysis happens after save and must not block further capture.
+
+### 3a. Owner beta status and update boundary
+
+- Milestone 7.1 is a source-only UI slice with no API, OpenAPI, JSON Schema, Flyway, or canonical-data
+  contract change.
+- Connection wording reflects only same-origin API reachability and current workspace state. A green
+  status must not be presented as database, model, Tunnel, Access, or provider-wide health.
+- PWA refresh remains explicit and blocked by unsaved work or a pending server operation. The UI calls
+  it a screen/PWA asset refresh, not a backend, Docker, connector, or operating-system update.
+- Analysis-path counts remain lazy, owner-scoped, raw-free, and secondary. They are historical
+  aggregate evidence, not real-time LLM availability or model-quality status.
+- The browser application never starts or stops Windows services, Docker, Cloudflare connectors,
+  connector metrics, tokens, or Ollama. Those controls stay in the reviewed operator boundary.
 
 ### 4. Analysis review
 
@@ -111,6 +131,9 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 - Associate a proposed due date with a specific task candidate. If that mapping is absent,
   imprecise, or incompatible after editing, require field-level review instead of guessing by list
   order or candidate count.
+- Display any future EVENT temporal alternatives as `아직 미적용`; never initialize a schedule from
+  candidate order, score, or model suggestion. A user action must choose an alternative before the
+  ordinary Apply confirmation can persist it.
 - Explain only uncertain fields, not the entire model reasoning.
 - Allow partial apply.
 
@@ -119,6 +142,18 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 - A memo can produce zero or more task facets.
 - MVP should cap automatic extraction to a small number, such as three, to keep review understandable.
 - `OVERDUE` is derived from `TODO && dueAt < now`; it is not a separately persisted source status.
+- An EVENT gets a canonical timed or all-day schedule only after explicit review. Missing starts,
+  ends and durations remain missing; automatic alarm creation is not part of this checkpoint.
+- A signed-in owner may preview and download a schedule-only RFC 5545 snapshot. Preview and download
+  use the same no-store bytes, and the UI must explain that a downloaded `.ics` is a one-time import,
+  not a live subscription, share URL or alarm.
+- The separate source-only recipient feed flow defaults to `BUSY_ONLY`, starts with every event
+  unselected, and requires explicit membership. It shows a rotate/revoke-capable URL once from
+  browser memory and explains that dates/times are still disclosed and recipient copies cannot be
+  recalled. V23 adds a separate per-feed, version-pinned public-consent step with a fresh bearer;
+  existing and newly created feeds remain `LOCAL_ONLY` until that explicit step succeeds. Actual
+  Internet activation and external-client compatibility remain a separate operator decision; no
+  feed is an alarm.
 
 ### 6. Aging and compression
 
@@ -146,6 +181,7 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 - Password recovery delivery, public email verification, IP/edge rate limiting and abuse protection, and MFA/passkeys in the first authentication slice
 - Voice, image, PDF, and web-clip ingestion
 - Automatic whole-corpus ontology generation
+- Browser-based Windows service, Docker, Cloudflare connector, token, or host-operation control
 
 ## Success signals
 
@@ -162,6 +198,7 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 
 ## Market position
 
-The intended product combines automatic knowledge organization, a graph-first interface, and action extraction. The clearest initial positioning is:
+The intended product combines fast capture, owner-approved knowledge organization, a Today-first
+action view, secondary graph retrieval, and action extraction. The clearest initial positioning is:
 
 > A student-focused AI second brain that turns rough class notes into connected concepts, assignments, and deadlines.

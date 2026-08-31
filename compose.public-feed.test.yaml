@@ -1,0 +1,40 @@
+services:
+  backend:
+    image: nginxinc/nginx-unprivileged:1.29-alpine
+    volumes:
+      - type: bind
+        source: ./calendar-edge/test/upstream-nginx.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/_internal/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  calendar-feed-edge:
+    build:
+      context: ./calendar-edge
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1::8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

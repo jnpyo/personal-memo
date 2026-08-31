@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://personal-memo.local/schemas/local-decision-evidence.json",
+  "title": "LocalDecisionEvidence",
+  "description": "Bounded, raw-free structural evidence for a local fallback decision.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "typeSummary",
+    "temporalSummary",
+    "taxonomySummary",
+    "itemSummary",
+    "relationCandidateCount"
+  ],
+  "properties": {
+    "version": {
+      "const": "local-decision-v1"
+    },
+    "typeSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidateCount", "leader", "leaderScore", "runnerUpScore", "margin"],
+      "properties": {
+        "candidateCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        },
+        "leader": {
+          "enum": ["TASK", "EVENT", "INFORMATION", "IDEA", "RECORD", "UNKNOWN"]
+        },
+        "leaderScore": {
+          "$ref": "#/$defs/score"
+        },
+        "runnerUpScore": {
+          "oneOf": [
+            { "$ref": "#/$defs/score" },
+            { "type": "null" }
+          ]
+        },
+        "margin": {
+          "oneOf": [
+            { "$ref": "#/$defs/score" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "temporalSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidateCount", "preciseCount", "impreciseCount", "explicitTimeCount"],
+      "properties": {
+        "candidateCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "preciseCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "impreciseCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "explicitTimeCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        }
+      }
+    },
+    "taxonomySummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidateCount", "newProposalCount", "strongestScore"],
+      "properties": {
+        "candidateCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "newProposalCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "strongestScore": {
+          "oneOf": [
+            { "$ref": "#/$defs/score" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "itemSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateCount",
+        "taskCount",
+        "verbPresentCount",
+        "referentPresentCount",
+        "dueBindingCount"
+      ],
+      "properties": {
+        "candidateCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "taskCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "verbPresentCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "referentPresentCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "dueBindingCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        }
+      }
+    },
+    "relationCandidateCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10
+    }
+  },
+  "$defs": {
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  }
+}

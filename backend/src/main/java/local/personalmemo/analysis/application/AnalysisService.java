@@ -16,10 +16,13 @@ import local.personalmemo.analysis.api.AnalysisDtos.ReviewDispositionView;
 import local.personalmemo.analysis.api.AnalysisDtos.RunView;
 import local.personalmemo.analysis.api.AnalysisDtos.Start;
 import local.personalmemo.analysis.domain.AmbiguityReason;
+import local.personalmemo.analysis.domain.AnalysisProposalChangedField;
 import local.personalmemo.analysis.domain.AnalysisProposalSchemaValidator;
+import local.personalmemo.analysis.domain.AnalysisProposalSemanticDiff;
 import local.personalmemo.analysis.domain.AnalysisProposalValidator;
 import local.personalmemo.analysis.domain.AnalysisProvenance;
 import local.personalmemo.analysis.domain.AnalysisRoute;
+import local.personalmemo.analysis.domain.ApprovedCorrectionContext;
 import local.personalmemo.analysis.domain.CloudAnalysisFailureReason;
 import local.personalmemo.analysis.domain.CloudAnalysisGateway;
 import local.personalmemo.analysis.domain.CloudAnalysisOutcome;
@@ -32,8 +35,14 @@ import local.personalmemo.analysis.domain.CloudGatewayDescriptor;
 import local.personalmemo.analysis.domain.CloudProviderRequestToken;
 import local.personalmemo.analysis.domain.CloudTransferMode;
 import local.personalmemo.analysis.domain.DeterministicAmbiguityGate;
+import local.personalmemo.analysis.domain.FallbackReasonCode;
 import local.personalmemo.analysis.domain.LocalAnalyzer;
+import local.personalmemo.analysis.domain.LocalDecisionEvidenceProjection;
+import local.personalmemo.analysis.domain.LocalDecisionEvidenceProjector;
+import local.personalmemo.analysis.domain.LocalModelInput;
+import local.personalmemo.analysis.domain.ModelContributionStatus;
 import local.personalmemo.analysis.domain.TagRetrievalContext;
+import local.personalmemo.analysis.infrastructure.ApprovedCorrectionContextCodec;
 import local.personalmemo.analysis.infrastructure.TagRetrievalContextCodec;
 import local.personalmemo.common.auth.CurrentIdentity;
 import local.personalmemo.common.error.DomainException;
@@ -58,7 +67,7 @@ public class AnalysisService {
   private static final String REJECT_OPERATION = "ANALYSIS_REJECT";
   private static final String POSTPONE_OPERATION = "ANALYSIS_POSTPONE";
   private static final String LEGACY_PROPOSAL_SCHEMA_VERSION = "1";
-  private static final String CURRENT_PROPOSAL_SCHEMA_VERSION = "2";
+  private static final String CURRENT_PROPOSAL_SCHEMA_VERSION = "3";
   private static final String DURABLE_EXECUTION_CONTRACT_VERSION = "durable-v1";
   private static final String CURRENT_ATTEMPT_HISTORY_VERSION = "gateway-attempt-v1";
   private static final int MAX_GATEWAY_ATTEMPTS = 2;
@@ -85,6 +94,14 @@ public class AnalysisService {
           "retrievalContextHash",
           "retrievalContextVersion",
           "retrievalContextCandidateCount",
+          "approvedCorrectionHints",
+          "approvedCorrectionContext",
+          "approvedCorrectionContextHash",
+          "approvedCorrectionContextVersion",
+          "approvedCorrectionContextCount",
+          "invocationPolicyVersion",
+          "invocationMode",
+          "invocationReasonCode",
           "cloudToolCalls",
           "cloudMutationCalls",
           "cloudResolvedFields",
@@ -105,7 +122,10 @@ public class AnalysisService {
           "detectedDateCandidateCount",
           "emittedDateCandidateCount",
           "detectedItemCandidateCount",
-          "emittedItemCandidateCount");
+          "emittedItemCandidateCount",
+          "classificationBasis",
+          "unparsedTemporalCueCount",
+          "unrecognizedActionCueCount");
 
   private final JdbcClient db;
   private final CurrentIdentity identity;
@@ -115,11 +135,17 @@ public class AnalysisService {
   private final BoundedCloudGatewayInvoker cloudInvoker;
   private final Duration cloudAttemptTimeout;
   private final DeterministicAmbiguityGate ambiguityGate;
+  private final AnalysisInvocationPolicy invocationPolicy;
+  private final boolean approvedCorrectionsEnabled;
   private final AnalysisProposalSchemaValidator proposalSchemaValidator;
   private final AnalysisProposalValidator proposalValidator;
   private final IdempotencyService idempotency;
   private final OwnerTagContextRetriever tagContextRetriever;
   private final TagRetrievalContextCodec tagContextCodec;
+  private final OwnerApprovedCorrectionContextRetriever approvedCorrectionContextRetriever;
+  private final ApprovedCorrectionContextCodec approvedCorrectionContextCodec;
+  private final LocalDecisionEvidenceProjector localDecisionEvidenceProjector;
+  private final AnalysisProposalSemanticDiff proposalSemanticDiff;
   private final ObjectMapper json;
   private final TransactionTemplate transactions;
 
@@ -132,11 +158,17 @@ public class AnalysisService {
       BoundedCloudGatewayInvoker cloudInvoker,
       CloudGatewayExecutionProperties cloudExecutionProperties,
       DeterministicAmbiguityGate ambiguityGate,
+      AnalysisInvocationPolicy invocationPolicy,
+      AnalysisInvocationProperties invocationProperties,
       AnalysisProposalSchemaValidator proposalSchemaValidator,
       AnalysisProposalValidator proposalValidator,
       IdempotencyService idempotency,
       OwnerTagContextRetriever tagContextRetriever,
       TagRetrievalContextCodec tagContextCodec,
+      OwnerApprovedCorrectionContextRetriever approvedCorrectionContextRetriever,
+      ApprovedCorrectionContextCodec approvedCorrectionContextCodec,
+      LocalDecisionEvidenceProjector localDecisionEvidenceProjector,
+      AnalysisProposalSemanticDiff proposalSemanticDiff,
       ObjectMapper json,
       PlatformTransactionManager transactionManager) {
     this.db = db;
@@ -147,11 +179,17 @@ public class AnalysisService {
     this.cloudInvoker = cloudInvoker;
     this.cloudAttemptTimeout = cloudExecutionProperties.getTimeout();
     this.ambiguityGate = ambiguityGate;
+    this.invocationPolicy = invocationPolicy;
+    this.approvedCorrectionsEnabled = invocationProperties.isApprovedCorrectionsEnabled();
     this.proposalSchemaValidator = proposalSchemaValidator;
     this.proposalValidator = proposalValidator;
     this.idempotency = idempotency;
     this.tagContextRetriever = tagContextRetriever;
     this.tagContextCodec = tagContextCodec;
+    this.approvedCorrectionContextRetriever = approvedCorrectionContextRetriever;
+    this.approvedCorrectionContextCodec = approvedCorrectionContextCodec;
+    this.localDecisionEvidenceProjector = localDecisionEvidenceProjector;
+    this.proposalSemanticDiff = proposalSemanticDiff;
     this.json = json;
     this.transactions = new TransactionTemplate(transactionManager);
     this.transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -386,6 +424,9 @@ public class AnalysisService {
       return new StartCompleted(response);
     }
 
+    if (approvedCorrectionsEnabled) {
+      acquireOwnerApplicationLock(ownerId);
+    }
     MemoSnapshot memo = memos.getCurrentForUpdate(ownerId, memoId);
     requireActiveCurrentRevision(memo, request.memoRevision());
 
@@ -409,7 +450,8 @@ public class AnalysisService {
     List<AmbiguityReason> routingReasons = ambiguityGate.routingSignals(localProposal);
     AnalysisRoute route = ambiguityGate.route(routingReasons);
 
-    if (route == AnalysisRoute.LOCAL_REVIEW) {
+    if (route == AnalysisRoute.LOCAL_REVIEW
+        && invocationPolicy.mode() == AnalysisInvocationMode.UNCERTAINTY_ONLY) {
       return completeStartWithoutDispatch(
           ownerId,
           runId,
@@ -459,6 +501,25 @@ public class AnalysisService {
           requestHash);
     }
 
+    AnalysisInvocationDecision invocationDecision = invocationPolicy.decide(route, binding);
+    if (!invocationDecision.shouldInvoke()) {
+      return completeStartWithoutDispatch(
+          ownerId,
+          runId,
+          proposalId,
+          memo,
+          proposalSchemaVersion,
+          provenance,
+          routingPolicyVersion,
+          routingReasons,
+          "LOCAL",
+          localProposal,
+          CloudRunEvidence.notRequired(),
+          startedAt,
+          key,
+          requestHash);
+    }
+
     CloudGatewayDescriptor descriptor = binding.descriptor();
     Optional<Instant> authorizationCheckedAt = Optional.empty();
     Optional<Instant> acceptedConsentGrantedAt = Optional.empty();
@@ -498,17 +559,15 @@ public class AnalysisService {
       }
     }
 
-    CloudAnalysisRequest cloudRequest =
-        new CloudAnalysisRequest(
-            localProposal,
-            routingReasons,
-            routingPolicyVersion,
-            descriptor,
-            authorizationCheckedAt,
-            acceptedConsentGrantedAt,
-            CloudProviderRequestToken.issue(ownerId, START_OPERATION, key, requestHash),
-            Optional.of(tagRetrievalContext));
-    CloudRunEvidence pendingEvidence = CloudRunEvidence.pending(cloudRequest);
+    CloudProviderRequestToken providerRequestToken =
+        CloudProviderRequestToken.issue(ownerId, START_OPERATION, key, requestHash);
+    ApprovedCorrectionContext approvedCorrectionContext =
+        approvedCorrectionsEnabled
+            ? approvedCorrectionContextRetriever.retrieve(ownerId, memo.id(), memo.content())
+            : null;
+    CloudRunEvidence pendingEvidence =
+        CloudRunEvidence.pending(
+            descriptor, authorizationCheckedAt, acceptedConsentGrantedAt, providerRequestToken);
     insertRun(
         ownerId,
         runId,
@@ -531,6 +590,8 @@ public class AnalysisService {
         binding.bindingId(),
         localProposal,
         tagRetrievalContext,
+        invocationDecision,
+        approvedCorrectionContext,
         startedAt);
     RunView pending = new RunView(runId, memo.id(), memo.currentRevision(), "RUNNING", proposalId);
     idempotency.store(ownerId, START_OPERATION, key, requestHash, runId, pending);
@@ -665,9 +726,21 @@ public class AnalysisService {
       CloudGatewayBindingId bindingId,
       ObjectNode localProposal,
       TagRetrievalContext tagRetrievalContext,
+      AnalysisInvocationDecision invocationDecision,
+      ApprovedCorrectionContext approvedCorrectionContext,
       Instant preparedAt) {
+    if (!invocationDecision.shouldInvoke()) {
+      throw new IllegalArgumentException(
+          "A durable dispatch requires a model invocation decision.");
+    }
+    LocalDecisionEvidenceProjection localDecisionEvidence =
+        localDecisionEvidenceProjector.project(localProposal);
     String proposalJson = localProposal.toString();
     String retrievalContextJson = tagContextCodec.serialize(tagRetrievalContext);
+    String approvedCorrectionContextJson =
+        approvedCorrectionContext == null
+            ? null
+            : approvedCorrectionContextCodec.serialize(approvedCorrectionContext);
     long timeoutMillis = cloudAttemptTimeout.toMillis();
     db.sql(
             """
@@ -676,6 +749,12 @@ public class AnalysisService {
               request_hash, validated_local_proposal, validated_local_proposal_hash,
               retrieval_context, retrieval_context_hash, retrieval_context_version,
               retrieval_context_candidate_count,
+              local_decision_evidence_version, local_decision_evidence,
+              fallback_policy_version, fallback_reason_codes,
+              model_contribution_status, model_changed_fields,
+              invocation_policy_version, invocation_mode, invocation_reason_code,
+              approved_correction_context, approved_correction_context_hash,
+              approved_correction_context_version, approved_correction_context_count,
               executor_binding_id, call_timeout_ms, max_attempts, deadline_at,
               attempt_history_version, state,
               fence_token, prepared_at, updated_at
@@ -684,6 +763,12 @@ public class AnalysisService {
               :requestHash, :localProposal, :localProposalHash,
               :retrievalContext, :retrievalContextHash, :retrievalContextVersion,
               :retrievalContextCandidateCount,
+              :localDecisionEvidenceVersion, cast(:localDecisionEvidence as jsonb),
+              :fallbackPolicyVersion, cast(:fallbackReasonCodes as jsonb),
+              'PENDING', cast('[]' as jsonb),
+              :invocationPolicyVersion, :invocationMode, :invocationReasonCode,
+              :approvedCorrectionContext, :approvedCorrectionContextHash,
+              :approvedCorrectionContextVersion, :approvedCorrectionContextCount,
               :bindingId, :callTimeoutMs, :maxAttempts, :deadlineAt,
               :attemptHistoryVersion, 'PREPARED',
               0, :preparedAt, :preparedAt
@@ -700,6 +785,26 @@ public class AnalysisService {
         .param("retrievalContextHash", Hashing.sha256(retrievalContextJson))
         .param("retrievalContextVersion", tagRetrievalContext.version())
         .param("retrievalContextCandidateCount", tagRetrievalContext.candidateCount())
+        .param("localDecisionEvidenceVersion", LocalDecisionEvidenceProjection.EVIDENCE_VERSION)
+        .param("localDecisionEvidence", localDecisionEvidence.evidence().toString())
+        .param("fallbackPolicyVersion", LocalDecisionEvidenceProjection.FALLBACK_POLICY_VERSION)
+        .param(
+            "fallbackReasonCodes", serializeEnumNames(localDecisionEvidence.fallbackReasonCodes()))
+        .param("invocationPolicyVersion", invocationDecision.policyVersion())
+        .param("invocationMode", invocationDecision.mode().name())
+        .param("invocationReasonCode", invocationDecision.reason().name())
+        .param("approvedCorrectionContext", approvedCorrectionContextJson)
+        .param(
+            "approvedCorrectionContextHash",
+            approvedCorrectionContextJson == null
+                ? null
+                : Hashing.sha256(approvedCorrectionContextJson))
+        .param(
+            "approvedCorrectionContextVersion",
+            approvedCorrectionContext == null ? "none" : approvedCorrectionContext.version())
+        .param(
+            "approvedCorrectionContextCount",
+            approvedCorrectionContext == null ? 0 : approvedCorrectionContext.signalCount())
         .param("bindingId", bindingId.value())
         .param("callTimeoutMs", timeoutMillis)
         .param("maxAttempts", MAX_GATEWAY_ATTEMPTS)
@@ -778,6 +883,18 @@ public class AnalysisService {
           requestHash,
           now);
     }
+    if (!dispatch.invocationEvidence().compatibleWith(dispatch.descriptor())
+        || !dispatch.approvedCorrectionContext().valid()) {
+      supersedeUnobservedAttemptIfTracked(ownerId, dispatch, now);
+      return completeFallbackBeforeCall(
+          ownerId,
+          dispatch,
+          memo,
+          dispatch.evidence().withOutcome(CloudAnalysisOutcome.UNEXPECTED_FAILURE),
+          key,
+          requestHash,
+          now);
+    }
 
     CloudRunEvidence attemptEvidence = dispatch.evidence();
     if (dispatch.descriptor().transferMode() == CloudTransferMode.EXTERNAL_MEMO_CONTENT) {
@@ -799,6 +916,23 @@ public class AnalysisService {
             checkedAt);
       }
       attemptEvidence = dispatch.evidence().withAuthorization(checkedAt, currentGrant.get());
+    }
+
+    Optional<LocalModelInput> localModelInput;
+    try {
+      localModelInput =
+          localModelInputFor(
+              dispatch.descriptor(), memo, dispatch.approvedCorrectionContext().context());
+    } catch (RuntimeException exception) {
+      supersedeUnobservedAttemptIfTracked(ownerId, dispatch, now);
+      return completeFallbackBeforeCall(
+          ownerId,
+          dispatch,
+          memo,
+          dispatch.evidence().withOutcome(CloudAnalysisOutcome.UNEXPECTED_FAILURE),
+          key,
+          requestHash,
+          now);
     }
 
     long nextFence = dispatch.fenceToken() + 1;
@@ -852,7 +986,8 @@ public class AnalysisService {
             Optional.ofNullable(attemptEvidence.authorizationCheckedAt()),
             Optional.ofNullable(attemptEvidence.acceptedConsentGrantedAt()),
             attemptEvidence.providerRequestToken(),
-            dispatch.tagRetrievalContext());
+            dispatch.tagRetrievalContext(),
+            localModelInput);
     return new StartDispatch(
         runId,
         proposalId,
@@ -861,6 +996,21 @@ public class AnalysisService {
         binding,
         request,
         attemptTimeout);
+  }
+
+  private Optional<LocalModelInput> localModelInputFor(
+      CloudGatewayDescriptor descriptor,
+      MemoSnapshot memo,
+      Optional<ApprovedCorrectionContext> approvedCorrectionContext) {
+    if (descriptor.transferMode() != CloudTransferMode.LOCAL_MACHINE_MEMO_CONTENT) {
+      return Optional.empty();
+    }
+    List<ApprovedCorrectionContext.Hint> hints =
+        approvedCorrectionContext
+            .map(context -> context.rehydrate(memo.content()))
+            .orElseGet(List::of);
+    return Optional.of(
+        new LocalModelInput(memo.content(), memo.clientRecordedAt(), memo.sourceTimeZone(), hints));
   }
 
   private StartDecision finalizeStart(
@@ -973,6 +1123,8 @@ public class AnalysisService {
       String key,
       String requestHash,
       Instant completedAt) {
+    ModelContribution modelContribution =
+        modelContributionFor(dispatch, proposal, evidence, status);
     int updated =
         db.sql(
                 """
@@ -1024,12 +1176,17 @@ public class AnalysisService {
                 set state = 'FINALIZED',
                     validated_local_proposal = null,
                     retrieval_context = null,
+                    approved_correction_context = null,
+                    model_contribution_status = :modelContributionStatus,
+                    model_changed_fields = cast(:modelChangedFields as jsonb),
                     lease_expires_at = null,
                     finalized_at = :finalizedAt,
                     updated_at = :finalizedAt
              where analysis_run_id = :runId
                and owner_id = :ownerId
             """)
+        .param("modelContributionStatus", modelContribution.status().name())
+        .param("modelChangedFields", serializeEnumNames(modelContribution.changedFields()))
         .param("finalizedAt", Timestamp.from(completedAt))
         .param("runId", dispatch.runId())
         .param("ownerId", ownerId)
@@ -1044,6 +1201,28 @@ public class AnalysisService {
             dispatch.proposalId());
     idempotency.complete(ownerId, START_OPERATION, key, requestHash, dispatch.runId(), response);
     return "STALE".equals(status) ? new StartStale(response) : new StartCompleted(response);
+  }
+
+  private ModelContribution modelContributionFor(
+      DispatchSnapshot dispatch,
+      ObjectNode completedProposal,
+      CloudRunEvidence evidence,
+      String runStatus) {
+    if (!dispatch.localDecisionEvidence().current()) {
+      return new ModelContribution(ModelContributionStatus.NOT_RECORDED, List.of());
+    }
+    if (dispatch.descriptor().transferMode() != CloudTransferMode.LOCAL_MACHINE_MEMO_CONTENT
+        || "STALE".equals(runStatus)
+        || evidence.outcome() != CloudAnalysisOutcome.SUCCESS) {
+      return new ModelContribution(ModelContributionStatus.LOCAL_FALLBACK, List.of());
+    }
+    List<AnalysisProposalChangedField> changedFields =
+        proposalSemanticDiff.changedFields(dispatch.localProposal(), completedProposal);
+    return new ModelContribution(
+        changedFields.isEmpty()
+            ? ModelContributionStatus.ACCEPTED_UNCHANGED
+            : ModelContributionStatus.ACCEPTED_CHANGED,
+        changedFields);
   }
 
   private CloudEnrichment resolveCloudResult(
@@ -1477,6 +1656,19 @@ public class AnalysisService {
                    d.retrieval_context_hash,
                    d.retrieval_context_version,
                    d.retrieval_context_candidate_count,
+                   d.local_decision_evidence_version,
+                   d.local_decision_evidence::text as local_decision_evidence,
+                   d.fallback_policy_version,
+                   d.fallback_reason_codes::text as fallback_reason_codes,
+                   d.model_contribution_status,
+                   d.model_changed_fields::text as model_changed_fields,
+                   d.invocation_policy_version,
+                   d.invocation_mode,
+                   d.invocation_reason_code,
+                   d.approved_correction_context,
+                   d.approved_correction_context_hash,
+                   d.approved_correction_context_version,
+                   d.approved_correction_context_count,
                    d.executor_binding_id,
                    d.call_timeout_ms,
                    d.max_attempts,
@@ -1522,8 +1714,13 @@ public class AnalysisService {
       }
       localProposal = parsedObject;
     }
+    DurableInvocationEvidence invocationEvidence = mapInvocationEvidence(resultSet);
+    DurableLocalDecisionEvidence localDecisionEvidence =
+        mapLocalDecisionEvidence(resultSet, dispatchState, localProposal, invocationEvidence);
     Optional<TagRetrievalContext> tagRetrievalContext =
         mapTagRetrievalContext(resultSet, dispatchState);
+    DurableApprovedCorrectionContext approvedCorrectionContext =
+        mapApprovedCorrectionContext(resultSet, dispatchState, invocationEvidence);
     String attemptHistoryVersion = resultSet.getString("attempt_history_version");
     if (!"none".equals(attemptHistoryVersion)
         && !CURRENT_ATTEMPT_HISTORY_VERSION.equals(attemptHistoryVersion)) {
@@ -1569,6 +1766,9 @@ public class AnalysisService {
         evidence,
         localProposal,
         tagRetrievalContext,
+        invocationEvidence,
+        approvedCorrectionContext,
+        localDecisionEvidence,
         resultSet.getString("executor_binding_id"),
         resultSet.getInt("call_timeout_ms"),
         resultSet.getInt("max_attempts"),
@@ -1578,6 +1778,111 @@ public class AnalysisService {
         resultSet.getLong("fence_token"),
         instantOrNull(resultSet, "lease_expires_at"),
         instantOrNull(resultSet, "finalized_at"));
+  }
+
+  private DurableInvocationEvidence mapInvocationEvidence(ResultSet resultSet) throws SQLException {
+    String version = resultSet.getString("invocation_policy_version");
+    String mode = resultSet.getString("invocation_mode");
+    String reason = resultSet.getString("invocation_reason_code");
+    if ("legacy-v0".equals(version)) {
+      if (!"LEGACY_UNKNOWN".equals(mode) || !"LEGACY_UNKNOWN".equals(reason)) {
+        throw new IllegalStateException("The legacy invocation evidence is incoherent.");
+      }
+      return DurableInvocationEvidence.legacy();
+    }
+    if (!AnalysisInvocationPolicy.VERSION.equals(version)) {
+      throw new IllegalStateException("The durable invocation policy version is unsupported.");
+    }
+    try {
+      AnalysisInvocationMode parsedMode = AnalysisInvocationMode.valueOf(mode);
+      AnalysisInvocationReason parsedReason = AnalysisInvocationReason.valueOf(reason);
+      if ((parsedMode == AnalysisInvocationMode.UNCERTAINTY_ONLY
+              && parsedReason != AnalysisInvocationReason.SEMANTIC_UNCERTAINTY)
+          || (parsedMode == AnalysisInvocationMode.AI_PREFERRED
+              && parsedReason != AnalysisInvocationReason.SEMANTIC_UNCERTAINTY
+              && parsedReason != AnalysisInvocationReason.AI_PREFERRED_POLICY)) {
+        throw new IllegalStateException("The durable invocation evidence is incoherent.");
+      }
+      return new DurableInvocationEvidence(version, parsedMode, parsedReason);
+    } catch (IllegalArgumentException exception) {
+      throw new IllegalStateException("The durable invocation evidence is invalid.", exception);
+    }
+  }
+
+  private DurableLocalDecisionEvidence mapLocalDecisionEvidence(
+      ResultSet resultSet,
+      String dispatchState,
+      ObjectNode localProposal,
+      DurableInvocationEvidence invocationEvidence)
+      throws SQLException {
+    String version = resultSet.getString("local_decision_evidence_version");
+    String policyVersion = resultSet.getString("fallback_policy_version");
+    ModelContributionStatus contributionStatus =
+        ModelContributionStatus.valueOf(resultSet.getString("model_contribution_status"));
+    List<AnalysisProposalChangedField> changedFields =
+        parseEnumNames(
+            resultSet.getString("model_changed_fields"), AnalysisProposalChangedField.class);
+    if ("none".equals(version)) {
+      if (resultSet.getString("local_decision_evidence") != null
+          || !"legacy-v0".equals(policyVersion)
+          || !parseEnumNames(resultSet.getString("fallback_reason_codes"), FallbackReasonCode.class)
+              .isEmpty()
+          || contributionStatus != ModelContributionStatus.NOT_RECORDED
+          || !changedFields.isEmpty()) {
+        throw new IllegalStateException("The legacy local-decision evidence is incoherent.");
+      }
+      return DurableLocalDecisionEvidence.legacy();
+    }
+    if (!LocalDecisionEvidenceProjection.EVIDENCE_VERSION.equals(version)
+        || !LocalDecisionEvidenceProjection.FALLBACK_POLICY_VERSION.equals(policyVersion)) {
+      throw new IllegalStateException(
+          "The durable local-decision evidence version is unsupported.");
+    }
+    JsonNode parsedEvidence = parse(resultSet.getString("local_decision_evidence"));
+    if (!(parsedEvidence instanceof ObjectNode evidence)) {
+      throw new IllegalStateException("The durable local-decision evidence is not a JSON object.");
+    }
+    List<FallbackReasonCode> reasons =
+        parseEnumNames(resultSet.getString("fallback_reason_codes"), FallbackReasonCode.class);
+    if (reasons.isEmpty() && !invocationEvidence.allowsEmptyFallbackReasons()) {
+      throw new IllegalStateException("The durable fallback reasons are missing.");
+    }
+    if (localProposal != null) {
+      LocalDecisionEvidenceProjection expected =
+          localDecisionEvidenceProjector.project(localProposal);
+      ObjectNode normalizedExpectedEvidence = (ObjectNode) parse(expected.evidence().toString());
+      if (!normalizedExpectedEvidence.equals(evidence)) {
+        throw new IllegalStateException(
+            "The durable local-decision summary does not match at "
+                + firstDifferentEvidenceField(normalizedExpectedEvidence, evidence)
+                + ".");
+      }
+      if (!expected.fallbackReasonCodes().equals(reasons)) {
+        throw new IllegalStateException("The durable fallback reasons do not match.");
+      }
+    }
+    if (("PREPARED".equals(dispatchState) || "RUNNING".equals(dispatchState))
+        && (contributionStatus != ModelContributionStatus.PENDING || !changedFields.isEmpty())) {
+      throw new IllegalStateException("The pending model-contribution evidence is incoherent.");
+    }
+    return new DurableLocalDecisionEvidence(
+        version, evidence, policyVersion, reasons, contributionStatus, changedFields);
+  }
+
+  private String firstDifferentEvidenceField(ObjectNode expected, ObjectNode actual) {
+    for (String field :
+        List.of(
+            "version",
+            "typeSummary",
+            "temporalSummary",
+            "taxonomySummary",
+            "itemSummary",
+            "relationCandidateCount")) {
+      if (!expected.path(field).equals(actual.path(field))) {
+        return field;
+      }
+    }
+    return "document";
   }
 
   private Optional<TagRetrievalContext> mapTagRetrievalContext(
@@ -1609,6 +1914,48 @@ public class AnalysisService {
       throw new IllegalStateException("The durable retrieval context evidence does not match.");
     }
     return Optional.of(context);
+  }
+
+  private DurableApprovedCorrectionContext mapApprovedCorrectionContext(
+      ResultSet resultSet, String dispatchState, DurableInvocationEvidence invocationEvidence)
+      throws SQLException {
+    String version = resultSet.getString("approved_correction_context_version");
+    int signalCount = resultSet.getInt("approved_correction_context_count");
+    String rawContext = resultSet.getString("approved_correction_context");
+    String storedHash = resultSet.getString("approved_correction_context_hash");
+    if ("none".equals(version)) {
+      return signalCount == 0 && rawContext == null && storedHash == null
+          ? DurableApprovedCorrectionContext.disabled()
+          : DurableApprovedCorrectionContext.invalid();
+    }
+    if (!ApprovedCorrectionContext.CURRENT_VERSION.equals(version)
+        || !invocationEvidence.allowsApprovedCorrectionContext()
+        || signalCount < 0
+        || signalCount > ApprovedCorrectionContext.MAX_SIGNALS
+        || storedHash == null
+        || !storedHash.matches("[0-9a-f]{64}")) {
+      return DurableApprovedCorrectionContext.invalid();
+    }
+    if (rawContext == null) {
+      return "FINALIZED".equals(dispatchState)
+          ? DurableApprovedCorrectionContext.scrubbed()
+          : DurableApprovedCorrectionContext.invalid();
+    }
+    if (!"PREPARED".equals(dispatchState) && !"RUNNING".equals(dispatchState)) {
+      return DurableApprovedCorrectionContext.invalid();
+    }
+    try {
+      if (!Hashing.sha256(rawContext).equals(storedHash)) {
+        return DurableApprovedCorrectionContext.invalid();
+      }
+      ApprovedCorrectionContext context = approvedCorrectionContextCodec.deserialize(rawContext);
+      if (!version.equals(context.version()) || signalCount != context.signalCount()) {
+        return DurableApprovedCorrectionContext.invalid();
+      }
+      return DurableApprovedCorrectionContext.current(context);
+    } catch (RuntimeException exception) {
+      return DurableApprovedCorrectionContext.invalid();
+    }
   }
 
   private List<AmbiguityReason> parseAmbiguityReasons(String value) {
@@ -1650,6 +1997,18 @@ public class AnalysisService {
     } catch (RuntimeException exception) {
       return null;
     }
+  }
+
+  private void acquireOwnerApplicationLock(UUID ownerId) {
+    String lockScope = ownerId + ":ANALYSIS_APPLICATION_OWNER";
+    db.sql("select pg_advisory_xact_lock(hashtextextended(:lockScope, 0))")
+        .param("lockScope", lockScope)
+        .query(
+            (resultSet, rowNumber) -> {
+              resultSet.getObject(1);
+              return rowNumber;
+            })
+        .single();
   }
 
   private void pauseBeforeCoordinationRetry() {
@@ -1740,10 +2099,11 @@ public class AnalysisService {
     String version =
         requestedSchemaVersion == null ? LEGACY_PROPOSAL_SCHEMA_VERSION : requestedSchemaVersion;
     if (!LEGACY_PROPOSAL_SCHEMA_VERSION.equals(version)
+        && !"2".equals(version)
         && !CURRENT_PROPOSAL_SCHEMA_VERSION.equals(version)) {
       throw DomainException.invalid(
           "UNSUPPORTED_PROPOSAL_SCHEMA_VERSION",
-          "X-Analysis-Proposal-Schema-Version must be 1 or 2.");
+          "X-Analysis-Proposal-Schema-Version must be 1, 2, or 3.");
     }
     return version;
   }
@@ -1757,21 +2117,35 @@ public class AnalysisService {
       throw new IllegalStateException(
           "Stored analysis proposal has an unsupported schema version.");
     }
-    if (CURRENT_PROPOSAL_SCHEMA_VERSION.equals(responseSchemaVersion)
-        || LEGACY_PROPOSAL_SCHEMA_VERSION.equals(storedSchemaVersion)) {
+    if (schemaVersionRank(storedSchemaVersion) <= schemaVersionRank(responseSchemaVersion)) {
       return storedProposal;
     }
 
-    ObjectNode legacyProposal = storedProposal.deepCopy();
-    legacyProposal.put("schemaVersion", LEGACY_PROPOSAL_SCHEMA_VERSION);
-    legacyProposal
-        .path("dateCandidates")
-        .forEach(candidate -> ((ObjectNode) candidate).remove("candidateId"));
-    legacyProposal
-        .path("itemCandidates")
-        .forEach(candidate -> ((ObjectNode) candidate).remove("dueDateCandidateId"));
-    proposalSchemaValidator.validate(legacyProposal);
-    return legacyProposal;
+    ObjectNode projectedProposal = storedProposal.deepCopy();
+    if (schemaVersionRank(responseSchemaVersion) < 3) {
+      projectedProposal
+          .path("itemCandidates")
+          .forEach(
+              candidate ->
+                  ((ObjectNode) candidate)
+                      .remove(
+                          List.of("eventScheduleCandidates", "suggestedEventScheduleCandidateId")));
+    }
+    if (LEGACY_PROPOSAL_SCHEMA_VERSION.equals(responseSchemaVersion)) {
+      projectedProposal
+          .path("dateCandidates")
+          .forEach(candidate -> ((ObjectNode) candidate).remove("candidateId"));
+      projectedProposal
+          .path("itemCandidates")
+          .forEach(candidate -> ((ObjectNode) candidate).remove("dueDateCandidateId"));
+    }
+    projectedProposal.put("schemaVersion", responseSchemaVersion);
+    proposalSchemaValidator.validate(projectedProposal);
+    return projectedProposal;
+  }
+
+  private int schemaVersionRank(String schemaVersion) {
+    return Integer.parseInt(schemaVersion);
   }
 
   @Transactional
@@ -2050,6 +2424,7 @@ public class AnalysisService {
       CloudRunEvidence evidence) {
     ObjectNode fallback = localProposal.deepCopy();
     canonicalizeProviderMetadata(fallback, fallback);
+    normalizeDefaultFallbackForReview(fallback);
     stampCloudMetadata(fallback, routingReasons, routingPolicyVersion, evidence);
     validateProposal(
         ownerId,
@@ -2059,6 +2434,31 @@ public class AnalysisService {
         expectedProvenance,
         expectedRoutingPolicyVersion);
     return new CloudEnrichment(fallback, evidence);
+  }
+
+  private void normalizeDefaultFallbackForReview(ObjectNode fallback) {
+    if (!"DEFAULT_FALLBACK"
+        .equals(fallback.path("providerMetadata").path("classificationBasis").asText())) {
+      return;
+    }
+    ArrayNode unknownTypes = json.createArrayNode();
+    unknownTypes.add(json.createObjectNode().put("value", "UNKNOWN").put("score", 0.52));
+    fallback.set("typeCandidates", unknownTypes);
+    fallback.set("itemCandidates", json.createArrayNode());
+    fallback.set("relationCandidates", json.createArrayNode());
+    JsonNode reasonsNode = fallback.path("ambiguityReasons");
+    if (reasonsNode instanceof ArrayNode reasons && !containsText(reasons, "MISSING_ACTION")) {
+      reasons.add("MISSING_ACTION");
+    }
+  }
+
+  private boolean containsText(ArrayNode values, String expected) {
+    for (JsonNode value : values) {
+      if (expected.equals(value.asText())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private CloudAnalysisOutcome outcomeFor(CloudAnalysisFailureReason reason) {
@@ -2168,6 +2568,27 @@ public class AnalysisService {
     return values.toString();
   }
 
+  private String serializeEnumNames(List<? extends Enum<?>> values) {
+    ArrayNode names = json.createArrayNode();
+    values.forEach(value -> names.add(value.name()));
+    return names.toString();
+  }
+
+  private <E extends Enum<E>> List<E> parseEnumNames(String value, Class<E> enumType) {
+    JsonNode parsed = parse(value);
+    if (!parsed.isArray()) {
+      throw new IllegalStateException("Stored enum evidence is not an array.");
+    }
+    java.util.ArrayList<E> values = new java.util.ArrayList<>();
+    for (JsonNode element : parsed) {
+      if (!element.isTextual()) {
+        throw new IllegalStateException("Stored enum evidence contains a non-text value.");
+      }
+      values.add(Enum.valueOf(enumType, element.asText()));
+    }
+    return List.copyOf(values);
+  }
+
   private void requireOwnedActiveTags(UUID ownerId, Set<UUID> tagIds) {
     if (tagIds.isEmpty()) {
       return;
@@ -2225,6 +2646,13 @@ public class AnalysisService {
 
   private record CloudEnrichment(ObjectNode proposal, CloudRunEvidence evidence) {}
 
+  private record ModelContribution(
+      ModelContributionStatus status, List<AnalysisProposalChangedField> changedFields) {
+    private ModelContribution {
+      changedFields = List.copyOf(changedFields);
+    }
+  }
+
   private interface StartDecision {}
 
   private record StartCompleted(RunView response) implements StartDecision {}
@@ -2276,6 +2704,9 @@ public class AnalysisService {
       CloudRunEvidence evidence,
       ObjectNode localProposal,
       Optional<TagRetrievalContext> tagRetrievalContext,
+      DurableInvocationEvidence invocationEvidence,
+      DurableApprovedCorrectionContext approvedCorrectionContext,
+      DurableLocalDecisionEvidence localDecisionEvidence,
       String executorBindingId,
       int callTimeoutMs,
       int maxAttempts,
@@ -2288,6 +2719,79 @@ public class AnalysisService {
 
     private Instant acceptedConsentGrantedAt() {
       return evidence.acceptedConsentGrantedAt();
+    }
+  }
+
+  private record DurableInvocationEvidence(
+      String policyVersion, AnalysisInvocationMode mode, AnalysisInvocationReason reason) {
+
+    private static DurableInvocationEvidence legacy() {
+      return new DurableInvocationEvidence("legacy-v0", null, null);
+    }
+
+    private boolean allowsEmptyFallbackReasons() {
+      return AnalysisInvocationPolicy.VERSION.equals(policyVersion)
+          && mode == AnalysisInvocationMode.AI_PREFERRED
+          && reason == AnalysisInvocationReason.AI_PREFERRED_POLICY;
+    }
+
+    private boolean allowsApprovedCorrectionContext() {
+      return AnalysisInvocationPolicy.VERSION.equals(policyVersion)
+          && mode == AnalysisInvocationMode.AI_PREFERRED;
+    }
+
+    private boolean compatibleWith(CloudGatewayDescriptor descriptor) {
+      return !AnalysisInvocationPolicy.VERSION.equals(policyVersion)
+          || mode != AnalysisInvocationMode.AI_PREFERRED
+          || descriptor.transferMode() == CloudTransferMode.LOCAL_MACHINE_MEMO_CONTENT;
+    }
+  }
+
+  private record DurableApprovedCorrectionContext(
+      boolean valid, Optional<ApprovedCorrectionContext> context) {
+
+    private DurableApprovedCorrectionContext {
+      context = java.util.Objects.requireNonNull(context, "context");
+    }
+
+    private static DurableApprovedCorrectionContext disabled() {
+      return new DurableApprovedCorrectionContext(true, Optional.empty());
+    }
+
+    private static DurableApprovedCorrectionContext scrubbed() {
+      return new DurableApprovedCorrectionContext(true, Optional.empty());
+    }
+
+    private static DurableApprovedCorrectionContext current(ApprovedCorrectionContext context) {
+      return new DurableApprovedCorrectionContext(true, Optional.of(context));
+    }
+
+    private static DurableApprovedCorrectionContext invalid() {
+      return new DurableApprovedCorrectionContext(false, Optional.empty());
+    }
+  }
+
+  private record DurableLocalDecisionEvidence(
+      String evidenceVersion,
+      ObjectNode evidence,
+      String fallbackPolicyVersion,
+      List<FallbackReasonCode> fallbackReasonCodes,
+      ModelContributionStatus contributionStatus,
+      List<AnalysisProposalChangedField> changedFields) {
+
+    private DurableLocalDecisionEvidence {
+      evidence = evidence == null ? null : evidence.deepCopy();
+      fallbackReasonCodes = List.copyOf(fallbackReasonCodes);
+      changedFields = List.copyOf(changedFields);
+    }
+
+    private static DurableLocalDecisionEvidence legacy() {
+      return new DurableLocalDecisionEvidence(
+          "none", null, "legacy-v0", List.of(), ModelContributionStatus.NOT_RECORDED, List.of());
+    }
+
+    private boolean current() {
+      return LocalDecisionEvidenceProjection.EVIDENCE_VERSION.equals(evidenceVersion);
     }
   }
 
@@ -2361,8 +2865,11 @@ public class AnalysisService {
           null);
     }
 
-    private static CloudRunEvidence pending(CloudAnalysisRequest request) {
-      CloudGatewayDescriptor descriptor = request.descriptor();
+    private static CloudRunEvidence pending(
+        CloudGatewayDescriptor descriptor,
+        Optional<Instant> authorizationCheckedAt,
+        Optional<Instant> acceptedConsentGrantedAt,
+        CloudProviderRequestToken providerRequestToken) {
       return new CloudRunEvidence(
           descriptor.transferMode().name(),
           descriptor.gatewayVersion(),
@@ -2371,9 +2878,9 @@ public class AnalysisService {
           descriptor.consentPolicyVersion(),
           CloudAnalysisOutcome.PENDING,
           DURABLE_EXECUTION_CONTRACT_VERSION,
-          request.authorizationCheckedAt().orElse(null),
-          request.acceptedConsentGrantedAt().orElse(null),
-          request.providerRequestToken());
+          authorizationCheckedAt.orElse(null),
+          acceptedConsentGrantedAt.orElse(null),
+          providerRequestToken);
     }
 
     private static CloudRunEvidence from(
@@ -2422,7 +2929,7 @@ public class AnalysisService {
   }
 
   private static final class SetLike {
-    private static final List<String> SUPPORTED_SCHEMA_VERSIONS = List.of("1", "2");
+    private static final List<String> SUPPORTED_SCHEMA_VERSIONS = List.of("1", "2", "3");
     private static final java.util.Set<String> RECOVERABLE =
         java.util.Set.of("REVIEW_REQUIRED", "POSTPONED");
     private static final java.util.Set<String> REJECTABLE =

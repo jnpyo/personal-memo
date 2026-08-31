@@ -114,6 +114,10 @@ class DatabaseOwnerConstraintIntegrationTest extends PostgresIntegrationTestSupp
                 .update());
 
     assertRejected(
+        () -> insertTimedEventDetail(foreign.itemId(), OWNER_ID, "2026-08-24T09:00:00Z"));
+    assertRejected(() -> insertTimedEventDetail(ownItem, OWNER_ID, "2026-08-24T09:00:00Z"));
+
+    assertRejected(
         () ->
             db.sql(
                     """
@@ -265,6 +269,21 @@ class DatabaseOwnerConstraintIntegrationTest extends PostgresIntegrationTestSupp
 
   private void assertRejected(Runnable insert) {
     assertThatThrownBy(insert::run).isInstanceOf(DataIntegrityViolationException.class);
+  }
+
+  private void insertTimedEventDetail(UUID itemId, UUID ownerId, String startAt) {
+    db.sql(
+            """
+            insert into event_details(
+              memo_item_id, owner_id, item_kind, schedule_kind, start_at_utc, source_time_zone
+            ) values (
+              :itemId, :ownerId, 'EVENT', 'TIMED', cast(:startAt as timestamptz), 'Asia/Seoul'
+            )
+            """)
+        .param("itemId", itemId)
+        .param("ownerId", ownerId)
+        .param("startAt", startAt)
+        .update();
   }
 
   private void insertRelation(

@@ -39,13 +39,29 @@ public final class AnalysisDtos {
     }
   }
 
+  public record EventSchedule(
+      @NotBlank String mode,
+      @NotBlank @Size(max = 100) String start,
+      @Size(max = 100) String end,
+      @NotBlank @Size(max = 64) String timeZone) {
+    @JsonAnySetter
+    public void rejectUnknownField(String ignoredName, Object ignoredValue) {
+      throw new IllegalArgumentException("Unknown analysis event schedule field.");
+    }
+  }
+
   public record Item(
       String proposalCandidateId,
       @NotBlank String kind,
       @NotBlank @Size(max = 200) String title,
-      @Valid Due due) {
+      @Valid Due due,
+      @Valid EventSchedule eventSchedule) {
+    public Item(String proposalCandidateId, String kind, String title, Due due) {
+      this(proposalCandidateId, kind, title, due, null);
+    }
+
     public Item(String kind, String title, Due due) {
-      this(null, kind, title, due);
+      this(null, kind, title, due, null);
     }
 
     @JsonAnySetter
@@ -76,7 +92,8 @@ public final class AnalysisDtos {
       @NotBlank @Size(max = 200) String title,
       @NotNull @Size(max = 10) List<@NotNull @Valid Tag> selectedTags,
       @NotEmpty @Size(max = 3) List<@NotNull @Valid Item> items,
-      @Size(max = 10) List<@NotNull @Valid SelectedRelation> selectedRelations) {
+      @Size(max = 10) List<@NotNull @Valid SelectedRelation> selectedRelations,
+      String selectionSchemaVersion) {
     public Apply {
       selectedTags = defensiveCopyAllowingNullElements(selectedTags);
       items = defensiveCopyAllowingNullElements(items);
@@ -89,7 +106,17 @@ public final class AnalysisDtos {
         String title,
         List<Tag> selectedTags,
         List<Item> items) {
-      this(expectedMemoRevision, selectedType, title, selectedTags, items, null);
+      this(expectedMemoRevision, selectedType, title, selectedTags, items, null, null);
+    }
+
+    public Apply(
+        int expectedMemoRevision,
+        String selectedType,
+        String title,
+        List<Tag> selectedTags,
+        List<Item> items,
+        List<SelectedRelation> selectedRelations) {
+      this(expectedMemoRevision, selectedType, title, selectedTags, items, selectedRelations, null);
     }
 
     @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
@@ -100,7 +127,8 @@ public final class AnalysisDtos {
           input.title,
           input.selectedTags,
           input.items,
-          input.selectedRelations);
+          input.selectedRelations,
+          input.selectionSchemaVersion);
     }
 
     private static <T> List<T> defensiveCopyAllowingNullElements(List<T> values) {
@@ -139,6 +167,7 @@ public final class AnalysisDtos {
       private List<Tag> selectedTags;
       private List<Item> items;
       private List<SelectedRelation> selectedRelations;
+      private String selectionSchemaVersion;
 
       public void setExpectedMemoRevision(int expectedMemoRevision) {
         this.expectedMemoRevision = expectedMemoRevision;
@@ -163,6 +192,10 @@ public final class AnalysisDtos {
       @JsonSetter(nulls = Nulls.FAIL)
       public void setSelectedRelations(List<SelectedRelation> selectedRelations) {
         this.selectedRelations = defensiveCopyAllowingNullElements(selectedRelations);
+      }
+
+      public void setSelectionSchemaVersion(String selectionSchemaVersion) {
+        this.selectionSchemaVersion = selectionSchemaVersion;
       }
 
       @JsonAnySetter

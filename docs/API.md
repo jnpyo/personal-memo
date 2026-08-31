@@ -3,14 +3,24 @@
 Base path: `/api/v1`
 
 이 문서는 local/Google 이중 로그인, AI-free vertical slice, 외부 모델 없는 결정론적 분석,
-그리고 Milestone 5의 첫 exact lexical memo search slice에서 구현한 HTTP 계약을 설명한다.
-후속 fuzzy/semantic search, reminder, sync API는 구현 전이므로 포함하지 않는다.
+Milestone 5의 첫 exact lexical memo search slice, Milestone 6A.1 EVENT schedule,
+6A.2a dark-compatible proposal-v3 EVENT binding contract, Milestone 6B의 인증된 iCalendar snapshot,
+Milestone 6C recipient feed, 그리고 implemented/private-`LOCAL_ONLY`-deployed Milestone 6D.1
+public-origin capability를 설명한다. `6D public-edge preflight`는 기존 root feed API 앞의
+loopback-only deployment boundary이며 새 application endpoint를 추가하지 않는다.
+후속 fuzzy/semantic search, reminder, sync, proposal-v3 producer/preselection과 실제 public
+subscription activation/interoperability는 구현·실행 전이므로 포함하지 않는다.
 
-기계 판독 가능한 동일 범위의 명세는 [`openapi.yaml`](openapi.yaml)에 있다.
+기계 판독 가능한 명세는 [`openapi.yaml`](openapi.yaml)에 있다. 일정/공유 기능 상태는
+`SOLO_PROVISIONAL`/`REPORT_ONLY`다. 개인 stack은 별도 owner 승인과 복구 rehearsal 뒤
+2026-08-27 V22로 전환됐고, 후속 6D.1 image도 public publication environment 없이
+`LOCAL_ONLY`로 배포됐다. 이후 owner-authorized V23 migration/rebuild도 `LOCAL_ONLY`로
+완료됐다. 실제 public activation과 real calendar-client 검증은 `NOT_AUTHORIZED`다.
 
 ## Conventions
 
-- request/response: JSON
+- request/response: JSON, except authenticated `GET /events/calendar.ics` which returns UTF-8
+  `text/calendar` or 204
 - resource identifier: UUID
 - timestamp: ISO 8601 UTC
 - 사용자 시간대: IANA identifier(예: `Asia/Seoul`)
@@ -54,9 +64,11 @@ owner-scoped API는 선택적인 `X-Expected-Owner-Id` header를 지원한다. �
 | 영역 | 경로 |
 | --- | --- |
 | memo와 분석 시작 | `/memos/**` |
-| 분석 제안, application, 검토 결과 집계 | `/analysis-proposals/**`, `/analysis-applications/**`, `/analysis-review-outcomes/**` |
+| 분석 제안, application, 검토·분석 경로 집계 | `/analysis-proposals/**`, `/analysis-applications/**`, `/analysis-review-outcomes/**`, `/analysis-path-evidence/**` |
 | task와 graph | `/tasks/**`, `/graph/**` |
 | memo search | `/search/**` |
+| confirmed event와 authenticated snapshot | `/events/**` |
+| calendar feed capability와 관리 mutation | `/calendar-feeds/**` |
 | 계정 및 session 작업 | `POST /auth/logout`, `POST /auth/google/link-intent`, `DELETE /auth/identities/google` |
 
 PWA는 authenticated bootstrap 뒤 owner ID를 API client에 설정하고, 각 guard 대상 request 시작 시 그 값을 고정한다. 응답을 기다리는 동안 탭이나 session owner가 바뀌어도 header를 새 owner로 다시 쓰지 않는다. `SESSION_OWNER_CHANGED`를 받으면 이전 owner의 in-flight scope를 폐기하고 현재 session을 다시 bootstrap한다. 특히 실패 후 남아 있던 A의 logout intent가 B session에서 이 오류를 받으면 그 stale intent와 재시도 marker를 제거한 뒤 B session을 유지한다.
@@ -201,6 +213,11 @@ X-XSRF-TOKEN: ...
 | 제안 거절/보류 | `POST /analysis-proposals/{proposalId}/reject`, `/postpone` |
 | application 되돌리기 | `POST /analysis-applications/{applicationId}/undo` |
 | task 상태 변경 | `PATCH /tasks/{taskId}` |
+| recipient feed 생성 | `POST /calendar-feeds` |
+| feed disclosure 변경 | `PATCH /calendar-feeds/{feedId}` |
+| feed membership 추가·제거 | `POST /calendar-feeds/{feedId}/events`, `POST /calendar-feeds/{feedId}/events/{entryId}/remove` |
+| feed bearer 회전·영구 revoke | `POST /calendar-feeds/{feedId}/rotate`, `POST /calendar-feeds/{feedId}/revoke` |
+| feed 외부 공개 동의 | `POST /calendar-feeds/{feedId}/external-publication/enable` |
 
 서버는 owner, operation, key, request hash와 원래 response를 같은 transaction에 저장한다. 같은 key와 같은 요청은 최초 응답을 반환하고 추가 record를 만들지 않는다. 같은 key를 다른 payload에 재사용하면 `409 IDEMPOTENCY_KEY_REUSED`를 반환한다. PostgreSQL advisory transaction lock으로 동시에 들어온 동일 요청도 직렬화한다.
 
@@ -344,13 +361,44 @@ Content-Type: application/json
 
 서버는 local proposal을 루트 `contracts/analysis-proposal.schema.json`의 Draft 2020-12 계약, domain 규칙, owner reference 순서로 검증한다. 현재 analyzer가 서버에 선언한 proposal schema version은 `2`이며 이 값은 proposal JSON과 `analysis_runs.schema_version`에 동일하게 저장된다. 직렬화된 proposal JSON은 최대 65,536 UTF-8 byte(64 KiB), 그 안의 `providerMetadata`는 최대 8,192 UTF-8 byte(8 KiB)다. `providerMetadata`에는 1–64자의 `analyzerVersion`, `promptVersion`, `localModelVersion`, `embeddingModelVersion`, `routingPolicyVersion`과 0–100 범위의 정수 `toolCalls`가 필수다. 다섯 version은 provider 주장이 아니라 서버가 소유하고 `analysis_runs`에 저장하는 provenance와 일치해야 한다. 모든 새 LOCAL·cloud SUCCESS·fallback proposal의 metadata는 공통 server allowlist로 다시 만들어지므로 provider가 임의 field를 보존할 수 없다. 그 뒤 최상위 요약만 신뢰하지 않고 날짜·유형·태그·항목 구조에서 field-level 신호를 재계산한다.
 
-`CLOUD_ENRICH` 경로의 V16 내부 retrieval은 local proposal의 tag candidate를 최대 10개까지만 보고 canonical name과 matched alias에서 최대 20개의 distinct normalized term을 만든다. authenticated owner의 `ACTIVE` tag와 alias만 exact normalized equality로 조회하고, 잘린 일부가 아닌 전체 query 결과에서 각 source가 UUID 하나로만 해소되는지 먼저 판정한 뒤 deterministic ordering으로 최대 K=8 candidate만 `CloudAnalysisRequest`에 hint로 넣는다. raw memo나 related memo는 조회하지 않고 fuzzy/vector/embedding search도 수행하지 않는다. 이 hint는 canonical 결정 권한이 없으며 cloud 결과의 최종 owner/reference validation이 항상 authoritative하다.
+gateway-bound 경로의 V16 내부 tag retrieval은 local proposal의 tag candidate를 최대 10개까지만 보고 canonical name과 matched alias에서 최대 20개의 distinct normalized term을 만든다. authenticated owner의 `ACTIVE` tag와 alias만 exact normalized equality로 조회하고, 잘린 일부가 아닌 전체 query 결과에서 각 source가 UUID 하나로만 해소되는지 먼저 판정한 뒤 deterministic ordering으로 최대 K=8 candidate만 gateway request에 hint로 넣는다. raw memo나 related memo는 조회하지 않고 fuzzy/vector/embedding search도 수행하지 않는다. 이 hint는 canonical 결정 권한이 없으며 gateway 결과의 최종 owner/reference validation이 항상 authoritative하다.
 
-gate 결과가 `LOCAL_REVIEW`이면 cloud gateway를 호출하지 않고 run route를 `LOCAL`, cloud evidence를 `NOT_REQUIRED`로 저장한다. 중요한 모호성 신호가 있으면 서버는 구성된 gateway에서 descriptor와 실행기를 하나의 immutable binding으로 얻는다. descriptor의 `transferMode`, gateway/provider/model/consent-policy version과 최종 outcome은 request나 provider proposal이 선택할 수 없는 server-owned evidence다. 현재 `FakeCloudAnalysisGateway`는 `NO_NETWORK`이므로 consent가 필요 없고 정상 경로에서는 한 번 시도된다. 단, 호출 결과가 commit되었는지 알 수 없는 process crash나 caller interruption 뒤 동일 key/body recovery는 같은 provider-request token으로 다시 호출될 수 있으므로 network transport는 exactly-once가 아니라 at-least-once다. `EXTERNAL_MEMO_CONTENT` descriptor는 authenticated owner의 `cloud_analysis_consent=true`, 정확히 일치하는 policy version, non-null `granted_at`이 모두 있고 그 시각이 권한 확인 instant보다 늦지 않아야 호출할 수 있다. 미동의·policy mismatch·다른 owner의 grant·revoke·미래 시각 grant에서는 `cloudOutcome=CONSENT_REQUIRED`를 기록하고 gateway `enrich` 호출은 0회다. V13은 기존 boolean-only grant를 모두 revoke한다. 현재 consent grant/revoke HTTP endpoint와 실제 external provider configuration은 없다.
+기본 runtime은 `FakeAnalyzer` + `UNCERTAINTY_ONLY`다. 이 mode에서 gate 결과가 `LOCAL_REVIEW`이면 gateway를 호출하지 않고 run route를 `LOCAL`, cloud evidence를 `NOT_REQUIRED`로 저장하며, 중요한 모호성 신호가 있을 때만 구성된 `NO_NETWORK` Fake gateway를 bind한다. personal overlay만 `AI_PREFERRED`를 고정하고, JSON Schema/domain 검증을 통과한 모든 현재 revision을 exact pinned localhost Ollama/LiquidAI에 보낸다. 따라서 deterministic semantic decision이 clear여도 gateway call을 준비하지만, ambiguity reason을 발명하지 않고 V20 invocation evidence에 `AI_PREFERRED_POLICY`를 별도로 기록한다. 모델을 실제 호출한 public run route는 기존 계약대로 `HYBRID`다. descriptor의 `transferMode`, gateway/provider/model/consent-policy version과 최종 outcome은 request나 provider proposal이 선택할 수 없는 server-owned evidence다. 기본 Fake는 `NO_NETWORK`이고 personal Ollama는 `LOCAL_MACHINE_MEMO_CONTENT`다. 둘 다 external-cloud consent를 요구하지 않지만 후자는 현재 immutable revision의 bounded `LocalModelInput`이 있어야 한다. `EXTERNAL_MEMO_CONTENT`만 authenticated owner의 `cloud_analysis_consent=true`, 정확히 일치하는 policy version, non-null `granted_at`과 권한 확인 instant 검사를 받는다. 현재 consent grant/revoke HTTP endpoint와 실제 external provider configuration은 없다. 어느 gateway도 exactly-once가 아니며 process crash/caller interruption 뒤 same-key/body recovery는 같은 provider-request token을 다시 사용할 수 있다.
 
-gateway는 defensive success proposal 또는 provider-independent typed failure만 반환하며 provider 오류 text를 반환 계약에 넣지 않는다. typed failure, descriptor/enrichment 예외, schema/domain/owner 검증에 실패한 cloud success는 raw revision이나 canonical tag·task·relation을 바꾸지 않는다. 서버가 이미 검증한 local proposal의 metadata를 제한하고 다시 검증한 뒤 `HYBRID`/`REVIEW_REQUIRED` run과 proposal을 저장한다. 최종 review proposal에는 `CONSENT_REQUIRED`, `UNAVAILABLE`, `TIMEOUT`, `RETRY_EXHAUSTED`, `PROVIDER_ERROR`, `INVALID_RESPONSE`, `UNEXPECTED_FAILURE` 중 해당하는 bounded outcome만 포함되며 provider 예외 문구는 API/proposal에 포함하지 않는다. `PENDING`과 `CANCELLED_STALE`은 durable run의 내부 lifecycle evidence이고 공개 `RunView`나 proposal metadata outcome이 아니다. PWA는 non-success review proposal에서 간단한 “예” 단계를 생략하고 상세 검토를 연다. 성공과 fallback 모두 run의 `ambiguity_reasons`에 cloud 처리 전 서버 라우팅 원인을 보존하며, 사용자 승인 전에는 canonical record를 만들지 않는다.
+personal Ollama descriptor는 adapter+prompt contract를 `gatewayVersion`,
+`ollama-local@<exact model tag>`를 `providerId`, exact 64-hex digest를 `modelVersion`으로 bind한다. tag,
+digest 또는 prompt contract 변경은 binding mismatch로 호출 전에 닫힌다. `/api/chat` body는 top-level
+`truncate=false`, `shift=false`를 고정해 input 일부를 조용히 버린 응답을 success로 받지 않는다.
+
+gateway는 defensive success proposal 또는 provider-independent typed failure만 반환하며 provider 오류 text를 반환 계약에 넣지 않는다. typed failure, descriptor/enrichment 예외, schema/domain/owner 검증에 실패한 success는 raw revision이나 canonical tag·task·relation을 바꾸지 않는다. 특히 local-model 실패는 재검증된 local 상세 검토 proposal로 닫히며, default-`RECORD` fallback evidence만 `UNKNOWN`으로 정규화하고 기존 명시 후보는 보존한다. 최종 review proposal에는 `CONSENT_REQUIRED`, `UNAVAILABLE`, `TIMEOUT`, `RETRY_EXHAUSTED`, `PROVIDER_ERROR`, `INVALID_RESPONSE`, `UNEXPECTED_FAILURE` 중 해당하는 bounded outcome만 포함되며 provider 예외 문구는 API/proposal에 포함하지 않는다. `PENDING`과 `CANCELLED_STALE`은 durable run의 내부 lifecycle evidence이고 공개 `RunView`나 proposal metadata outcome이 아니다. PWA는 non-success review proposal에서 간단한 “예” 단계를 생략하고 상세 검토를 연다. 성공과 fallback 모두 run의 `ambiguity_reasons`에 model 처리 전 서버 라우팅 원인을 보존하며, 사용자 승인 전에는 canonical record를 만들지 않는다.
 
 V14는 gateway 요청과 final run에 descriptor·권한 확인 시각·실제로 수락한 grant 시각, owner/operation/idempotency-key hash/request hash로 결정론적으로 만든 `pmr1_...` token을 일치시키는 내부 snapshot을 도입했다. V15는 호출 전에 `QUEUED`/`PENDING` `durable-v1` run과 1:1 dispatch를 commit한다. dispatch에는 reserved proposal ID, idempotency-key/request hash, 정확히 검증한 local proposal와 hash, immutable executor binding ID, timeout/max-attempt/deadline을 저장한다. V16은 첫 gateway call 전에 bounded retrieval context의 serialized raw value, SHA-256 hash, version, candidate count도 같은 dispatch에 commit한다. V15에서 이미 만들어진 dispatch는 context를 소급 생성하지 않고 `none`/`0`/null raw/null hash로 보존한다. claim transaction은 현재 binding의 ID와 descriptor를 준비 값과 비교하고 consent를 다시 확인한 뒤 fence와 deadline에 잘린 lease를 얻는다. 불일치하거나 권한이 사라졌으면 fail closed하고 gateway를 호출하지 않는다.
+
+V19는 같은 dispatch에 `local_decision_evidence_version`, raw-free decision projection,
+`fallback_policy_version`, bounded reason-code array, model-contribution status와 semantic
+changed-field array를 추가한다. memo body, prompt, response 또는 user-selected text를 이 evidence에
+복제하지 않는다. Apply selection은 기존 application 원본이고 자동 학습 label이 아니다. V20의
+eligible type correction subset만 아래의 bounded inference-time hint로 사용할 수 있다. 반복 pattern을
+결정론 rule로 옮기려면 사람이 public synthetic positive/negative fixture와 일반화된 Fake rule로
+별도 검토·승격해야 하며 fine-tuning, LoRA와 RAG ingestion은 없다.
+
+V20은 semantic uncertainty와 model invocation을 분리한다. dispatch의
+`model-invocation-v1` tuple은 `UNCERTAINTY_ONLY`/`SEMANTIC_UNCERTAINTY` 또는
+`AI_PREFERRED`/`SEMANTIC_UNCERTAINTY|AI_PREFERRED_POLICY`를 기록한다. AI-preferred clear proposal은
+semantic fallback reason array가 비어 있어도 되고, 이 사실을 정확성이나 ambiguity로 해석하지 않는다.
+V20 자체는 당시 공개 request/response DTO, proposal schema와 `providerMetadata` shape를 바꾸지 않았다.
+
+personal overlay에서 승인 교정 hint가 켜지면 서버는 같은 owner의 active current revision에서 최신
+`APPLIED` selection 중 type-corrected 또는 user-resolved인 eligible 단일-item 사례만 bounded하게
+검토한다. exact/undone/rejected/postponed/stale/unclassifiable/relation-bearing/multi-item 사례는
+제외한다. 과거 memo나 selection은 모델에 보내지 않는다. current memo에도 safe exact-unique하게
+나타나는 충돌 없는 짧은 anchor를 최대 K=3 찾고, `approved-type-anchor-k3-v1` snapshot에는 current
+memo의 UTF-16 offset와 approved item kind만 저장한다. locked current revision에서 claim 시
+`anchorText + approvedKind`를 다시 materialize한다. historical raw/ID/selection/title/tag/due/relation은
+snapshot이나 prompt에 복제하지 않는다. hash/version/offset/Unicode/binding이 유효하지 않으면 model
+0-call validated Fake fallback이다. Undo는 새 dispatch의 source에서 즉시 빠지고 이미 준비된 retry는
+같은 snapshot을 유지한다. 이는 RAG corpus/vector/embedding, automatic rule promotion, training,
+fine-tuning 또는 LoRA가 아니다.
 
 gateway 호출은 고정된 bounded executor에서 DB transaction 밖으로 실행되고 남은 deadline보다 길게 기다리지 않는다. timeout은 즉시 검증된 local fallback을 최종화하며 자동으로 두 번째 provider call을 시작하지 않는다. process crash나 caller interruption 뒤에도 caller는 같은 idempotency key와 같은 body를 다시 보내 만료된 lease를 deadline/`max_attempts` 안에서 같은 token으로 재claim할 수 있다. 이때 tag retrieval을 다시 실행하지 않고 DB에 준비된 동일 context snapshot을 사용하므로 같은 token이 다른 context input으로 재시도되지 않는다. 이 caller-driven recovery는 유지된다.
 
@@ -358,11 +406,11 @@ V17은 dispatch에 `attempt_history_version`을 추가한다. 과거 dispatch는
 
 프로세스가 종료를 관측한 시도는 monotonic local clock의 submit/wait 구간을 non-negative millisecond로 저장한다. timeout과 interruption은 이 local duration을 보존하더라도 remote result는 `UNKNOWN`이고, process loss는 duration과 model-token/cost evidence도 `UNKNOWN`/null이다. descriptor로 model version `none`의 `NO_NETWORK` Fake임을 확인한 observation은 execution uncertainty와 무관하게 model-token/cost가 `NOT_APPLICABLE`/null이다. 미래 real-model은 확정적 `NOT_STARTED`일 때만 `NOT_APPLICABLE`/null이고, 실행 또는 remote completion이 불명확하면 `UNKNOWN`/null이다. 정상 result가 반환되어도 현재 gateway 계약에는 usage/cost 숫자가 없으므로 `NOT_REPORTED`/null이다. DB는 미래 `REPORTED` 숫자 shape를 검증하지만 현재 runtime은 token/cost 숫자를 쓰지 않으며, 미보고 값을 0으로 만들지 않는다.
 
-운영 프로필에서는 같은 lifecycle을 재사용하는 background recovery가 enabled된다. scheduler는 30초 initial/fixed delay로 실행되고, 한 주기에 DB의 `PREPARED` 또는 lease가 만료된 `RUNNING` dispatch만 최대 25건 선택한다. 선택 owner와 기존 raw idempotency key는 owner가 일치하는 dispatch/run/idempotency row에서만 얻으며 HTTP security context나 요청 DTO가 owner를 정하지 않는다. 각 후보는 기존 owner+`ANALYSIS_START`+raw-key advisory transaction lock 안에서 claim하고, live lease는 호출하지 않고 건너뛴다. process 재시작 뒤에도 남은 eligible row를 다음 bounded cycle에서 처리한다. 자동 복구와 caller 복구 모두 V15 binding/fence/deadline, V16 DB context snapshot, V17 fence별 attempt ledger, DB transaction 밖 bounded Fake call, 같은 provider token, revision 재확인 finalize를 사용한다. fence가 다른 늦은 결과는 최종 상태를 덮어쓸 수 없다. 이 실행은 exactly-once가 아니라 at-least-once이며, 실제 provider는 같은 token을 멱등하게 처리해야 한다.
+운영 프로필에서는 같은 lifecycle을 재사용하는 background recovery가 enabled된다. scheduler는 30초 initial/fixed delay로 실행되고, 한 주기에 DB의 `PREPARED` 또는 lease가 만료된 `RUNNING` dispatch만 최대 25건 선택한다. 선택 owner와 기존 raw idempotency key는 owner가 일치하는 dispatch/run/idempotency row에서만 얻으며 HTTP security context나 요청 DTO가 owner를 정하지 않는다. 각 후보는 기존 owner+`ANALYSIS_START`+raw-key advisory transaction lock 안에서 claim하고, live lease는 호출하지 않고 건너뛴다. process 재시작 뒤에도 남은 eligible row를 다음 bounded cycle에서 처리한다. 자동 복구와 caller 복구 모두 V15 binding/fence/deadline, V16 DB context snapshot, V17 fence별 attempt ledger, DB transaction 밖 bounded configured-gateway call, 같은 provider token, revision 재확인 finalize를 사용한다. fence가 다른 늦은 결과는 최종 상태를 덮어쓸 수 없다. 이 실행은 exactly-once가 아니라 at-least-once이며, 실제 network provider는 같은 token을 멱등하게 처리해야 한다.
 
-finalize transaction은 memo owner·활성 상태·revision과 fence를 다시 잠가 확인하고 proposal, final run evidence, dispatch `FINALIZED`, idempotency 응답을 함께 commit한다. 준비용 validated-local proposal text는 이때 dispatch에서 지우고 hash만 유지한다. V16 context raw도 지우되 hash·version·candidate count는 integrity evidence로 유지한다. revision이 바뀌었거나 memo가 휴지통이면 canonical data를 만들지 않고 run을 `STALE`로 확정한다. 호출 전에 stale을 발견하면 `CANCELLED_STALE`과 gateway 0-call을 남기고, 이미 실행된 호출의 늦은 결과라면 실제 bounded outcome을 보존한다. 내부 execution-contract, authorization/grant 시각, 복구용 raw idempotency key, provider token, binding, prepared payload/context, context hash/version/count, attempt ledger, lease와 fence는 `RunView`, proposal JSON, `providerMetadata`, recovery 응답, UI, 평가 report, 일반 log, browser storage, service worker에 포함되지 않는다. attempt row에도 provider 오류 text·provider/model ID·token·raw memo·retrieval context를 저장하지 않는다. 승인된 purge 정책 전에는 현재 run data와 같은 retention 경계를 따르며 V17은 임의 TTL을 추가하지 않는다.
+finalize transaction은 memo owner·활성 상태·revision과 fence를 다시 잠가 확인하고 proposal, final run evidence, dispatch `FINALIZED`, idempotency 응답을 함께 commit한다. 준비용 validated-local proposal text는 이때 dispatch에서 지우고 hash만 유지한다. V16 tag context와 V20 approved-correction snapshot raw도 지우되 각각의 hash·version·count는 integrity evidence로 유지한다. revision이 바뀌었거나 memo가 휴지통이면 canonical data를 만들지 않고 run을 `STALE`로 확정한다. 호출 전에 stale을 발견하면 `CANCELLED_STALE`과 gateway 0-call을 남기고, 이미 실행된 호출의 늦은 결과라면 실제 bounded outcome을 보존한다. 내부 execution-contract, authorization/grant 시각, 복구용 raw idempotency key, provider token, binding, prepared payload/context, context hash/version/count, attempt ledger, lease와 fence는 `RunView`, proposal JSON, `providerMetadata`, recovery 응답, UI, 평가 report, 일반 log, browser storage, service worker에 포함되지 않는다. attempt row에도 provider 오류 text·provider/model ID·token·raw memo·retrieval context를 저장하지 않는다. 승인된 purge 정책 전에는 현재 run data와 같은 retention 경계를 따르며 V17은 임의 TTL을 추가하지 않는다.
 
-공개 분석 시작 계약은 여전히 동기다. 내부 `QUEUED`/`RUNNING`/`PENDING` 상태, dispatch, attempt ledger를 반환하지 않고 최종 review 결과까지 기다린다. background recovery와 V17은 이 HTTP shape나 공개 schema를 polling/queued/관측성 응답으로 바꾸지 않는다. 실제 model-token/cost 숫자 보고·집계·budget enforcement, related-memo retrieval, fuzzy/vector search, embedding context는 구현하지 않았다. Ollama/LiquidAI나 실제 provider도 연결하지 않았다. `200 OK`:
+공개 분석 시작 계약은 여전히 동기다. 내부 `QUEUED`/`RUNNING`/`PENDING` 상태, dispatch, attempt ledger를 반환하지 않고 최종 review 결과까지 기다린다. background recovery와 V17–V20은 이 HTTP shape나 공개 schema를 polling/queued/내부 evidence 응답으로 바꾸지 않는다. 실제 model-token/cost 숫자 보고·집계·budget enforcement, related-memo retrieval, fuzzy/vector search, embedding context, RAG corpus는 구현하지 않았다. 기본 runtime은 Fake + `UNCERTAINTY_ONLY`이고 personal overlay만 `AI_PREFERRED` pinned Ollama/LiquidAI semantic-patch adapter와 K=3 approved-type anchor hint를 켠다. 현재 `ollama-local-gateway-v2`는 bounded textual `thinking`을 검증한 뒤 무시하며 visible `content`만 strict JSON/schema/domain validation에 사용한다. non-text·oversized·extra field 또는 malformed/truncated content는 계속 fail-closed fallback이다. 모든 model 결과는 proposal-only이고 기존 explicit Apply가 필요하다. adapter의 provisional `num_predict=1024` hidden-reasoning budget은 visible output/HTTP response/proposal byte 상한을 늘리지 않는다. 알람/reminder persistence·delivery는 이 endpoint의 일부가 아니다. 공개 fixture 전용 test runner는 이 HTTP 계약 밖에 있다. `200 OK`:
 
 ```json
 {
@@ -380,12 +428,75 @@ finalize transaction은 memo owner·활성 상태·revision과 fence를 다시 �
 
 ```http
 GET /api/v1/analysis-proposals/{proposalId}
-X-Analysis-Proposal-Schema-Version: 2
+X-Analysis-Proposal-Schema-Version: 3
 ```
 
-`X-Analysis-Proposal-Schema-Version`을 생략하거나 `1`로 보내면 서버는 저장된 v2를 수정하지 않고 응답 복사본에서 두 binding field만 제거한 strict v1 projection을 반환한다. `2`를 보내면 새 proposal은 저장된 v2로 반환되고, 과거에 저장된 v1 proposal은 합성 upgrade 없이 v1 그대로 반환된다. 현재 PWA는 `2`를 명시하고, 설치된 구형 PWA는 헤더를 보내지 않아 v1 응답을 받는다. 다른 값이나 결합된 다중 값은 `422 UNSUPPORTED_PROPOSAL_SCHEMA_VERSION`이다. 성공 응답에는 `Cache-Control: no-store`와 `Vary: X-Analysis-Proposal-Schema-Version`이 포함된다.
+`X-Analysis-Proposal-Schema-Version`은 client가 이해하는 최대 version이다. 생략하거나 `1`로
+보내면 서버는 higher-version storage를 수정하지 않고 응답 복사본에서 v3 EVENT fields,
+`dateCandidates[].candidateId`, `itemCandidates[].dueDateCandidateId`를 제거한 strict v1 projection을
+반환한다. `2`는 stored v3에서 `eventScheduleCandidates`와
+`suggestedEventScheduleCandidateId`만 제거하고, `3`은 저장된 supported version을 유지한다. 과거 v1/v2
+proposal은 상위 요청에도 합성 upgrade되지 않는다. 현재 PWA는 `3`을 명시하고 설치된 구형 PWA는
+헤더를 보내지 않아 v1 응답을 받는다. 다른 값이나 결합된 다중 값은
+`422 UNSUPPORTED_PROPOSAL_SCHEMA_VERSION`이다. 성공 응답에는 `Cache-Control: no-store`와
+`Vary: X-Analysis-Proposal-Schema-Version`이 포함된다.
 
-`schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`, `tagCandidates`, `itemCandidates`, `relationCandidates`, `ambiguityReasons`, `providerMetadata`를 포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag나 task를 생성하지 않는다. 현재 Fake analyzer의 필수 provenance 값은 `fake-v6`, `none`, `none`, `none`, `field-policy-v1`이며 `toolCalls`는 `0`이다. 추가 metadata의 `deterministicRulesVersion`은 `korean-rules-v4`다. `HYBRID` proposal에는 서버가 덮어쓴 `cloudTransferMode`, `cloudGatewayVersion`, `cloudProviderId`, `cloudModelVersion`, `cloudConsentPolicyVersion`, `cloudOutcome`, `cloudToolCalls=0`, `cloudMutationCalls=0`, `cloudResolvedFields`, `receivedRoutingPolicyVersion`, `receivedRoutingReasons`가 추가된다. 이 값은 provider error detail이 아니며 같은 run의 server-owned evidence와 일치한다. schema v2의 모든 `dateCandidates[]`에는 proposal-local `candidateId`, 모든 `itemCandidates[]`에는 nullable `dueDateCandidateId`가 필수다. non-null due reference는 같은 proposal의 정밀 date candidate를 가리키는 `TASK`에서만 유효하며, 사용자 승인 전에는 canonical due가 아니다. non-null `itemCandidates[].sourceSpan`은 해당 immutable raw memo revision을 기준으로 하는 비어 있지 않은 UTF-16 code-unit half-open 범위 `[start, end)`다. 서버는 범위가 원문 안에 있고 surrogate pair를 쪼개지 않는지 검증한다. 과거 schema v1 proposal은 recovery와 application 검토를 위해 계속 반환할 수 있다.
+`schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`,
+`tagCandidates`, `itemCandidates`, `relationCandidates`, `ambiguityReasons`, `providerMetadata`를
+포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag, task, event schedule을 생성하지
+않는다. 현재 Fake analyzer의 필수 provenance 값은 `fake-v9`, `none`, `none`, `none`,
+`field-policy-v2`이며 `toolCalls`는 `0`이다. 추가 metadata의 `deterministicRulesVersion`은
+`korean-rules-v7`다. Current Fake와 localhost semantic-patch adapter는 계속 schema v2 producer다.
+V7 rules는 명시적인 `오늘|내일|모레 + 오전|오후 + 1–12시`(optional minutes)를 immutable revision의
+captured instant/source zone에서 `RELATIVE_EXACT`로 해석한다. 날짜 없는 `6시`는 계속 `UNKNOWN`이고
+today/PM을 자동 추론하지 않는다. `HYBRID` proposal에는 서버가 덮어쓴 bounded cloud evidence가
+추가되며 provider error detail은 포함하지 않는다.
+
+Schema v2의 모든 `dateCandidates[]`에는 proposal-local `candidateId`, 모든
+`itemCandidates[]`에는 nullable `dueDateCandidateId`가 필수다. Non-null due reference는 같은
+proposal의 precise date candidate를 가리키는 `TASK`에서만 유효하다. Schema v3는 여기에 모든
+item의 `eventScheduleCandidates`와 nullable `suggestedEventScheduleCandidateId`를 추가한다. Non-EVENT
+item은 empty/null이어야 하고 current domain gate는 EVENT에서도 non-null suggestion을 거절한다.
+각 EVENT alternative는 strict `{candidateId, mode, startDateCandidateId, end, score}`다. `end`는 null
+또는 `{dateCandidateId, boundary}`이고 boundary는 `EXCLUSIVE_AT_VALUE` 또는 all-day-only
+`INCLUSIVE_THROUGH_VALUE`다. TIMED는 `EXACT_TIME|RELATIVE_EXACT`, ALL_DAY는 `DATE_ONLY` reference만
+허용한다. Inclusive all-day end는 검증 시 한 calendar day 뒤의 exclusive boundary로 normalize하며
+overflow/non-later range를 거절한다. Missing end는 null이고 duration은 발명하지 않는다. Multiple
+distinct alternatives는 `CONFLICTING_DATES`를 요구한다. 이 v3 contract는 현재 producer output이나
+review default가 아니다.
+
+Non-null `itemCandidates[].sourceSpan`은 해당 immutable raw memo revision을 기준으로 하는 비어 있지
+않은 UTF-16 code-unit half-open 범위 `[start, end)`다. 서버는 범위가 원문 안에 있고 surrogate pair를
+쪼개지 않는지 검증한다. 과거 schema v1/v2 proposal은 recovery와 application 검토를 위해 계속
+반환할 수 있다.
+
+V3 item 예시는 다음과 같다. Candidate order와 score는 default 권한이 없다.
+
+```json
+{
+  "candidateId": "item-event-1",
+  "dueDateCandidateId": null,
+  "eventScheduleCandidates": [
+    {
+      "candidateId": "event-time-1",
+      "mode": "ALL_DAY",
+      "startDateCandidateId": "date-start",
+      "end": {
+        "dateCandidateId": "date-last-day",
+        "boundary": "INCLUSIVE_THROUGH_VALUE"
+      },
+      "score": 0.82
+    }
+  ],
+  "suggestedEventScheduleCandidateId": null,
+  "kind": "EVENT",
+  "title": "워크숍",
+  "sourceSpan": null,
+  "action": null,
+  "object": null,
+  "confidence": 0.9
+}
+```
 
 ### Resolve relation candidates for informed review
 
@@ -406,10 +517,16 @@ target row를 transaction 안에서 다시 잠그고 검증한다.
 ```http
 GET /api/v1/analysis-proposals?status=REVIEW_REQUIRED&limit=1
 GET /api/v1/analysis-proposals?status=POSTPONED&limit=1
-X-Analysis-Proposal-Schema-Version: 2
+X-Analysis-Proposal-Schema-Version: 3
 ```
 
-Recovery query는 `REVIEW_REQUIRED`와 `POSTPONED`를 지원한다. `limit` 기본값은 1이고 서버가 1–100으로 clamp한다. 현재 owner의 활성 memo이면서 run의 revision이 그 memo의 현재 revision과 같은 proposal만 최신순으로 반환한다. 다른 owner, 휴지통 memo, stale revision은 노출하지 않는다. 클라이언트는 두 상태의 최신 결과를 `createdAt`으로 비교해 하나의 검토 화면만 복원한다. 단건 조회와 같은 schema header, strict v1 projection, `Cache-Control: no-store`, `Vary` 규칙을 목록 안의 모든 proposal에 적용한다. 아래 envelope는 기존 데이터 호환을 명확히 하기 위한 schema v1 예시다. 새 분석은 schema v2를 사용하지만 이 v1 shape도 계속 복구된다.
+Recovery query는 `REVIEW_REQUIRED`와 `POSTPONED`를 지원한다. `limit` 기본값은 1이고 서버가 1–100으로
+clamp한다. 현재 owner의 활성 memo이면서 run의 revision이 그 memo의 현재 revision과 같은 proposal만
+최신순으로 반환한다. 다른 owner, 휴지통 memo, stale revision은 노출하지 않는다. 클라이언트는 두
+상태의 최신 결과를 `createdAt`으로 비교해 하나의 검토 화면만 복원한다. 단건 조회와 같은 maximum
+schema header, v3→v2→v1 down-projection, `Cache-Control: no-store`, `Vary` 규칙을 목록 안의 모든
+proposal에 적용한다. 아래 envelope는 기존 데이터 호환을 명확히 하기 위한 schema v1 예시다. 새
+분석은 현재 schema v2를 사용하지만 이 v1 shape도 계속 복구된다.
 
 ```json
 {
@@ -447,7 +564,7 @@ Recovery query는 `REVIEW_REQUIRED`와 `POSTPONED`를 지원한다. `limit` 기�
       "promptVersion": "none",
       "localModelVersion": "none",
       "embeddingModelVersion": "none",
-      "routingPolicyVersion": "field-policy-v1",
+      "routingPolicyVersion": "field-policy-v2",
       "toolCalls": 0
     }
   }
@@ -512,11 +629,64 @@ shape로 재투영되어 이미 성공한 idempotency key를 그대로 replay할
 
 apply body의 `items[].due.timeZone`은 기존 client 계약을 깨지 않기 위한 검증 대상 입력일 뿐 canonical zone 선택 권한이 아니다. 서버는 proposal이 참조하는 immutable memo revision을 잠근 뒤 모든 due의 persisted `source_time_zone`을 그 revision의 `source_time_zone`으로 교체한다. 따라서 다른 기기나 여행 중 복구·승인해도 date-only `OVERDUE` 경계는 원문을 기록한 시간대에서 계산된다.
 
-검증과 application, item, task, tag link, 선택 relation 생성은 한 transaction이다. 서버는 각 index를
+Milestone 6A.1은 proposal schema v2 producer를 바꾸지 않았다. 이어진 6A.2a에서 PWA가 proposal-v3
+EVENT alternatives를 이해하더라도 모델 출력, candidate order/score, nullable suggestion으로 schedule을
+자동 연결하지 않으며 review draft는 모든 version에서 unscheduled로 시작한다. 사용자가 precise 기존
+`dateCandidate`, 표시된 v3 alternative, 또는 직접 입력을 명시적으로 선택한 결과만 다음 Apply shape로
+보낸다. 현재 `fake-v9`/`korean-rules-v7`의 `오늘 오후 6시` 같은 candidate도 사용자 선택 전에는
+canonical EVENT start가 아니다. V3 inclusive all-day candidate를 사용자가 고른 경우에만 declared
+boundary에 따라 exclusive end를 한 day 뒤로 normalize한다; missing end는 그대로 null이다.
+
+```json
+{
+  "expectedMemoRevision": 1,
+  "selectedType": "EVENT",
+  "title": "디스코드 접속",
+  "selectedTags": [],
+  "items": [
+    {
+      "proposalCandidateId": "item-1",
+      "kind": "EVENT",
+      "title": "디스코드 접속",
+      "due": null,
+      "eventSchedule": {
+        "mode": "TIMED",
+        "start": "2026-08-24T18:00:00+09:00",
+        "end": null,
+        "timeZone": "Asia/Seoul"
+      }
+    }
+  ],
+  "selectedRelations": [],
+  "selectionSchemaVersion": "2"
+}
+```
+
+- `eventSchedule`은 optional이고 EVENT item에만 허용된다. 일정이 없는 title-only EVENT Apply는
+  기존처럼 유효하며 `selectionSchemaVersion`을 요구하지 않는다.
+- schedule 하나라도 있으면 top-level `selectionSchemaVersion`은 정확히 `"2"`여야 한다. 현재
+  지원하는 다른 selection version은 없다.
+- `TIMED`의 `start`와 optional `end`는 offset을 포함한 whole-second ISO 8601 timestamp이며 end가
+  있으면 start 뒤여야 한다. Fractional second는 RFC 5545로 반올림/절삭하지 않고 거절한다.
+  `ALL_DAY`는 `YYYY-MM-DD` start와 optional later exclusive end를 사용한다. 어느
+  mode도 누락된 end나 duration을 발명하지 않는다.
+- request `timeZone`은 유효한 IANA identifier인지 검사하는 compatibility field다. 서버는 locked
+  immutable memo revision의 `source_time_zone`으로 selection과 canonical event row를 교체한다.
+  TIMED start/end의 offset은 각 local date-time에서 그 immutable source zone이 허용하는 offset 중
+  하나여야 한다. DST gap은 거절하고, overlap에서는 사용자가 명시한 두 valid offset 중 하나를
+  그대로 보존한다.
+- 관련 domain 오류는 `INVALID_SELECTION_SCHEMA_VERSION`, `EVENT_SCHEDULE_VERSION_REQUIRED`,
+  `EVENT_SCHEDULE_REQUIRES_EVENT`, `INVALID_EVENT_SCHEDULE_MODE`,
+  `INVALID_EVENT_SCHEDULE_VALUE`, `INVALID_EVENT_SCHEDULE_PRECISION`, `INVALID_EVENT_SCHEDULE_RANGE`,
+  `EVENT_SCHEDULE_ZONE_OFFSET_MISMATCH`, `INVALID_TIME_ZONE`이다.
+- 기존 일정 없는 Apply request-hash projection은 고정되어 있다. 일정이 있는 selection만 별도
+  versioned hash material을 사용하므로 legacy idempotent replay를 깨지 않는다.
+
+검증과 application, item, task/event detail, tag link, 선택 relation 생성은 한 transaction이다. 서버는 각 index를
 잠긴 proposal의 full candidate로 해소하고 owner 소유 `ACTIVE` MEMO/TAG target을 종류·UUID 순으로
 잠근다. client가 보낸 target/type/score는 받지 않는다. relation은 선택 item에서 target identity로
 향하는 typed canonical row이며 TAG relation을 `item_tags`로 합치지 않는다. 하나라도 유효하지 않거나
-target이 review 뒤 unavailable해지면 application, item, task, tag link, relation, idempotency response를
+target이 review 뒤 unavailable해지면 application, item, task/event detail, tag link, relation, idempotency response를
 전부 rollback하고 raw memo revision을 보존한다. 성공 응답:
 
 ```json
@@ -541,7 +711,7 @@ POST /api/v1/analysis-proposals/{proposalId}/postpone
 Idempotency-Key: postpone-018f...
 ```
 
-두 요청 모두 body가 없다. 거절은 run을 `REJECTED`, 보류는 `POSTPONED`로 바꾼다. 어느 경우에도 canonical tag/task/relation을 만들지 않는다.
+두 요청 모두 body가 없다. 거절은 run을 `REJECTED`, 보류는 `POSTPONED`로 바꾼다. 어느 경우에도 canonical tag/task/event/relation을 만들지 않는다.
 
 거절 응답:
 
@@ -568,7 +738,7 @@ Idempotency-Key: undo-018f...
 }
 ```
 
-해당 application의 relation을 source item보다 먼저 삭제한 뒤 파생 item, task, tag link와 안전하게
+해당 application의 relation을 source item보다 먼저 삭제한 뒤 파생 event detail, item, task, tag link와 안전하게
 제거할 수 있는 신규 tag만 되돌린다. 다른 application의 canonical relation이 target으로 참조하는
 tag는 orphan으로 간주하지 않는다. relation target memo/tag, source memo와 모든 raw revision은
 보존한다.
@@ -648,11 +818,11 @@ X-Expected-Owner-Id: 018f4fad-e9a9-7a01-a4d1-936938a8a1e8
   "byAnalysisVersion": [
     {
       "route": "LOCAL",
-      "analyzerVersion": "fake-v6",
+      "analyzerVersion": "fake-v9",
       "promptVersion": "none",
       "localModelVersion": "none",
       "embeddingModelVersion": "none",
-      "routingPolicyVersion": "field-policy-v1",
+      "routingPolicyVersion": "field-policy-v2",
       "proposals": { "total": 4, "withApplication": 3, "currentStates": { "queued": 0, "running": 0, "reviewRequired": 1, "currentPostponed": 1, "failed": 0, "stale": 0, "applied": 2, "rejected": 0, "other": 0 } },
       "latestApplications": { "none": 1, "applied": 2, "undone": 1 },
       "outcomes": { "exact": 1, "corrected": 1, "userResolved": 1, "unclassifiable": 0, "correctedFields": { "type": 0, "title": 1, "tags": 0, "items": 0, "due": 0 } }
@@ -667,13 +837,75 @@ X-Expected-Owner-Id: 018f4fad-e9a9-7a01-a4d1-936938a8a1e8
 - `latestApplications`는 proposal마다 `(applied_at DESC, id DESC)`로 고른 최신 application 상태다. `none + applied + undone = proposals.total`이다. undo 뒤 새 idempotency key로 재적용하면 새 application이 최신이 되며, 이 값은 모든 apply/undo event 횟수가 아니다.
 - `outcomes`는 application이 있는 proposal의 최신 `selection_json`을 versioned default-review projection과 의미상 비교한다. `exact + corrected + userResolved + unclassifiable = proposals.withApplication`이다. `correctedFields`는 한 `CORRECTED` selection에서 여러 field가 동시에 증가할 수 있는 비배타적 세부 집계다.
 
-`review-default-v3`는 proposal schema version에 따라 due 기본값을 재구성한다. v2에서는 `TASK`의 non-null `dueDateCandidateId`가 가리키는 정밀 date candidate만 해당 item의 기본 due가 된다. 배열 순서나 날짜·항목 개수로 연결을 추측하지 않으며, 근사/미확정 날짜, 사용되지 않은 날짜, 연결되지 않은 정밀 날짜 또는 type 변경으로 맞지 않게 된 연결은 상세 검토와 `USER_RESOLVED` 경계를 요구한다. 과거 schema v1에는 호환성을 위해 기존 보수적 규칙을 그대로 적용한다. 즉 제안 항목이 정확히 하나이고 그 항목이 TASK이며 usable date도 정확히 하나일 때만 그 due를 기본 선택에 배정한다. 사용자가 정확한 날짜를 직접 입력하거나 각 TASK의 날짜를 직접 선택한 결과는 그대로 비교·적용된다.
+`review-default-v3`는 proposal schema version에 따라 TASK due 기본값만 재구성한다. v2/v3에서는
+`TASK`의 non-null `dueDateCandidateId`가 가리키는 precise date candidate만 해당 item의 기본 due가
+된다. 배열 순서나 날짜·항목 개수로 연결을 추측하지 않으며, 근사/미확정 날짜, 사용되지 않은 날짜,
+연결되지 않은 precise date 또는 type 변경으로 맞지 않게 된 연결은 상세 검토와 `USER_RESOLVED`
+경계를 요구한다. Proposal-v3 EVENT alternative/suggestion은 이 comparison policy의 review default가
+아니다. 과거 schema v1에는 호환성을 위해 기존 보수적 TASK 규칙을 그대로 적용한다. 즉 제안 항목이
+정확히 하나이고 그 항목이 TASK이며 usable date도 정확히 하나일 때만 그 due를 기본 선택에 배정한다.
+사용자가 정확한 날짜를 직접 입력하거나 각 TASK의 날짜를 직접 선택한 결과는 그대로 비교·적용된다.
 
-`exact`는 “제안 그대로 적용”을 뜻할 뿐 AI의 정답·정확도를 뜻하지 않는다. `corrected`는 바로 적용 가능한 기본 선택을 수정한 경우, `userResolved`는 동점/`UNKNOWN` 유형 또는 item 부재처럼 기본 선택만으로 적용할 수 없어 사용자가 보완한 경우다. relation 후보, 지원하지 않는/손상된 과거 JSON, revision 불일치처럼 현재 비교 정책이 안전하게 재구성할 수 없는 application은 `unclassifiable`이다. 거절에는 교정 target이 저장되지 않으므로 거절 건수도 정답 label이 아니다.
+`exact`는 “제안 그대로 적용”을 뜻할 뿐 AI의 정답·정확도를 뜻하지 않는다. `corrected`는 바로 적용
+가능한 기본 선택을 수정한 경우, `userResolved`는 동점/`UNKNOWN` 유형 또는 item 부재처럼 기본
+선택만으로 적용할 수 없어 사용자가 보완한 경우다. Relation 후보, temporal-candidate-bearing v3
+proposal, schedule-bearing selection,
+지원하지 않는/손상된 과거 JSON, revision 불일치처럼 현재 비교 정책이 안전하게 재구성할 수 없는
+application은 `unclassifiable`이다. V3 EVENT candidate를 사용자가 골랐다는 사실도 정답 label이
+아니다. 거절에는 교정 target이 저장되지 않으므로 거절 건수도 정답 label이 아니다.
+EVENT schedule을 포함한 selection도 versioned temporal review comparison policy가 없으므로 현재는
+`unclassifiable`이며 Apply 자체를 analyzer 정확도 label로 사용하지 않는다.
 
 `byAnalysisVersion`은 provider metadata의 임의 문자열이 아니라 `analysis_runs`의 server-owned `route`, analyzer·prompt·local-model·embedding-model·routing-policy provenance로만 같은 counter를 나눈다. 각 counter를 version group 전체에서 합하면 top-level 값과 일치한다.
 
 응답은 aggregate counter와 provenance version만 포함한다. memo body·title, raw proposal/selection JSON, memo/proposal/application/task/tag/relation identifier는 반환하거나 일반 로그에 기록하지 않는다. 이 read-only endpoint는 clickstream을 추가로 수집하지 않으며 owner는 query/header가 아니라 authenticated server principal에서 결정한다. session이 없으면 `401`, stale owner snapshot이면 `409 SESSION_OWNER_CHANGED`다.
+
+### Read owner-scoped analysis path evidence summary
+
+```http
+GET /api/v1/analysis-path-evidence/summary?days=14
+X-Expected-Owner-Id: 018f4fad-e9a9-7a01-a4d1-936938a8a1e8
+```
+
+이 read-only endpoint는 기존 review outcome과 다른 질문에 답한다. `analysis_runs.created_at` 기준
+최근 1–90일 owner cohort에서 dispatch가 있었는지, 어떤 설정 경로·invocation policy·lifecycle이
+기록됐는지, 로컬 모델 설정 경로에 어떤 contribution 상태가 남았는지를 count-only로 집계한다.
+전체 run을 기준으로 dispatch를 left join하므로 dispatch가 없었던 run도
+`runs.withoutDispatch`에 남는다.
+
+서버는 cohort에서 run을 최대 1,001개까지만 읽고 1,000개를 넘으면 일부 결과를 반환하지 않은 채
+`422 ANALYSIS_PATH_EVIDENCE_WINDOW_TOO_LARGE`로 닫힌다. 성공 응답은 `Cache-Control: no-store`다.
+`fromInclusive`와 `toExclusive`의 실제 UTC instant 차이는 정확히 `days × 24시간`이다.
+설정 경로는 `dispatchRoutes.localModel`, `externalMemoTransfer`, `builtInFake`,
+`legacyOrOther`로 닫혀 있다. `localModel`은 `LOCAL_MACHINE_MEMO_CONTENT`와 non-`none`
+model version이 같이 기록된 경로이고, `builtInFake`는 SQL에 고정된 정확한
+`fake-cloud-v2`/`fake`/`none`/`no-network-v1`/`NO_NETWORK` tuple만 뜻한다. descriptor 문자열은
+repository 밖으로 나오지 않는다. 경로 또는 dispatch가 기록됐다는 사실은 실제 네트워크 전송이나
+모델 호출 성공을 증명하지 않는다. 응답은 다음
+불변식을 유지한다.
+
+- `runs.withDispatch + runs.withoutDispatch = runs.total`
+- `localDecisionEvidence`, dispatch lifecycle, invocation mode/reason, `dispatchRoutes`는 각각
+  `runs.withDispatch`와 같은 합계를 갖는다.
+- `localModelContributions`만 `dispatchRoutes.localModel`과 같은 합계를 갖는다.
+- fallback reason과 changed field는 한 dispatch에서 여러 값이 증가할 수 있는 비배타적 count다.
+  fallback membership은 `invocationReasons`와 구분되며 설정 경로를 선택한 직접 원인이라고 단정하지
+  않는다. 전체 membership 수는
+  `localDecisionEvidence.current - invocationReasons.aiPreferredPolicy` 이상이다.
+- `localModelContributions` 중 `notRecorded`를 제외한 합계는
+  `localDecisionEvidence.current` 이하다.
+- `approvedCorrectionSnapshots.withSignals`는 1개 이상의 bounded signal이 dispatch snapshot에
+  고정된 횟수다. `totalSignals`는 그 signal 수의 합이며 모델이 신호를 실제 사용했거나 품질을
+  개선했다는 증거가 아니다.
+
+응답은 고정 enum별 aggregate count만 반환한다. memo/proposal/selection/validated-local-proposal/
+evidence/provider text, 모든 ID·hash·offset·token·credential·model output·per-run 값은 SQL select와
+HTTP DTO 양쪽에서 제외한다. 로컬 모델 경로의 `ACCEPTED_CHANGED`/`ACCEPTED_UNCHANGED`는 해당 경로에서
+성공으로 기록된 결과가 제안에 반영됐다는 운영 기록일 뿐 정확도나 개선 label이 아니다.
+`PENDING`/`LOCAL_FALLBACK`은 실제
+모델 시도 증거가 아니다. 이 API에는 routing, rule registration/promotion, model invocation 또는
+Apply mutation이 없다. 화면의 “분석 경로 진단”도 처음 접힌 상태에서는 요청을 보내지 않고 사용자가
+처음 펼쳤을 때만 읽으며, 이후에는 명시적인 `진단 새로고침`만 다시 요청한다.
 
 ## Task
 
@@ -722,6 +954,319 @@ Content-Type: application/json
   "updated": true
 }
 ```
+
+## Confirmed scheduled events (Milestone 6A.1 source supplement)
+
+```http
+GET /api/v1/events?limit=50
+```
+
+`limit` 기본값은 50이고 1–100만 허용한다. 범위를 벗어나면 clamp하지 않고 `422
+INVALID_EVENT_LIMIT`이다. 서버는 현재 조건을 만족하는 일정 중 최근 Apply 순으로 bounded window를
+먼저 고른 뒤, 그 window를 start 오름차순과 item UUID tie-break로 반환한다. 따라서 오래된 일정이
+한도를 채워도 방금 승인한 일정은 window에 포함된다. 성공 응답은 `Cache-Control: no-store`를
+포함한다.
+
+```json
+[
+  {
+    "id": "8d8185b4-f61a-4d88-a7ed-ab99357a1f5a",
+    "title": "디스코드 접속",
+    "scheduleKind": "TIMED",
+    "startAt": "2026-08-24T09:00:00Z",
+    "endAt": null,
+    "startDate": null,
+    "endDateExclusive": null,
+    "sourceTimeZone": "Asia/Seoul"
+  },
+  {
+    "id": "bd2b2f90-6072-4ef6-bba4-9fa32f53b823",
+    "title": "휴가",
+    "scheduleKind": "ALL_DAY",
+    "startAt": null,
+    "endAt": null,
+    "startDate": "2026-08-26",
+    "endDateExclusive": "2026-08-29",
+    "sourceTimeZone": "Asia/Seoul"
+  }
+]
+```
+
+서버는 authenticated principal의 owner를 사용하고 다음 조건을 모두 만족하는 row만 반환한다.
+
+- `event_details`가 있는 EVENT item
+- unarchived item, `ACTIVE` memo, memo의 current revision과 같은 item revision
+- status가 현재 `APPLIED`인 application
+
+따라서 foreign-owner, title-only/unscheduled, undone, archived, trashed, stale-revision EVENT는
+제외된다. 응답은 raw memo, memo/proposal/application identity, revision, selection JSON, AI provenance를
+포함하지 않는다. 이 JSON endpoint는 PWA의 confirmed schedule 목록이며, 아래 인증된 `.ics`
+snapshot과 eligibility만 공유한다. share/feed, reminder/alarm, recurrence 또는 외부 calendar write는
+아니다. 이 endpoint code는 2026-08-27 owner-authorized private V22 stack에 포함됐고 후속 V23
+migration/rebuild에도 포함됐다. 실제 개인 schedule을 읽는 product smoke나 canonical
+backfill/Apply는 별도 승인 없이 실행하지 않는다.
+
+## Authenticated iCalendar snapshot (Milestone 6B source supplement)
+
+```http
+GET /api/v1/events/calendar.ics
+Accept: text/calendar
+X-Expected-Owner-Id: <current authenticated owner snapshot>
+```
+
+일정이 있으면 `200 text/calendar; charset=UTF-8`, `Cache-Control: no-store`, 고정
+`Content-Disposition: attachment; filename="personal-memo-calendar.ics"`를 반환한다. 일정이 없으면
+RFC-invalid empty calendar를 만들지 않고 `204 No Content`를 반환한다. 101번째 eligible EVENT가
+보이면 일부만 내보내지 않고 `422 ICALENDAR_EVENT_LIMIT_EXCEEDED`로 실패한다. 완성 문서는 128 KiB
+상한이며 잘못된 schedule shape/year, fractional-second canonical instant, unsafe control text도 고정
+오류로 fail closed한다. 이 endpoint의 `422` code는
+`ICALENDAR_EVENT_LIMIT_EXCEEDED`, `ICALENDAR_EXPORT_TOO_LARGE`, `INVALID_ICALENDAR_EVENT`,
+`ICALENDAR_UNSAFE_TEXT` 중 하나다. 128 KiB는 UTF-8 byte 상한이며 문자 수 상한이 아니다.
+
+```text
+BEGIN:VCALENDAR\r\n
+PRODID:-//Personal Memo//Authenticated iCalendar Export 1.0//EN\r\n
+VERSION:2.0\r\n
+CALSCALE:GREGORIAN\r\n
+BEGIN:VEVENT\r\n
+UID:pm-auth-v1-<opaque-sha256>@personal-memo.invalid\r\n
+DTSTAMP:20260824T090000Z\r\n
+SEQUENCE:0\r\n
+DTSTART:20260824T090000Z\r\n
+SUMMARY:디스코드 접속\r\n
+END:VEVENT\r\n
+END:VCALENDAR\r\n
+```
+
+TIMED start/end는 whole-second UTC, ALL_DAY는 `VALUE=DATE`이며 end는 canonical exclusive date를
+그대로 쓴다. 명시하지 않은 end나 duration을 생성하지 않는다. title은 RFC TEXT escape 후 UTF-8
+75-octet physical line으로 접고 모든 line은 CRLF로 끝난다. 안정적 opaque UID는 owner와 canonical
+item identity의 domain-separated SHA-256이지만 UUID 자체를 출력하지 않으며 authorization 값이
+아니다. `DTSTAMP`는 immutable canonical item 생성 시각, sequence는 `0`이다.
+
+파일에는 current eligible EVENT의 승인 title/schedule만 들어간다. raw memo, TASK due, tag,
+relation, selection/proposal/application evidence, internal UUID, source-zone extension, `VALARM`,
+recurrence, description/location/URL/attendee/organizer는 포함하지 않는다. GET 전후 canonical write는
+0이다. PWA는 session epoch와 expected-owner guard를 거친 한 Blob을 plain-text로 미리본 뒤 바로 그
+Blob을 내려받는다. 이 파일은 1회 import용 snapshot이지 자동 동기화 URL이나 Personal Memo 알람이
+아니다. recipient별 지속 구독은 아래 6C 계약의 별도 UID와 저장 상태를 사용한다.
+
+## Recipient calendar feeds (Milestone 6C source supplement)
+
+관리 API는 일반 owner session 경계 안에 있다. 모든 mutation은 CSRF,
+`X-Expected-Owner-Id`, `Idempotency-Key`를 사용하고 response는 `no-store`다. 이미 존재하는 feed를
+바꾸는 update/rotate/external-publication-enable/revoke/add/remove는 `expectedVersion`으로 optimistic
+concurrency를 검사하며, create에는 아직 존재하지 않는 feed version을 보내지 않는다.
+
+```http
+GET  /api/v1/calendar-feeds/eligible-events
+GET  /api/v1/calendar-feeds
+POST /api/v1/calendar-feeds
+GET  /api/v1/calendar-feeds/{feedId}
+PATCH /api/v1/calendar-feeds/{feedId}
+POST /api/v1/calendar-feeds/{feedId}/rotate
+POST /api/v1/calendar-feeds/{feedId}/external-publication/enable
+POST /api/v1/calendar-feeds/{feedId}/revoke
+POST /api/v1/calendar-feeds/{feedId}/events
+POST /api/v1/calendar-feeds/{feedId}/events/{entryId}/remove
+```
+
+생성 예시는 다음과 같다. `eventIds`는 UI에서 처음에 모두 미선택이며 owner가 직접 고른 current
+canonical scheduled EVENT만 허용한다. eligible picker가 101번째 row를 발견해 `truncated: true`를
+반환하면 PWA는 partial selection을 진행하지 않는다.
+
+Owner는 폐기된 feed까지 포함해 lifetime feed를 최대 100개만 보존할 수 있다. 6C에는 delete나
+capacity 회수 API가 없으므로 101번째 create는 `422 CALENDAR_FEED_LIMIT_EXCEEDED`로 닫힌다. 각 feed도
+`CANCELLED` tombstone을 포함한 lifetime entry를 최대 100개만 보존한다.
+
+```json
+{
+  "displayName": "가족 공유",
+  "disclosureMode": "BUSY_ONLY",
+  "eventIds": ["50000000-0000-4000-8000-000000000001"],
+  "bearerSecret": "<canonical 43-character base64url secret>"
+}
+```
+
+`bearerSecret`는 PWA가 Web Crypto로 만든 정확히 32-byte secret의 unpadded base64url 표현이다.
+서버는 lowercase domain-separated SHA-256 verifier만 저장하고 response/idempotency JSON에는
+secret, verifier, subscription URL을 넣지 않는다. Feed summary는 다음 metadata만 반환하며 detail은
+bounded entry list를 추가한다.
+
+```json
+{
+  "id": "60000000-0000-4000-8000-000000000001",
+  "displayName": "가족 공유",
+  "disclosureMode": "BUSY_ONLY",
+  "status": "ACTIVE",
+  "publicationScope": "LOCAL_ONLY",
+  "publicConsentPolicyVersion": null,
+  "publicConsentGrantedAt": null,
+  "version": 1,
+  "eventCount": 1,
+  "createdAt": "2026-08-25T09:00:00Z",
+  "updatedAt": "2026-08-25T09:00:00Z",
+  "rotatedAt": "2026-08-25T09:00:00Z",
+  "revokedAt": null,
+  "entries": [
+    {
+      "id": "70000000-0000-4000-8000-000000000001",
+      "eventId": "50000000-0000-4000-8000-000000000001",
+      "title": "디스코드 접속",
+      "scheduleKind": "TIMED",
+      "startAt": "2026-08-25T09:00:00Z",
+      "endAt": null,
+      "startDate": null,
+      "endDateExclusive": null,
+      "sourceTimeZone": "Asia/Seoul",
+      "state": "ACTIVE",
+      "sequence": 0
+    }
+  ]
+}
+```
+
+Create는 deployment capability와 무관하게 항상 `LOCAL_ONLY`/동의 없음으로 시작한다. Rotate는 새
+in-memory secret과 expected version을 보내 기존 verifier를 즉시 무효화한다. Revoke는
+되돌릴 수 없는 `REVOKED` 상태로 바꿔 기존 verifier를 조회 대상에서 제외하며, digest는 다른 feed에서
+같은 secret이 다시 유효해지지 않도록 보존한다. Explicit remove 및 memo edit/trash/application undo는 같은
+recipient UID의 `CANCELLED` tombstone을 먼저 만들고 sequence를 증가시킨다. CANCELLED management
+entry의 `eventId`와 `title`은 null이다. Restore는 자동 reshare가 아니며 명시적 eligible add만 같은
+entry를 재활성화한다.
+
+Publication endpoint는 `/api/v1` server가 아니라 root fixed path다.
+
+```http
+GET  /calendar/v1/feed.ics?token=<canonical 43-character bearer>
+HEAD /calendar/v1/feed.ics?token=<canonical 43-character bearer>
+```
+
+이 route는 application session, CSRF, expected-owner header를 읽지 않는 별도 stateless chain이다.
+토큰 digest로 찾은 active owner의 server-owned feed/owner와 배포 mode에 맞는 feed별 공개 scope/동의
+pin만 authority다. `LOCAL_ONLY` deployment는 active `LOCAL_ONLY` feed만, `PUBLIC_HTTPS` deployment는
+현재 server policy와 exact match하는 동의가 있는 active `PUBLIC_HTTPS` feed만 제공한다.
+Missing/malformed/unknown/rotated/revoked, disabled owner, impossible ineligible `ACTIVE` projection은
+모두 동일한 empty `404`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`를 반환하며 partial
+calendar를 만들지 않는다. Valid empty feed는 204, non-empty feed는 최대 100 lifetime entries와
+128 KiB UTF-8 bytes로 제한한다. HEAD는 GET과 status/content header가 같고 body만 없다. 어떤
+fetch도 access timestamp를 포함해 DB를 쓰지 않는다.
+
+ACTIVE `TITLE`은 current eligible canonical title, `BUSY_ONLY`는 fixed `Busy`만 SUMMARY에 쓴다.
+CANCELLED는 SUMMARY를 생략하고 같은 recipient UID, 증가한 SEQUENCE, 보존한 DTSTART/optional
+DTEND와 `STATUS:CANCELLED`를 낸다. 서로 다른 feed와 6B export는 UID를 공유하지 않는다. Raw memo,
+TASK/tag/relation, proposal/application/model provenance, internal UUID, description/location/URL,
+attendee/organizer/attachment, recurrence, METHOD, VALARM은 포함하지 않는다.
+
+이 private route를 실제 internet에서 구독할 수 있다는 뜻은 아니다. Public hostname/TLS/edge
+operator, operator-selected external request/connection bounds와 total external deadline,
+all-owned-and-external-log sentinel smoke, Google/Apple update-removal behavior는 별도 승인된 6D
+runtime 뒤에만 검증한다.
+
+## Public calendar origin capability (Milestone 6D.1 source and private deployment)
+
+6D의 첫 source slice는 public URL authority를 server-owned deployment configuration으로 옮기는
+아래 authenticated read와 strict PWA 소비 경계를 구현한다.
+
+```http
+GET /api/v1/calendar-feeds/capabilities
+```
+
+응답은 `Cache-Control: no-store`이고 다음 두 JSON 중 정확히 하나다. 필드를 생략하거나 추가할 수
+없고, `mode`, `publicOrigin`, `consentPolicyVersion`의 조합도 바꿀 수 없다.
+
+```json
+{
+  "mode": "LOCAL_ONLY",
+  "publicOrigin": null,
+  "consentPolicyVersion": null
+}
+```
+
+```json
+{
+  "mode": "PUBLIC_HTTPS",
+  "publicOrigin": "https://calendar.example.com",
+  "consentPolicyVersion": "calendar-feed-public-v1"
+}
+```
+
+Backend는 `app.calendar-feed.publication.enabled=false`, blank `public-origin`, blank
+`consent-policy-version`을 기본으로 bind한다. Disabled인데 origin/policy가 있거나 enabled인데 origin이
+maximum 255-character canonical lowercase HTTPS
+multi-label ASCII hostname이 아니면 기동을 거절한다. Valid origin은 optional non-default port만
+허용하고 userinfo, IP literal, `localhost`와 그 subdomain, path, query, fragment, trailing slash,
+explicit `:443`, request `Host`/forwarded header, memo/feed metadata와 browser 입력에서 유도하지
+않는다. 이는 hostname syntax 검사이며 public-suffix 소유권이나 DNS reachability 증명이 아니다.
+Controller는 authenticated session 아래 exact union을 no-store로 반환한다.
+
+Capability는 배포 준비 상태일 뿐 기존 feed를 공개하지 않는다. V23에서 모든 기존/신규 feed는
+`publicationScope: LOCAL_ONLY`와 null consent pin으로 시작하며 다음 mutation을 별도로 완료해야 한다.
+
+```http
+POST /api/v1/calendar-feeds/{feedId}/external-publication/enable
+X-XSRF-TOKEN: <csrf>
+X-Expected-Owner-Id: <owner snapshot>
+Idempotency-Key: <stable retry key>
+Content-Type: application/json
+
+{
+  "expectedVersion": 3,
+  "bearerSecret": "<new canonical 43-character base64url secret>",
+  "consentPolicyVersion": "calendar-feed-public-v1"
+}
+```
+
+Server가 `PUBLIC_HTTPS`가 아니거나 policy가 다르면 0-row fail closed한다. 성공하면 fresh verifier,
+`PUBLIC_HTTPS` scope, exact policy와 server grant time, version/rotatedAt/updatedAt을 한 transaction에서
+바꾼다. 이전 local/public URL은 즉시 404가 되며 response/idempotency JSON은 secret/URL을 포함하지
+않는다. 공개 중 disclosure mode 변경은 새 동의 없이 제목 노출 범위를 바꿀 수 없도록 거절한다.
+외부 공개 철회는 현재 reversible toggle이 아니라 기존 permanent revoke를 사용하며 scope/consent도
+함께 지운다. Policy가 변경되면 기존 public feed는 자동으로 404가 되고 fresh secret으로 다시 동의해야
+한다.
+
+Frontend는 추가/누락 필드와 mode/origin/policy 불일치까지 strict decode한다. Valid `PUBLIC_HTTPS`만
+server `publicOrigin`에 fixed `/calendar/v1/feed.ics?token=...`을 붙인다. Valid `LOCAL_ONLY`는 별개의
+명시적 server state로서 현재 PWA의 exact HTTP(S) origin으로 **로컬·격리 검증용** URL을 만들 수
+있지만, 화면은 외부 수신자에게 전달하지 말라는 경고를 표시한다. Capability 요청 실패·missing·
+malformed 응답은 valid `LOCAL_ONLY`로 간주하지 않으며 private origin으로 조용히 fallback하지 않는다.
+PUBLIC_HTTPS에서도 create 직후 local secret을 공개 URL처럼 표시하지 않는다. Owner가 unchecked 상태로
+시작하는 Cloudflare/token/date-time/title/cache warning에 동의하고 enable이 성공한 뒤에만 fresh public
+URL을 PWA memory에서 한 번 조립한다.
+
+2026-08-27 owner-authorized personal V22 배포는 publication environment를 전달하지 않아
+fail-closed `LOCAL_ONLY`였다. 당시 health, Flyway V22/failed 0, trusted PWA, unauthenticated
+capability 401/no-store와 synthetic private feed route/token-free log를 확인했지만 개인 session을
+사용한 authenticated 200 body는 runtime smoke하지 않았다. 후속 owner-authorized personal V23
+migration/rebuild도 publication environment 없이 완료돼 현재 배포는 `LOCAL_ONLY`다. Actual public
+activation, external request/connection/deadline bounds, owned/external token-log 검증과 Google/Apple
+real-client smoke는 `NOT_AUTHORIZED`다.
+Capability read는 feed/token/canonical row를 만들거나 변경하지 않고, 자동 공유나 알람도 활성화하지
+않는다.
+
+## Calendar feed public-edge preflight (Milestone 6D source/deployment boundary)
+
+이 preflight는 OpenAPI application contract를 넓히지 않는다. Public candidate surface는 계속 기존
+root path의 exact bodyless
+`GET|HEAD /calendar/v1/feed.ics?token=<canonical-43-character-bearer>` 하나뿐이다.
+`compose.public-feed.yaml`의 별도 edge는 host `127.0.0.1`에만 bind하고 private internal network로
+backend의 그 path만 호출한다. PWA/API/OAuth route, backend host port와 PostgreSQL은 edge surface가
+아니다. Edge는 caller Authorization/Cookie/Referer/forwarded header와 body를 전달하지 않고 fixed
+safe route/method class만 기록한다. Local rejection과 intercepted upstream error는 generic empty
+404이고 rate limit은 bodyless 429다.
+
+Preflight의 60 requests/minute + burst 20, connection 8, upstream connect/send/read 2s/5s/10s는
+provisional origin-side containment다. External per-client quota나 DNS/TLS/tunnel을 포함하는 total
+deadline/SLA가 아니다. Recorded isolated smoke는 generated synthetic bearer와 disposable upstream만
+사용해 exact GET/HEAD, deny surface, header stripping, bodyless 404/429, bounds와 query/path/header/
+custom-method sentinel의 owned edge/upstream log 0건을 통과했다. Personal database/session/memo/feed/
+canonical schedule/API Apply는 사용하지 않았다. 이는 external operator log proof가 아니다.
+
+`compose.public-feed-activation.yaml`은 reviewed ignored `.env.public-feed`를 backend의
+`PUBLIC_HTTPS` capability로 공급하는 별도 마지막 overlay다. Preflight에는 포함하지 않는다. 실제
+hostname/DNS/TLS/operator/external bounds와 token-free success/error logs가 승인·검증되기 전에는
+activation하지 않으며, rollback은 external route를 먼저 닫고 activation overlay 없이 backend를
+recreate해 `LOCAL_ONLY`를 확인한 뒤 edge를 제거한다. Google/Apple smoke는 그 뒤에도 별도 승인이다.
+상태는 `SOLO_PROVISIONAL`/`REPORT_ONLY`; public activation은 `NOT_AUTHORIZED`다.
 
 ## Graph projection
 

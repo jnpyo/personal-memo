@@ -4,9 +4,12 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 export const BACKEND_NETWORK_ONLY_PATH_PATTERNS = [
   /^\/api(?:\/|$)/,
+  /^\/calendar\/v1\/feed\.ics(?:\?.*)?$/,
   /^\/login\/oauth2(?:\/|$)/,
   /^\/oauth2(?:\/|$)/,
 ];
+
+export const CALENDAR_FEED_DEV_PROXY_CONTEXT = '^/calendar/v1/feed\\.ics(?:\\?.*)?$';
 
 export const PWA_REGISTER_TYPE = 'prompt' as const;
 
@@ -20,6 +23,7 @@ export default defineConfig(({ mode }) => {
   const backendProxy = { target: apiProxyTarget, changeOrigin: true };
   const proxy = {
     '/api': backendProxy,
+    [CALENDAR_FEED_DEV_PROXY_CONTEXT]: backendProxy,
     '/oauth2': backendProxy,
     '/login/oauth2': backendProxy,
   };
@@ -30,7 +34,9 @@ export default defineConfig(({ mode }) => {
       VitePWA({
         registerType: PWA_REGISTER_TYPE,
         workbox: {
-          navigateFallbackDenylist: BACKEND_NETWORK_ONLY_PATH_PATTERNS,
+          navigateFallbackDenylist: BACKEND_NETWORK_ONLY_PATH_PATTERNS.map(
+            (pattern) => new RegExp(pattern.source, pattern.flags),
+          ),
           runtimeCaching: [
             {
               urlPattern: ({ url }) => isBackendNetworkOnlyPath(url.pathname),

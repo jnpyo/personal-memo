@@ -12,6 +12,7 @@ import java.util.Set;
 import java.util.UUID;
 import local.personalmemo.analysis.api.AnalysisDtos.Apply;
 import local.personalmemo.analysis.api.AnalysisDtos.Due;
+import local.personalmemo.analysis.api.AnalysisDtos.EventSchedule;
 import local.personalmemo.analysis.api.AnalysisDtos.Item;
 import local.personalmemo.analysis.api.AnalysisDtos.SelectedRelation;
 import local.personalmemo.common.error.DomainException;
@@ -24,6 +25,7 @@ public class AnalysisApplicationValidator {
       Set.of("TASK", "EVENT", "INFORMATION", "IDEA", "RECORD");
   private static final Set<String> DATE_PRECISIONS =
       Set.of("EXACT_TIME", "DATE_ONLY", "RELATIVE_EXACT", "APPROXIMATE", "UNKNOWN");
+  private static final Set<String> EVENT_SCHEDULE_MODES = Set.of("TIMED", "ALL_DAY");
 
   private final TagNormalizer tagNormalizer;
 
@@ -38,6 +40,7 @@ public class AnalysisApplicationValidator {
     List<ValidatedTag> tags = validateTags(request);
     List<ValidatedItem> items = validateItems(request);
     List<ValidatedSelectedRelation> selectedRelations = validateSelectedRelations(request);
+    String selectionSchemaVersion = validateSelectionSchemaVersion(request, items);
     boolean selectedTypeIsRepresented =
         items.stream().anyMatch(item -> item.kind().equals(selectedType));
     if (!selectedTypeIsRepresented) {
@@ -46,31 +49,41 @@ public class AnalysisApplicationValidator {
     }
 
     return new ValidatedApply(
-        request.expectedMemoRevision(), selectedType, title, tags, items, selectedRelations);
+        request.expectedMemoRevision(),
+        selectedType,
+        title,
+        tags,
+        items,
+        selectedRelations,
+        selectionSchemaVersion);
   }
 
   public ValidatedApply canonicalizeDueTimeZone(ValidatedApply selection, String sourceTimeZone) {
     String canonicalTimeZone = requireTimeZone(sourceTimeZone, "memo source time zone");
+    ZoneId zone = ZoneId.of(canonicalTimeZone);
     List<ValidatedItem> items =
         selection.items().stream()
             .map(
                 item -> {
                   ValidatedDue due = item.due();
-                  if (due == null) {
-                    return item;
-                  }
+                  ValidatedEventSchedule eventSchedule = item.eventSchedule();
                   return new ValidatedItem(
                       item.proposalCandidateId(),
                       item.kind(),
                       item.title(),
-                      new ValidatedDue(
-                          due.surfaceText(),
-                          due.originalValue(),
-                          due.precision(),
-                          canonicalTimeZone,
-                          due.timeSpecified(),
-                          due.dueInstant(),
-                          due.dueLocalDate()));
+                      due == null
+                          ? null
+                          : new ValidatedDue(
+                              due.surfaceText(),
+                              due.originalValue(),
+                              due.precision(),
+                              canonicalTimeZone,
+                              due.timeSpecified(),
+                              due.dueInstant(),
+                              due.dueLocalDate()),
+                      eventSchedule == null
+                          ? null
+                          : canonicalizeEventSchedule(eventSchedule, zone));
                 })
             .toList();
     return new ValidatedApply(
@@ -79,7 +92,52 @@ public class AnalysisApplicationValidator {
         selection.title(),
         selection.selectedTags(),
         items,
-        selection.selectedRelations());
+        selection.selectedRelations(),
+        selection.selectionSchemaVersion());
+  }
+
+  private ValidatedEventSchedule canonicalizeEventSchedule(
+      ValidatedEventSchedule schedule, ZoneId zone) {
+    if ("TIMED".equals(schedule.mode())) {
+      validateEventOffset(schedule.originalStart(), zone);
+      if (schedule.originalEnd() != null) {
+        validateEventOffset(schedule.originalEnd(), zone);
+      }
+    }
+    return new ValidatedEventSchedule(
+        schedule.mode(),
+        schedule.originalStart(),
+        schedule.originalEnd(),
+        zone.getId(),
+        schedule.startInstant(),
+        schedule.endInstant(),
+        schedule.startLocalDate(),
+        schedule.endLocalDateExclusive());
+  }
+
+  private void validateEventOffset(String originalValue, ZoneId zone) {
+    OffsetDateTime value = OffsetDateTime.parse(originalValue);
+    if (!zone.getRules().getValidOffsets(value.toLocalDateTime()).contains(value.getOffset())) {
+      throw invalid(
+          "EVENT_SCHEDULE_ZONE_OFFSET_MISMATCH",
+          "A timed event offset must match the immutable memo revision time zone.");
+    }
+  }
+
+  private String validateSelectionSchemaVersion(Apply request, List<ValidatedItem> validatedItems) {
+    String version = request.selectionSchemaVersion();
+    if (version != null && !"2".equals(version)) {
+      throw invalid(
+          "INVALID_SELECTION_SCHEMA_VERSION", "The selection schema version is not supported.");
+    }
+    boolean containsEventSchedule =
+        validatedItems.stream().anyMatch(item -> item.eventSchedule() != null);
+    if (containsEventSchedule && !"2".equals(version)) {
+      throw invalid(
+          "EVENT_SCHEDULE_VERSION_REQUIRED",
+          "An event schedule requires selectionSchemaVersion 2.");
+    }
+    return version;
   }
 
   private List<ValidatedTag> validateTags(Apply request) {
@@ -126,10 +184,15 @@ public class AnalysisApplicationValidator {
       String kind = requireItemKind(item.kind(), "items.kind");
       String itemTitle = boundedText(item.title(), 200, "items.title");
       ValidatedDue due = validateDue(item.due());
+      ValidatedEventSchedule eventSchedule = validateEventSchedule(item.eventSchedule());
       if (due != null && !"TASK".equals(kind)) {
         throw invalid("DUE_REQUIRES_TASK", "Only a TASK item may contain a due value.");
       }
-      items.add(new ValidatedItem(proposalCandidateId, kind, itemTitle, due));
+      if (eventSchedule != null && !"EVENT".equals(kind)) {
+        throw invalid(
+            "EVENT_SCHEDULE_REQUIRES_EVENT", "Only an EVENT item may contain an event schedule.");
+      }
+      items.add(new ValidatedItem(proposalCandidateId, kind, itemTitle, due, eventSchedule));
     }
     return List.copyOf(items);
   }
@@ -173,6 +236,67 @@ public class AnalysisApplicationValidator {
       case "APPROXIMATE", "UNKNOWN" -> validateImprecise(due, surfaceText);
       default -> throw new IllegalStateException("Unexpected date precision.");
     };
+  }
+
+  private ValidatedEventSchedule validateEventSchedule(EventSchedule schedule) {
+    if (schedule == null) {
+      return null;
+    }
+    if (!EVENT_SCHEDULE_MODES.contains(schedule.mode())) {
+      throw invalid("INVALID_EVENT_SCHEDULE_MODE", "The event schedule mode is not supported.");
+    }
+    requireTimeZone(schedule.timeZone(), "items.eventSchedule.timeZone");
+    return switch (schedule.mode()) {
+      case "TIMED" -> validateTimedEventSchedule(schedule);
+      case "ALL_DAY" -> validateAllDayEventSchedule(schedule);
+      default -> throw new IllegalStateException("Unexpected event schedule mode.");
+    };
+  }
+
+  private ValidatedEventSchedule validateTimedEventSchedule(EventSchedule schedule) {
+    try {
+      Instant start =
+          OffsetDateTime.parse(requiredEventValue(schedule.start(), "start")).toInstant();
+      Instant end =
+          schedule.end() == null
+              ? null
+              : OffsetDateTime.parse(requiredEventValue(schedule.end(), "end")).toInstant();
+      if (start.getNano() != 0 || (end != null && end.getNano() != 0)) {
+        throw invalid(
+            "INVALID_EVENT_SCHEDULE_PRECISION",
+            "A timed event start and end must use whole-second precision.");
+      }
+      if (end != null && !end.isAfter(start)) {
+        throw invalid("INVALID_EVENT_SCHEDULE_RANGE", "A timed event end must be after its start.");
+      }
+      return new ValidatedEventSchedule(
+          "TIMED", schedule.start(), schedule.end(), schedule.timeZone(), start, end, null, null);
+    } catch (DateTimeParseException exception) {
+      throw invalid(
+          "INVALID_EVENT_SCHEDULE_VALUE",
+          "A timed event start and end must use ISO-8601 timestamps with offsets.");
+    }
+  }
+
+  private ValidatedEventSchedule validateAllDayEventSchedule(EventSchedule schedule) {
+    try {
+      LocalDate start = LocalDate.parse(requiredEventValue(schedule.start(), "start"));
+      LocalDate end =
+          schedule.end() == null
+              ? null
+              : LocalDate.parse(requiredEventValue(schedule.end(), "end"));
+      if (end != null && !end.isAfter(start)) {
+        throw invalid(
+            "INVALID_EVENT_SCHEDULE_RANGE",
+            "An all-day event exclusive end date must be after its start date.");
+      }
+      return new ValidatedEventSchedule(
+          "ALL_DAY", schedule.start(), schedule.end(), schedule.timeZone(), null, null, start, end);
+    } catch (DateTimeParseException exception) {
+      throw invalid(
+          "INVALID_EVENT_SCHEDULE_VALUE",
+          "An all-day event start and exclusive end must use ISO-8601 calendar dates.");
+    }
   }
 
   private ValidatedDue validateDateOnly(Due due, String surfaceText) {
@@ -245,6 +369,14 @@ public class AnalysisApplicationValidator {
     return value;
   }
 
+  private String requiredEventValue(String value, String field) {
+    if (value == null || value.isBlank()) {
+      throw invalid(
+          "INVALID_EVENT_SCHEDULE_VALUE", "The event schedule " + field + " is required.");
+    }
+    return value;
+  }
+
   private String optionalCandidateId(String raw) {
     if (raw == null) {
       return null;
@@ -286,7 +418,18 @@ public class AnalysisApplicationValidator {
       String title,
       List<ValidatedTag> selectedTags,
       List<ValidatedItem> items,
-      List<ValidatedSelectedRelation> selectedRelations) {
+      List<ValidatedSelectedRelation> selectedRelations,
+      String selectionSchemaVersion) {
+    public ValidatedApply(
+        int expectedMemoRevision,
+        String selectedType,
+        String title,
+        List<ValidatedTag> selectedTags,
+        List<ValidatedItem> items,
+        List<ValidatedSelectedRelation> selectedRelations) {
+      this(expectedMemoRevision, selectedType, title, selectedTags, items, selectedRelations, null);
+    }
+
     public ValidatedApply {
       selectedTags = List.copyOf(selectedTags);
       items = List.copyOf(items);
@@ -297,7 +440,15 @@ public class AnalysisApplicationValidator {
   public record ValidatedTag(UUID existingTagId, String newCanonicalName, String normalizedName) {}
 
   public record ValidatedItem(
-      String proposalCandidateId, String kind, String title, ValidatedDue due) {}
+      String proposalCandidateId,
+      String kind,
+      String title,
+      ValidatedDue due,
+      ValidatedEventSchedule eventSchedule) {
+    public ValidatedItem(String proposalCandidateId, String kind, String title, ValidatedDue due) {
+      this(proposalCandidateId, kind, title, due, null);
+    }
+  }
 
   public record ValidatedSelectedRelation(int proposalIndex) {}
 
@@ -309,4 +460,14 @@ public class AnalysisApplicationValidator {
       boolean timeSpecified,
       Instant dueInstant,
       LocalDate dueLocalDate) {}
+
+  public record ValidatedEventSchedule(
+      String mode,
+      String originalStart,
+      String originalEnd,
+      String timeZone,
+      Instant startInstant,
+      Instant endInstant,
+      LocalDate startLocalDate,
+      LocalDate endLocalDateExclusive) {}
 }

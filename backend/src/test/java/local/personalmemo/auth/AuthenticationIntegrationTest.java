@@ -138,6 +138,17 @@ class AuthenticationIntegrationTest {
     assertThat(unauthenticated.getResponse().getStatus()).isEqualTo(401);
     assertThat(body(unauthenticated).path("code").asText()).isEqualTo("AUTHENTICATION_REQUIRED");
 
+    MvcResult unauthenticatedCalendar = mvc.perform(get("/api/v1/events/calendar.ics")).andReturn();
+    assertThat(unauthenticatedCalendar.getResponse().getStatus()).isEqualTo(401);
+    assertThat(body(unauthenticatedCalendar).path("code").asText())
+        .isEqualTo("AUTHENTICATION_REQUIRED");
+
+    MvcResult unauthenticatedModelEvidence =
+        mvc.perform(get("/api/v1/analysis-path-evidence/summary")).andReturn();
+    assertThat(unauthenticatedModelEvidence.getResponse().getStatus()).isEqualTo(401);
+    assertThat(body(unauthenticatedModelEvidence).path("code").asText())
+        .isEqualTo("AUTHENTICATION_REQUIRED");
+
     MvcResult unauthenticatedSearch =
         mvc.perform(
                 csrfPost("/api/v1/search/memos", null)
@@ -625,6 +636,34 @@ class AuthenticationIntegrationTest {
     assertThat(blockedReviewOutcomeRead.getResponse().getStatus()).isEqualTo(409);
     assertThat(body(blockedReviewOutcomeRead).path("code").asText())
         .isEqualTo("SESSION_OWNER_CHANGED");
+
+    MvcResult blockedModelEvidenceRead =
+        mvc.perform(
+                get("/api/v1/analysis-path-evidence/summary")
+                    .cookie(secondSession)
+                    .header(EXPECTED_OWNER_HEADER, firstOwnerId))
+            .andReturn();
+    assertThat(blockedModelEvidenceRead.getResponse().getStatus()).isEqualTo(409);
+    assertThat(body(blockedModelEvidenceRead).path("code").asText())
+        .isEqualTo("SESSION_OWNER_CHANGED");
+
+    MvcResult blockedEventRead =
+        mvc.perform(
+                get("/api/v1/events")
+                    .cookie(secondSession)
+                    .header(EXPECTED_OWNER_HEADER, firstOwnerId))
+            .andReturn();
+    assertThat(blockedEventRead.getResponse().getStatus()).isEqualTo(409);
+    assertThat(body(blockedEventRead).path("code").asText()).isEqualTo("SESSION_OWNER_CHANGED");
+
+    MvcResult blockedCalendarRead =
+        mvc.perform(
+                get("/api/v1/events/calendar.ics")
+                    .cookie(secondSession)
+                    .header(EXPECTED_OWNER_HEADER, firstOwnerId))
+            .andReturn();
+    assertThat(blockedCalendarRead.getResponse().getStatus()).isEqualTo(409);
+    assertThat(body(blockedCalendarRead).path("code").asText()).isEqualTo("SESSION_OWNER_CHANGED");
 
     UUID memoId = UUID.randomUUID();
     String idempotencyKey = "cross-account-create-" + memoId;

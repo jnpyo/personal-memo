@@ -33,6 +33,39 @@ export function isValidIsoDate(value: string | null): value is string {
   return day <= daysInMonth[month - 1];
 }
 
+export function nextIsoDate(value: string): string | null {
+  if (!isValidIsoDate(value)) return null;
+  let year = Number(value.slice(0, 4));
+  let month = Number(value.slice(5, 7));
+  let day = Number(value.slice(8, 10));
+  const daysInMonth = [
+    31,
+    isLeapYear(year) ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+  if (day < daysInMonth[month - 1]!) {
+    day += 1;
+  } else if (month < 12) {
+    month += 1;
+    day = 1;
+  } else {
+    if (year >= 9999) return null;
+    year += 1;
+    month = 1;
+    day = 1;
+  }
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
 /**
  * Accepts the RFC 3339 subset also accepted by the backend's OffsetDateTime parser.
  * Requiring seconds and limiting fractions to nanoseconds keeps browser and server
@@ -86,4 +119,19 @@ export function compareOffsetDateTimes(left: string, right: string): number {
     return leftInstant.epochSeconds < rightInstant.epochSeconds ? -1 : 1;
   }
   return leftInstant.nanoseconds - rightInstant.nanoseconds;
+}
+
+export function differenceOffsetDateTimesInNanoseconds(
+  fromInclusive: string,
+  toExclusive: string,
+): bigint {
+  const from = parseOffsetDateTime(fromInclusive);
+  const to = parseOffsetDateTime(toExclusive);
+  if (!from || !to) {
+    throw new TypeError('Both values must be valid offset date-times.');
+  }
+  return (
+    BigInt(to.epochSeconds - from.epochSeconds) * 1_000_000_000n +
+    BigInt(to.nanoseconds - from.nanoseconds)
+  );
 }

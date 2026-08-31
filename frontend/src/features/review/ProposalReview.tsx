@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type {
   DateCandidate,
   ItemKind,
+  ProposalEventScheduleCandidate,
   RelationReviewCandidate,
   TagCandidate,
 } from '../../shared/api/types';
@@ -10,28 +11,39 @@ import {
   addManualItem,
   changeItemDue,
   changeItemDueValue,
+  changeItemEventSchedule,
+  changeItemEventScheduleField,
+  changeItemEventScheduleMode,
   changeItemKind,
   changeItemTitle,
   changeReviewTitle,
   changeRelationSelection,
   changeSelectedType,
   createCustomDateOnly,
+  createCustomTimedEventSchedule,
+  eventScheduleFromDateCandidate,
+  eventScheduleFromProposalCandidate,
   isItemKind,
   isValidDue,
+  isValidEventSchedule,
   isValidReviewDraft,
   isRelationSelectionReady,
   isRelationSourceApplied,
   ITEM_KINDS,
   preferredItemKind,
+  referencedProposalDateCandidateIds,
   removeReviewItem,
   requiresExplicitDateMapping,
   sameDateCandidate,
+  sameEventScheduleCandidate,
   usableDateCandidates,
   type ReviewDraft,
 } from './reviewModel';
 
 type Props = {
   review: ReviewDraft;
+  sourceTimeZone?: string | null;
+  sourceTimeZoneError?: string | null;
   relationReviewCandidates: RelationReviewCandidate[] | null;
   relationReviewLoading: boolean;
   relationReviewError: string | null;
@@ -41,6 +53,7 @@ type Props = {
   onPostpone: () => void;
   onReject: () => void;
   onRetryRelationReview: () => void;
+  onRetrySourceTimeZone?: () => void;
   onTransientDirtyChange: (dirty: boolean) => void;
   feedback: Feedback | null;
   retryScope?: string;
@@ -115,6 +128,7 @@ const CLOUD_EVIDENCE_FIELD_SET = new Set<string>(CLOUD_EVIDENCE_FIELDS);
 type CloudReviewDisposition = 'CONCISE' | 'CONSENT_REQUIRED' | 'DETAILED';
 
 const RESERVED_CLOUD_DESCRIPTOR_VALUES = new Set(['none', 'legacy-unknown', 'unavailable']);
+const LOCAL_MACHINE_MEMO_CONTENT = 'LOCAL_MACHINE_MEMO_CONTENT';
 
 function hasOwn(metadata: Record<string, unknown>, field: string): boolean {
   return Object.prototype.hasOwnProperty.call(metadata, field);
@@ -182,7 +196,11 @@ function cloudReviewDisposition(review: ReviewDraft): CloudReviewDisposition {
       : 'DETAILED';
   }
 
-  if (transferMode !== 'NO_NETWORK' && transferMode !== 'EXTERNAL_MEMO_CONTENT') {
+  if (
+    transferMode !== 'NO_NETWORK' &&
+    transferMode !== LOCAL_MACHINE_MEMO_CONTENT &&
+    transferMode !== 'EXTERNAL_MEMO_CONTENT'
+  ) {
     return 'DETAILED';
   }
   if (
@@ -205,8 +223,20 @@ function requiresDetailedCloudReview(review: ReviewDraft): boolean {
   return cloudReviewDisposition(review) !== 'CONCISE';
 }
 
+function isSuccessfulLocalModelProposal(review: ReviewDraft): boolean {
+  return cloudReviewDisposition(review) === 'CONCISE' &&
+    review.proposal.providerMetadata.cloudTransferMode === LOCAL_MACHINE_MEMO_CONTENT &&
+    review.proposal.providerMetadata.cloudOutcome === 'SUCCESS';
+}
+
 function initialStep(review: ReviewDraft): MainReviewStep {
-  if (review.proposal.relationCandidates.length > 0) return 'EDIT';
+  if (
+    review.proposal.relationCandidates.length > 0 ||
+    (review.proposal.schemaVersion === '3' &&
+      review.proposal.itemCandidates.some((item) => item.eventScheduleCandidates.length > 0))
+  ) {
+    return 'EDIT';
+  }
   return suggestedType(review) &&
     isValidReviewDraft(review) &&
     !requiresExplicitDateMapping(review) &&
@@ -240,8 +270,35 @@ function dueSummary(due: DateCandidate | null): string | null {
   return interpreted || source || null;
 }
 
+function eventScheduleSummary(item: ReviewDraft['items'][number]): string {
+  const schedule = item.eventSchedule;
+  if (!schedule) return '시간 미정 · 외부 공유 대상 아님';
+  const end = schedule.end.trim();
+  if (schedule.mode === 'ALL_DAY') {
+    return end ? `종일 ${schedule.start} ~ ${end} 전` : `종일 ${schedule.start}`;
+  }
+  return end ? `${schedule.start} ~ ${end}` : schedule.start;
+}
+
+function eventScheduleCandidateEndLabel(
+  candidate: ProposalEventScheduleCandidate,
+  review: ReviewDraft,
+): string | null {
+  if (!candidate.end) return null;
+  const end = review.proposal.dateCandidates.find(
+    (date) => date.candidateId === candidate.end!.dateCandidateId,
+  );
+  if (!end) return null;
+  const boundary = candidate.end.boundary === 'INCLUSIVE_THROUGH_VALUE'
+    ? '해당 날짜 포함'
+    : '해당 값 미포함';
+  return `${dateCandidateLabel(end)} · ${boundary}`;
+}
+
 export function ProposalReview({
   review,
+  sourceTimeZone = null,
+  sourceTimeZoneError = null,
   relationReviewCandidates,
   relationReviewLoading,
   relationReviewError,
@@ -251,6 +308,7 @@ export function ProposalReview({
   onPostpone,
   onReject,
   onRetryRelationReview,
+  onRetrySourceTimeZone,
   onTransientDirtyChange,
   feedback,
   retryScope,
@@ -275,13 +333,12 @@ export function ProposalReview({
   const addItemButtonRef = useRef<HTMLButtonElement>(null);
   const pendingItemFocus = useRef<number | 'ADD_OR_TYPE' | null>(null);
   const dateCandidates = usableDateCandidates(review.proposal);
-  const datesNeedingReview = review.proposal.schemaVersion === '2'
+  const referencedDateCandidateIds = referencedProposalDateCandidateIds(review.proposal);
+  const datesNeedingReview = review.proposal.schemaVersion !== '1'
     ? review.proposal.dateCandidates.filter(
         (date) =>
           date.candidateId === null ||
-          !review.proposal.itemCandidates.some(
-            (item) => item.dueDateCandidateId === date.candidateId,
-          ),
+          !referencedDateCandidateIds.has(date.candidateId),
       )
     : review.proposal.dateCandidates.filter(
         (date) => !dateCandidates.some((candidate) => sameDateCandidate(candidate, date)),
@@ -290,7 +347,9 @@ export function ProposalReview({
   const isValid = isValidReviewDraft(review);
   const hasPendingTag = newTag.trim().length > 0;
   const relationSelectionReady = isRelationSelectionReady(review, relationReviewCandidates);
-  const canApply = isValid && !hasPendingTag && relationSelectionReady;
+  const hasScheduledEvent = review.items.some((item) => item.eventSchedule !== null);
+  const scheduleZoneReady = !hasScheduledEvent || sourceTimeZone !== null;
+  const canApply = isValid && !hasPendingTag && relationSelectionReady && scheduleZoneReady;
   const [retryOperation, retryProposalId] = retryScope?.split(':') ?? [];
   const retryMatchesReview = retryProposalId === review.proposalId;
   const canShowRetry = !busy && retryMatchesReview && (
@@ -409,6 +468,7 @@ export function ProposalReview({
   );
 
   const currentCloudDisposition = cloudReviewDisposition(review);
+  const localModelAssisted = isSuccessfulLocalModelProposal(review);
   const cloudReviewNotice = currentCloudDisposition !== 'CONCISE' && (
     <div className="review-note" role="status">
       <p>
@@ -423,7 +483,7 @@ export function ProposalReview({
   const dateReviewNotice = datesNeedingReview.length > 0 && (
     <div className="review-note" role="status">
       <p>
-        AI가 다음 날짜를 특정 할 일의 마감으로 안전하게 연결하지 못해 자동 적용하지 않습니다.
+        AI가 다음 날짜를 특정 할 일의 마감이나 일정 후보로 안전하게 연결하지 못해 자동 적용하지 않습니다.
       </p>
       <ul>
         {datesNeedingReview.map((candidate, index) => (
@@ -432,7 +492,22 @@ export function ProposalReview({
           </li>
         ))}
       </ul>
-      <p>필요하면 각 할 일에서 정확한 날짜를 고르거나 마감 없음을 선택해 주세요.</p>
+      <p>필요하면 각 할 일이나 일정에서 정확한 날짜를 고르거나 날짜를 포함하지 마세요.</p>
+    </div>
+  );
+
+  const sourceZoneReviewNotice = hasScheduledEvent && !sourceTimeZone && (
+    <div className="review-note" role={sourceTimeZoneError ? 'alert' : 'status'}>
+      <p>
+        {sourceTimeZoneError
+          ? '메모를 작성한 시간대를 불러오지 못했습니다. 일정 승인 전에 다시 시도해 주세요.'
+          : '메모를 작성한 시간대를 확인하고 있습니다.'}
+      </p>
+      {sourceTimeZoneError && onRetrySourceTimeZone && (
+        <button type="button" className="secondary-button" onClick={onRetrySourceTimeZone}>
+          시간대 다시 불러오기
+        </button>
+      )}
     </div>
   );
 
@@ -466,7 +541,12 @@ export function ProposalReview({
         <section ref={scrollRef} className="review-card review-dialog__surface">
           <header className="review-dialog__header">
             <div>
-              <span className="eyebrow">AI PROPOSAL · NOT APPLIED</span>
+              <div className="review-dialog__provenance">
+                <span className="eyebrow">AI PROPOSAL · NOT APPLIED</span>
+                {localModelAssisted && (
+                  <span className="review-local-model-badge">로컬 LLM 보조 제안</span>
+                )}
+              </div>
               <h2 id="review-title" ref={headingRef} tabIndex={-1}>
                 AI 제안을 확인해 주세요
               </h2>
@@ -491,6 +571,8 @@ export function ProposalReview({
           {cloudReviewNotice}
 
           {dateReviewNotice}
+
+          {sourceZoneReviewNotice}
 
           {step === 'CONFIRM' && (
             <div className="review-confirmation">
@@ -533,6 +615,12 @@ export function ProposalReview({
                         <span>{TYPE_LABEL[item.kind]}</span>
                         <strong>{item.title}</strong>
                         {item.kind === 'TASK' && <small>마감 {due ?? '없음'}</small>}
+                        {item.kind === 'EVENT' && (
+                          <small>
+                            일정 {eventScheduleSummary(item)}
+                            {item.eventSchedule && sourceTimeZone ? ` · ${sourceTimeZone}` : ''}
+                          </small>
+                        )}
                       </li>
                     );
                   })}
@@ -739,6 +827,25 @@ export function ProposalReview({
                     : 'none';
                   const dueIsValid = item.due === null || isValidDue(item.due);
                   const dateHelpId = `item-${index}-date-help`;
+                  const matchedEventCandidate = item.eventSchedule
+                    ? dateCandidates.findIndex((candidate) =>
+                        sameEventScheduleCandidate(item.eventSchedule!, candidate),
+                      )
+                    : -1;
+                  const eventScheduleCandidates = item.eventScheduleCandidates ?? [];
+                  const eventScheduleChoice = item.eventSchedule
+                    ? item.eventScheduleProposalCandidateId
+                      ? 'proposal'
+                      : matchedEventCandidate >= 0
+                      ? String(matchedEventCandidate)
+                      : 'custom'
+                    : 'none';
+                  const eventScheduleIsValid =
+                    item.eventSchedule === null || isValidEventSchedule(item.eventSchedule);
+                  const eventScheduleIsReady =
+                    eventScheduleIsValid &&
+                    (item.eventSchedule === null || sourceTimeZone !== null);
+                  const eventHelpId = `item-${index}-event-help`;
 
                   return (
                     <fieldset className="item-editor" key={item.candidateId ?? `${item.kind}-${index}`}>
@@ -863,6 +970,226 @@ export function ProposalReview({
                             {dueIsValid
                               ? '각 할 일의 날짜는 별도로 선택되며, 날짜만 있는 값은 현지 달력 날짜로 보존됩니다.'
                               : '유효한 날짜를 입력하거나 날짜 포함 안 함을 선택해 주세요.'}
+                          </p>
+                        </div>
+                      )}
+
+                      {item.kind === 'EVENT' && (
+                        <div className="event-time-editor">
+                          {eventScheduleCandidates.length > 0 && (
+                            <section
+                              className="review-note event-schedule-candidates"
+                              aria-label={`항목 ${index + 1} AI 일정 후보`}
+                            >
+                              <strong>AI 일정 후보 · 아직 미적용</strong>
+                              <p>
+                                후보는 제안일 뿐입니다. ‘이 후보 사용’을 눌러 편집칸에 복사한 뒤
+                                마지막 승인 버튼을 눌러야 저장됩니다.
+                              </p>
+                              <ul>
+                                {eventScheduleCandidates.map((candidate) => {
+                                  const start = review.proposal.dateCandidates.find(
+                                    (date) => date.candidateId === candidate.startDateCandidateId,
+                                  );
+                                  const endLabel = eventScheduleCandidateEndLabel(candidate, review);
+                                  const suggested =
+                                    item.suggestedEventScheduleCandidateId === candidate.candidateId;
+                                  const selected =
+                                    item.eventScheduleProposalCandidateId === candidate.candidateId;
+                                  return (
+                                    <li key={candidate.candidateId}>
+                                      <span>
+                                        {suggested ? 'AI 추천 후보 · 신뢰하지 않은 제안' : 'AI 후보'}
+                                      </span>
+                                      <strong>
+                                        {candidate.mode === 'TIMED' ? '시각 지정' : '종일'}
+                                      </strong>
+                                      {start && <small>시작 {dateCandidateLabel(start)}</small>}
+                                      {endLabel && <small>종료 {endLabel}</small>}
+                                      <button
+                                        type="button"
+                                        className="secondary-button"
+                                        aria-pressed={selected}
+                                        onClick={() => {
+                                          const schedule = eventScheduleFromProposalCandidate(
+                                            review.proposal,
+                                            candidate,
+                                          );
+                                          if (schedule) {
+                                            changeDraft(changeItemEventSchedule(
+                                              review,
+                                              index,
+                                              schedule,
+                                              candidate.candidateId,
+                                            ));
+                                          }
+                                        }}
+                                      >
+                                        {selected ? '이 후보 사용 중' : '이 후보 사용'}
+                                      </button>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            </section>
+                          )}
+                          <label>
+                            일정 시작
+                            <select
+                              aria-label={`항목 ${index + 1} 일정 시작`}
+                              aria-describedby={eventHelpId}
+                              value={eventScheduleChoice}
+                              onChange={(event) => {
+                                const choice = event.target.value;
+                                if (choice === 'none') {
+                                  changeDraft(changeItemEventSchedule(review, index, null));
+                                } else if (choice === 'proposal') {
+                                  return;
+                                } else if (choice === 'custom') {
+                                  changeDraft(changeItemEventSchedule(
+                                    review,
+                                    index,
+                                    createCustomTimedEventSchedule(),
+                                  ));
+                                } else {
+                                  changeDraft(changeItemEventSchedule(
+                                    review,
+                                    index,
+                                    eventScheduleFromDateCandidate(
+                                      dateCandidates[Number(choice)],
+                                    ),
+                                  ));
+                                }
+                              }}
+                            >
+                              <option value="none">시간 미정으로 저장</option>
+                              {item.eventScheduleProposalCandidateId && (
+                                <option value="proposal">AI 일정 후보에서 선택됨</option>
+                              )}
+                              {dateCandidates.map((candidate, candidateIndex) => (
+                                <option
+                                  key={`event-${candidate.precision}-${candidateIndex}`}
+                                  value={candidateIndex}
+                                >
+                                  {dateCandidateLabel(candidate)}
+                                </option>
+                              ))}
+                              <option value="custom">시작 직접 입력</option>
+                            </select>
+                          </label>
+
+                          {item.eventSchedule && (
+                            <label>
+                              일정 방식
+                              <select
+                                aria-label={`항목 ${index + 1} 일정 방식`}
+                                value={item.eventSchedule.mode}
+                                onChange={(event) =>
+                                  changeDraft(changeItemEventScheduleMode(
+                                    review,
+                                    index,
+                                    event.target.value as 'TIMED' | 'ALL_DAY',
+                                  ))
+                                }
+                              >
+                                <option value="TIMED">시각 지정</option>
+                                <option value="ALL_DAY">종일</option>
+                              </select>
+                            </label>
+                          )}
+
+                          {item.eventSchedule?.mode === 'TIMED' && (
+                            <>
+                              <label>
+                                시작 시각 (UTC offset 포함)
+                                <input
+                                  type="text"
+                                  value={item.eventSchedule.start}
+                                  aria-invalid={!eventScheduleIsReady}
+                                  aria-describedby={eventHelpId}
+                                  placeholder="2026-08-24T18:00:00+09:00"
+                                  onChange={(event) =>
+                                    changeDraft(changeItemEventScheduleField(
+                                      review,
+                                      index,
+                                      'start',
+                                      event.target.value,
+                                    ))
+                                  }
+                                />
+                              </label>
+                              <label>
+                                종료 시각 (선택)
+                                <input
+                                  type="text"
+                                  value={item.eventSchedule.end}
+                                  aria-invalid={!eventScheduleIsReady}
+                                  aria-describedby={eventHelpId}
+                                  placeholder="2026-08-24T19:00:00+09:00"
+                                  onChange={(event) =>
+                                    changeDraft(changeItemEventScheduleField(
+                                      review,
+                                      index,
+                                      'end',
+                                      event.target.value,
+                                    ))
+                                  }
+                                />
+                              </label>
+                            </>
+                          )}
+
+                          {item.eventSchedule?.mode === 'ALL_DAY' && (
+                            <>
+                              <label>
+                                시작 날짜
+                                <input
+                                  type="date"
+                                  value={item.eventSchedule.start}
+                                  aria-invalid={!eventScheduleIsReady}
+                                  aria-describedby={eventHelpId}
+                                  onChange={(event) =>
+                                    changeDraft(changeItemEventScheduleField(
+                                      review,
+                                      index,
+                                      'start',
+                                      event.target.value,
+                                    ))
+                                  }
+                                />
+                              </label>
+                              <label>
+                                종료 다음 날짜 (선택·미포함)
+                                <input
+                                  type="date"
+                                  value={item.eventSchedule.end}
+                                  aria-invalid={!eventScheduleIsReady}
+                                  aria-describedby={eventHelpId}
+                                  onChange={(event) =>
+                                    changeDraft(changeItemEventScheduleField(
+                                      review,
+                                      index,
+                                      'end',
+                                      event.target.value,
+                                    ))
+                                  }
+                                />
+                              </label>
+                            </>
+                          )}
+
+                          <p
+                            id={eventHelpId}
+                            className={eventScheduleIsReady ? 'field-help' : 'field-error'}
+                            role={eventScheduleIsReady ? undefined : 'alert'}
+                          >
+                            {!eventScheduleIsValid
+                              ? '시작을 정확히 입력하고, 종료가 있으면 시작보다 뒤로 지정해 주세요.'
+                              : item.eventSchedule && !sourceTimeZone
+                                ? '메모를 작성한 시간대를 불러온 뒤 승인할 수 있습니다.'
+                                : item.eventSchedule
+                                  ? `메모 revision의 시간대 ${sourceTimeZone}로 저장합니다. 종료를 비우면 임의 시간을 만들지 않습니다.`
+                                  : '시간 미정 일정은 저장할 수 있지만 캘린더 공유 대상에는 포함되지 않습니다.'}
                           </p>
                         </div>
                       )}

@@ -2,20 +2,36 @@ import { toApiError } from './errors';
 import { decodeProposal, decodeProposalSummaries } from './proposalDecoder';
 import type { ExpectedProposalIdentity } from './proposalDecoder';
 import { decodeReviewOutcomeSummary } from './reviewOutcomeDecoder';
+import { decodeAnalysisPathEvidenceSummary } from './analysisPathEvidenceSummaryDecoder';
 import { decodeRelationReviewCandidates } from './relationReviewDecoder';
 import {
   assertGraphNeighborhoodExpectedCenter,
   decodeGraphNeighborhoodPage,
 } from './graphNeighborhoodDecoder';
 import { decodeMemoSearchPage } from './searchDecoder';
+import {
+  decodeCalendarFeedDetail,
+  decodeCalendarFeedEligibleEvents,
+  decodeCalendarFeedPublicationCapability,
+  decodeCalendarFeedSummaries,
+} from './calendarFeedDecoder';
 import type {
+  AddCalendarFeedEventRequest,
+  AnalysisPathEvidenceSummary,
   AnalysisRun,
   AnalysisReviewOutcomeSummary,
   ApplicationResult,
   ApplyProposalRequest,
   AuthCapabilities,
   AuthSession,
+  CalendarEvent,
+  CalendarFeedDetail,
+  CalendarFeedEligibleEvents,
+  CalendarFeedPublicationCapability,
+  CalendarFeedSummary,
+  CreateCalendarFeedRequest,
   CsrfToken,
+  EnableExternalCalendarFeedPublicationRequest,
   GraphProjection,
   GraphNode,
   LatestApplication,
@@ -26,10 +42,13 @@ import type {
   MemoStatus,
   Proposal,
   RelationReviewCandidate,
+  RotateCalendarFeedRequest,
   ReviewDispositionResult,
   Task,
   TaskStatus,
+  UpdateCalendarFeedRequest,
   UpdateMemoRequest,
+  VersionedCalendarFeedRequest,
 } from './types';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
@@ -38,7 +57,7 @@ export const SESSION_OWNER_CHANGED_EVENT = 'personal-memo:session-owner-changed'
 export const EXPECTED_OWNER_ID_HEADER = 'X-Expected-Owner-Id';
 export const ANALYSIS_PROPOSAL_SCHEMA_VERSION_HEADER =
   'X-Analysis-Proposal-Schema-Version';
-const ANALYSIS_PROPOSAL_SCHEMA_VERSION = '2';
+const ANALYSIS_PROPOSAL_SCHEMA_VERSION = '3';
 const ANALYSIS_PROPOSAL_HEADERS = {
   [ANALYSIS_PROPOSAL_SCHEMA_VERSION_HEADER]: ANALYSIS_PROPOSAL_SCHEMA_VERSION,
 };
@@ -64,6 +83,7 @@ const SESSION_INDEPENDENT_PATHS = new Set([
   '/api/v1/auth/capabilities',
 ]);
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+type ResponseDecoder<T> = (response: Response) => Promise<T>;
 
 function readPendingLogoutOwner(): string | null {
   if (typeof window === 'undefined') return null;
@@ -116,6 +136,11 @@ function isOwnerScoped(url: string): boolean {
 }
 
 function normalizedReviewOutcomeDays(days: number): number {
+  if (!Number.isFinite(days)) return 14;
+  return Math.min(Math.max(Math.trunc(days), 1), 90);
+}
+
+function normalizedAnalysisPathEvidenceDays(days: number): number {
   if (!Number.isFinite(days)) return 14;
   return Math.min(Math.max(Math.trunc(days), 1), 90);
 }
@@ -218,6 +243,7 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
     csrfRetry = true,
     expectedEpoch = isSessionScoped(url) ? sessionEpoch : undefined,
     expectedOwnerId = isOwnerScoped(url) ? ownerId : null,
+    decode: ResponseDecoder<T> = async (response) => await response.json() as T,
   ): Promise<T> {
     if (expectedEpoch !== undefined) assertSessionEpoch(expectedEpoch);
     const token = isMutation(init)
@@ -228,17 +254,23 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
     const scopeSignal = expectedEpoch === undefined
       ? init?.signal
       : combineSignals(sessionController.signal, init?.signal);
-    const response = await fetcher(url, {
-      ...init,
-      credentials: 'same-origin',
-      ...(scopeSignal ? { signal: scopeSignal } : {}),
-      headers: {
-        ...JSON_HEADERS,
-        ...(token ? { [token.headerName]: token.token } : {}),
-        ...(expectedOwnerId ? { [EXPECTED_OWNER_ID_HEADER]: expectedOwnerId } : {}),
-        ...init?.headers,
-      },
-    });
+    let response: Response;
+    try {
+      response = await fetcher(url, {
+        ...init,
+        credentials: 'same-origin',
+        ...(scopeSignal ? { signal: scopeSignal } : {}),
+        headers: {
+          ...JSON_HEADERS,
+          ...(token ? { [token.headerName]: token.token } : {}),
+          ...(expectedOwnerId ? { [EXPECTED_OWNER_ID_HEADER]: expectedOwnerId } : {}),
+          ...init?.headers,
+        },
+      });
+    } catch (error) {
+      if (expectedEpoch !== undefined) assertSessionEpoch(expectedEpoch);
+      throw error;
+    }
     if (expectedEpoch !== undefined) assertSessionEpoch(expectedEpoch);
 
     if (csrfRetry && token && await isCsrfFailure(response)) {
@@ -246,7 +278,7 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
       csrfToken = null;
       await refreshCsrf(expectedEpoch ?? sessionEpoch);
       if (expectedEpoch !== undefined) assertSessionEpoch(expectedEpoch);
-      return request<T>(url, init, false, expectedEpoch, expectedOwnerId);
+      return request<T>(url, init, false, expectedEpoch, expectedOwnerId, decode);
     }
     if (expectedEpoch !== undefined) assertSessionEpoch(expectedEpoch);
 
@@ -276,9 +308,39 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
       return undefined as T;
     }
 
-    const payload = await response.json() as T;
+    let payload: T;
+    try {
+      payload = await decode(response);
+    } catch (error) {
+      if (expectedEpoch !== undefined) assertSessionEpoch(expectedEpoch);
+      throw error;
+    }
     if (expectedEpoch !== undefined) assertSessionEpoch(expectedEpoch);
     return payload;
+  }
+
+  async function requestCalendarBlob(url: string, init?: RequestInit): Promise<Blob | null> {
+    const expectedEpoch = isSessionScoped(url) ? sessionEpoch : undefined;
+    const expectedOwnerId = isOwnerScoped(url) ? ownerId : null;
+    const blob = await request<Blob | undefined>(
+      url,
+      init,
+      true,
+      expectedEpoch,
+      expectedOwnerId,
+      async (response) => {
+        const mediaType = response.headers
+          .get('Content-Type')
+          ?.split(';', 1)[0]
+          .trim()
+          .toLowerCase();
+        if (mediaType !== 'text/calendar') {
+          throw new Error('Invalid calendar export response');
+        }
+        return response.blob();
+      },
+    );
+    return blob ?? null;
   }
 
   return {
@@ -478,6 +540,14 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
         ),
       ),
 
+    analysisPathEvidenceSummary: async (days = 14): Promise<AnalysisPathEvidenceSummary> =>
+      decodeAnalysisPathEvidenceSummary(
+        await request<unknown>(
+          `/api/v1/analysis-path-evidence/summary?days=${normalizedAnalysisPathEvidenceDays(days)}`,
+          { cache: 'no-store' },
+        ),
+      ),
+
     apply: (proposalId: string, body: ApplyProposalRequest, idempotencyKey: string) =>
       request<ApplicationResult>(`/api/v1/analysis-proposals/${proposalId}/apply`, {
         method: 'POST',
@@ -504,6 +574,185 @@ export function createApiClient(fetcher: FetchLike = (...args) => fetch(...args)
       }),
 
     tasks: () => request<Task[]>('/api/v1/tasks'),
+
+    events: (limit = 100) =>
+      request<CalendarEvent[]>(
+        `/api/v1/events?limit=${Math.min(Math.max(Math.trunc(limit), 1), 100)}`,
+        { cache: 'no-store' },
+      ),
+
+    eventCalendarExport: (signal?: AbortSignal) =>
+      requestCalendarBlob('/api/v1/events/calendar.ics', {
+        cache: 'no-store',
+        signal,
+        headers: { Accept: 'text/calendar' },
+      }),
+
+    calendarFeedPublicationCapability: (signal?: AbortSignal) =>
+      request<CalendarFeedPublicationCapability>(
+        '/api/v1/calendar-feeds/capabilities',
+        { cache: 'no-store', signal },
+        true,
+        undefined,
+        undefined,
+        async (response) => decodeCalendarFeedPublicationCapability(await response.json()),
+      ),
+
+    calendarFeedEligibleEvents: (signal?: AbortSignal) =>
+      request<CalendarFeedEligibleEvents>(
+        '/api/v1/calendar-feeds/eligible-events',
+        { cache: 'no-store', signal },
+        true,
+        undefined,
+        undefined,
+        async (response) => decodeCalendarFeedEligibleEvents(await response.json()),
+      ),
+
+    calendarFeeds: (signal?: AbortSignal) =>
+      request<CalendarFeedSummary[]>(
+        '/api/v1/calendar-feeds',
+        { cache: 'no-store', signal },
+        true,
+        undefined,
+        undefined,
+        async (response) => decodeCalendarFeedSummaries(await response.json()),
+      ),
+
+    calendarFeed: (feedId: string, signal?: AbortSignal) =>
+      request<CalendarFeedDetail>(
+        `/api/v1/calendar-feeds/${encodeURIComponent(feedId)}`,
+        { cache: 'no-store', signal },
+        true,
+        undefined,
+        undefined,
+        async (response) => decodeCalendarFeedDetail(await response.json()),
+      ),
+
+    createCalendarFeed: (
+      body: CreateCalendarFeedRequest,
+      idempotencyKey: string,
+    ) => request<CalendarFeedDetail>(
+      '/api/v1/calendar-feeds',
+      {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      },
+      true,
+      undefined,
+      undefined,
+      async (response) => decodeCalendarFeedDetail(await response.json()),
+    ),
+
+    enableExternalCalendarFeedPublication: (
+      feedId: string,
+      body: EnableExternalCalendarFeedPublicationRequest,
+      idempotencyKey: string,
+    ) => request<CalendarFeedDetail>(
+      `/api/v1/calendar-feeds/${encodeURIComponent(feedId)}/external-publication/enable`,
+      {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      },
+      true,
+      undefined,
+      undefined,
+      async (response) => decodeCalendarFeedDetail(await response.json()),
+    ),
+
+    updateCalendarFeed: (
+      feedId: string,
+      body: UpdateCalendarFeedRequest,
+      idempotencyKey: string,
+    ) => request<CalendarFeedDetail>(
+      `/api/v1/calendar-feeds/${encodeURIComponent(feedId)}`,
+      {
+        method: 'PATCH',
+        cache: 'no-store',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      },
+      true,
+      undefined,
+      undefined,
+      async (response) => decodeCalendarFeedDetail(await response.json()),
+    ),
+
+    rotateCalendarFeed: (
+      feedId: string,
+      body: RotateCalendarFeedRequest,
+      idempotencyKey: string,
+    ) => request<CalendarFeedDetail>(
+      `/api/v1/calendar-feeds/${encodeURIComponent(feedId)}/rotate`,
+      {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      },
+      true,
+      undefined,
+      undefined,
+      async (response) => decodeCalendarFeedDetail(await response.json()),
+    ),
+
+    revokeCalendarFeed: (
+      feedId: string,
+      body: VersionedCalendarFeedRequest,
+      idempotencyKey: string,
+    ) => request<CalendarFeedDetail>(
+      `/api/v1/calendar-feeds/${encodeURIComponent(feedId)}/revoke`,
+      {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      },
+      true,
+      undefined,
+      undefined,
+      async (response) => decodeCalendarFeedDetail(await response.json()),
+    ),
+
+    addCalendarFeedEvent: (
+      feedId: string,
+      body: AddCalendarFeedEventRequest,
+      idempotencyKey: string,
+    ) => request<CalendarFeedDetail>(
+      `/api/v1/calendar-feeds/${encodeURIComponent(feedId)}/events`,
+      {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      },
+      true,
+      undefined,
+      undefined,
+      async (response) => decodeCalendarFeedDetail(await response.json()),
+    ),
+
+    removeCalendarFeedEvent: (
+      feedId: string,
+      entryId: string,
+      body: VersionedCalendarFeedRequest,
+      idempotencyKey: string,
+    ) => request<CalendarFeedDetail>(
+      `/api/v1/calendar-feeds/${encodeURIComponent(feedId)}/events/${encodeURIComponent(entryId)}/remove`,
+      {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      },
+      true,
+      undefined,
+      undefined,
+      async (response) => decodeCalendarFeedDetail(await response.json()),
+    ),
 
     updateTask: (taskId: string, status: TaskStatus, idempotencyKey: string) =>
       request<{ id: string; status: TaskStatus; updated: boolean }>(`/api/v1/tasks/${taskId}`, {

@@ -6,6 +6,7 @@ export type MemoView = {
   status: MemoStatus;
   analysisState: string;
   createdAt: string;
+  sourceTimeZone?: string;
 };
 
 export type LoginMethod = 'LOCAL' | 'GOOGLE';
@@ -89,9 +90,24 @@ export type TagCandidate = {
 export type ItemKind = 'TASK' | 'EVENT' | 'INFORMATION' | 'IDEA' | 'RECORD';
 export type SemanticType = ItemKind | 'UNKNOWN';
 
+export type ProposalEventScheduleEnd = {
+  dateCandidateId: string;
+  boundary: 'EXCLUSIVE_AT_VALUE' | 'INCLUSIVE_THROUGH_VALUE';
+};
+
+export type ProposalEventScheduleCandidate = {
+  candidateId: string;
+  mode: 'TIMED' | 'ALL_DAY';
+  startDateCandidateId: string;
+  end: ProposalEventScheduleEnd | null;
+  score: number;
+};
+
 export type ItemCandidate = {
   candidateId?: string;
   dueDateCandidateId?: string | null;
+  eventScheduleCandidates?: ProposalEventScheduleCandidate[];
+  suggestedEventScheduleCandidateId?: string | null;
   kind: ItemKind;
   title: string;
   sourceSpan?: { start: number; end: number } | null;
@@ -114,6 +130,8 @@ export type ProposalTagCandidate = TagCandidate & {
 export type ProposalItemCandidate = ItemCandidate & {
   candidateId: string;
   dueDateCandidateId: string | null;
+  eventScheduleCandidates: ProposalEventScheduleCandidate[];
+  suggestedEventScheduleCandidateId: string | null;
   sourceSpan: { start: number; end: number } | null;
   action: string | null;
   object: string | null;
@@ -129,7 +147,7 @@ export type RelationCandidate = {
 };
 
 export type Proposal = {
-  schemaVersion: '1' | '2';
+  schemaVersion: '1' | '2' | '3';
   memoId: string;
   memoRevision: number;
   suggestedTitle: {
@@ -163,7 +181,15 @@ export type SelectedRelation = {
   proposalIndex: number;
 };
 
+export type EventScheduleSelection = {
+  mode: 'TIMED' | 'ALL_DAY';
+  start: string;
+  end: string | null;
+  timeZone: string;
+};
+
 export type ApplyProposalRequest = {
+  selectionSchemaVersion?: '2';
   expectedMemoRevision: number;
   selectedType: ItemKind;
   title: string;
@@ -179,6 +205,7 @@ export type ApplyProposalRequest = {
       timeZone: string;
       timeSpecified: boolean;
     } | null;
+    eventSchedule?: EventScheduleSelection;
   }>;
   selectedRelations: SelectedRelation[];
 };
@@ -264,6 +291,81 @@ export type AnalysisReviewOutcomeSummary = {
   byAnalysisVersion: ReviewOutcomeAnalysisVersion[];
 };
 
+export type AnalysisPathEvidenceSummary = {
+  schemaVersion: '1';
+  aggregationPolicyVersion: 'analysis-path-evidence-summary-v1';
+  cohort: {
+    basis: 'ANALYSIS_RUN_CREATED_AT';
+    days: number;
+    fromInclusive: string;
+    toExclusive: string;
+    maxRuns: 1_000;
+  };
+  runs: {
+    total: number;
+    withDispatch: number;
+    withoutDispatch: number;
+  };
+  localDecisionEvidence: {
+    current: number;
+    legacy: number;
+  };
+  lifecycle: {
+    prepared: number;
+    running: number;
+    finalized: number;
+  };
+  invocationModes: {
+    legacyUnknown: number;
+    uncertaintyOnly: number;
+    aiPreferred: number;
+  };
+  invocationReasons: {
+    legacyUnknown: number;
+    semanticUncertainty: number;
+    aiPreferredPolicy: number;
+  };
+  dispatchRoutes: {
+    localModel: number;
+    externalMemoTransfer: number;
+    builtInFake: number;
+    legacyOrOther: number;
+  };
+  localModelContributions: {
+    notRecorded: number;
+    pending: number;
+    acceptedChanged: number;
+    acceptedUnchanged: number;
+    localFallback: number;
+  };
+  approvedCorrectionSnapshots: {
+    withSignals: number;
+    totalSignals: number;
+  };
+  fallbackReasons: {
+    defaultRecordFallback: number;
+    unparsedTemporalCue: number;
+    unrecognizedActionCue: number;
+    lowTypeMargin: number;
+    tagUncertainty: number;
+    dateUncertainty: number;
+    unresolvedReference: number;
+    incompleteTask: number;
+    multiIntent: number;
+    candidateLimit: number;
+    localConflict: number;
+  };
+  changedFields: {
+    suggestedTitle: number;
+    typeCandidates: number;
+    dateCandidates: number;
+    tagCandidates: number;
+    itemCandidates: number;
+    relationCandidates: number;
+    ambiguityReasons: number;
+  };
+};
+
 export type ProposalSummary = {
   proposalId: string;
   status: 'REVIEW_REQUIRED' | 'POSTPONED';
@@ -320,6 +422,107 @@ export type Task = {
   dueAt: string | null;
   dueDate?: string | null;
   overdue: boolean;
+};
+
+export type CalendarEvent = {
+  id: string;
+  title: string;
+  scheduleKind: 'TIMED' | 'ALL_DAY';
+  startAt: string | null;
+  endAt: string | null;
+  startDate: string | null;
+  endDateExclusive: string | null;
+  sourceTimeZone: string;
+};
+
+export type CalendarFeedDisclosureMode = 'BUSY_ONLY' | 'TITLE';
+
+export type CalendarFeedStatus = 'ACTIVE' | 'REVOKED';
+
+export type CalendarFeedEntryState = 'ACTIVE' | 'CANCELLED';
+
+export const CALENDAR_FEED_PUBLIC_CONSENT_POLICY_VERSION =
+  'calendar-feed-public-v1' as const;
+
+export type CalendarFeedPublicationScope = 'LOCAL_ONLY' | 'PUBLIC_HTTPS';
+
+export type CalendarFeedPublicationCapability =
+  | { mode: 'LOCAL_ONLY'; publicOrigin: null; consentPolicyVersion: null }
+  | {
+      mode: 'PUBLIC_HTTPS';
+      publicOrigin: string;
+      consentPolicyVersion: typeof CALENDAR_FEED_PUBLIC_CONSENT_POLICY_VERSION;
+    };
+
+export type CalendarFeedEligibleEvents = {
+  items: CalendarEvent[];
+  truncated: boolean;
+};
+
+export type CalendarFeedSummary = {
+  id: string;
+  displayName: string;
+  disclosureMode: CalendarFeedDisclosureMode;
+  status: CalendarFeedStatus;
+  version: number;
+  eventCount: number;
+  createdAt: string;
+  updatedAt: string;
+  rotatedAt: string;
+  revokedAt: string | null;
+  publicationScope: CalendarFeedPublicationScope;
+  publicConsentPolicyVersion: typeof CALENDAR_FEED_PUBLIC_CONSENT_POLICY_VERSION | null;
+  publicConsentGrantedAt: string | null;
+};
+
+export type CalendarFeedEntry = {
+  id: string;
+  eventId: string | null;
+  title: string | null;
+  state: CalendarFeedEntryState;
+  sequence: number;
+  scheduleKind: 'TIMED' | 'ALL_DAY';
+  startAt: string | null;
+  endAt: string | null;
+  startDate: string | null;
+  endDateExclusive: string | null;
+  sourceTimeZone: string;
+};
+
+export type CalendarFeedDetail = CalendarFeedSummary & {
+  entries: CalendarFeedEntry[];
+};
+
+export type CreateCalendarFeedRequest = {
+  displayName: string;
+  disclosureMode: CalendarFeedDisclosureMode;
+  eventIds: string[];
+  bearerSecret: string;
+};
+
+export type UpdateCalendarFeedRequest = {
+  displayName: string;
+  disclosureMode: CalendarFeedDisclosureMode;
+  expectedVersion: number;
+};
+
+export type RotateCalendarFeedRequest = {
+  bearerSecret: string;
+  expectedVersion: number;
+};
+
+export type EnableExternalCalendarFeedPublicationRequest = {
+  expectedVersion: number;
+  bearerSecret: string;
+  consentPolicyVersion: typeof CALENDAR_FEED_PUBLIC_CONSENT_POLICY_VERSION;
+};
+
+export type VersionedCalendarFeedRequest = {
+  expectedVersion: number;
+};
+
+export type AddCalendarFeedEventRequest = VersionedCalendarFeedRequest & {
+  eventId: string;
 };
 
 export type GraphNode = {

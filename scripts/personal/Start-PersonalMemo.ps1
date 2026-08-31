@@ -21,6 +21,7 @@ Write-Warning (
     'scripts\personal\Enable-PersonalMemoFirewall.ps1 once in an administrator PowerShell ' +
     'and confirm that the active Wi-Fi network is Private.'
 )
+Assert-PersonalMemoCloudflarePublicTopologyInactive -Layout $layout
 Invoke-PersonalMemoCompose -Layout $layout -IncludePersonal -CommandArguments @('up', '-d', '--build', '--wait')
 Invoke-PersonalMemoCompose -Layout $layout -IncludePersonal -CommandArguments @('ps')
 

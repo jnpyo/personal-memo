@@ -11,11 +11,15 @@ import {
   OFFLINE_CAPTURE_PROMPT,
 } from '../features/capture/captureAvailability';
 import { MemoTagGraph } from '../features/graph/MemoTagGraph';
+import { EventList } from '../features/events/EventList';
+import type { CalendarSharingProtection } from '../features/events/calendarSharingModel';
 import { ConnectionStatus } from '../features/health/ConnectionStatus';
+import { HomeOverview } from '../features/home/HomeOverview';
 import { MemoLibrary } from '../features/memos/MemoLibrary';
 import { PwaUpdateManager } from '../features/pwa/PwaUpdateManager';
 import { PostponedReview } from '../features/review/PostponedReview';
 import { ProposalReview } from '../features/review/ProposalReview';
+import { AiProcessingDiagnostic } from '../features/review/AiProcessingDiagnostic';
 import { ReviewOutcomeSummary } from '../features/review/ReviewOutcomeSummary';
 import { MemoSearch } from '../features/search/MemoSearch';
 import {
@@ -161,6 +165,8 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
   const workspace = useMemoWorkspace(account.session.userId);
   const [memoEditDirty, setMemoEditDirty] = useState(false);
   const [transientReviewDirty, setTransientReviewDirty] = useState(false);
+  const [calendarSharingProtection, setCalendarSharingProtection] =
+    useState<CalendarSharingProtection>({ pending: false, protectedState: false });
   const [pwaUpdating, setPwaUpdating] = useState(false);
   const [navigationApproved, setNavigationApproved] = useState(false);
   const reviewExitFeedbackRef = useRef<HTMLDivElement>(null);
@@ -171,11 +177,13 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
     transientReviewInput: transientReviewDirty,
     memoEdit: memoEditDirty,
     unpersistedCapture: workspace.hasUnpersistedCapture,
+    calendarSharingProtected: calendarSharingProtection.protectedState,
   });
   const serverOperationPending = hasPendingServerOperation({
     workspaceBusy: workspace.busy,
     pendingTaskId: workspace.pendingTaskId,
     authOperation: account.pending,
+    calendarSharingPending: calendarSharingProtection.pending,
   });
   const interactionLocked = serverOperationPending || pwaUpdating;
 
@@ -225,7 +233,7 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
 
   const guardedAccount: WorkspaceAccountProps = {
     ...account,
-    interactionDisabled: pwaUpdating,
+    interactionDisabled: interactionLocked,
     onLinkGoogle: () => {
       if (!confirmWorkspaceDeparture()) return;
       setNavigationApproved(true);
@@ -270,8 +278,8 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
       <header className="hero">
         <div>
           <span className="eyebrow">PERSONAL MEMO</span>
-          <h1>생각을 먼저 적으세요.</h1>
-          <p>분석은 제안만 만듭니다. 수정하고 승인한 내용만 실제 항목이 됩니다.</p>
+          <h1>오늘을 먼저 보세요.</h1>
+          <p>바로 적고, 오늘 할 일과 일정을 확인하세요. 분석은 승인 전까지 제안으로만 남습니다.</p>
         </div>
         <div className="hero-actions">
           <ConnectionStatus status={workspace.connection} onRetry={workspace.checkConnection} />
@@ -307,6 +315,51 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
           </button>
         </aside>
       )}
+
+      <HomeOverview
+        tasks={workspace.tasks}
+        events={workspace.events}
+        pendingReview={
+          workspace.review
+            ? { title: workspace.review.title, state: 'REVIEW_REQUIRED' }
+            : workspace.postponedReview
+              ? { title: workspace.postponedReview.title, state: 'POSTPONED' }
+              : null
+        }
+        tasksLoading={workspace.workspaceLoading}
+        eventsLoading={workspace.eventsLoading}
+        tasksError={workspace.workspaceError}
+        eventsError={workspace.eventsError}
+      />
+
+      {workspace.postponedReview && (
+        <div id="review-pending">
+          <PostponedReview
+            title={workspace.postponedReview.title}
+            onResume={workspace.resumePostponedReview}
+          />
+        </div>
+      )}
+
+      <TaskList
+        tasks={workspace.tasks}
+        loading={workspace.workspaceLoading}
+        error={workspace.workspaceError}
+        busy={interactionLocked}
+        pendingTaskId={workspace.pendingTaskId}
+        onRetry={workspace.refreshWorkspace}
+        onStatusChange={workspace.updateTaskStatus}
+      />
+
+      <EventList
+        events={workspace.events}
+        loading={workspace.eventsLoading}
+        error={workspace.eventsError}
+        interactionDisabled={interactionLocked}
+        online={workspace.connection === 'online'}
+        onCalendarSharingProtectionChange={setCalendarSharingProtection}
+        onRetry={workspace.refreshEvents}
+      />
 
       <MemoSearch />
 
@@ -365,16 +418,6 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         onRetryPin={workspace.retryGraphPin}
       />
 
-      <TaskList
-        tasks={workspace.tasks}
-        loading={workspace.workspaceLoading}
-        error={workspace.workspaceError}
-        busy={interactionLocked}
-        pendingTaskId={workspace.pendingTaskId}
-        onRetry={workspace.refreshWorkspace}
-        onStatusChange={workspace.updateTaskStatus}
-      />
-
       <ReviewOutcomeSummary
         summary={workspace.reviewOutcomeSummary}
         loading={workspace.reviewOutcomeLoading}
@@ -382,11 +425,19 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         onRetry={workspace.refreshReviewOutcomes}
       />
 
+      <AiProcessingDiagnostic
+        summary={workspace.analysisPathEvidenceSummary}
+        loading={workspace.analysisPathEvidenceLoading}
+        error={workspace.analysisPathEvidenceError}
+        onLoad={workspace.refreshAnalysisPathEvidence}
+        onRefresh={workspace.refreshAnalysisPathEvidence}
+      />
+
       {workspace.applicationId && (
         <aside className="undo-card">
           <div>
             <strong>마지막 적용을 되돌릴 수 있습니다.</strong>
-            <p>적용으로 생성된 태그 연결과 할 일만 제거하고 원문 메모는 보존합니다.</p>
+            <p>적용으로 생성된 태그 연결과 항목·일정만 제거하고 원문 메모는 보존합니다.</p>
           </div>
           <button
             type="button"
@@ -401,40 +452,38 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         </aside>
       )}
 
-      {workspace.postponedReview && (
-        <PostponedReview
-          title={workspace.postponedReview.title}
-          onResume={workspace.resumePostponedReview}
-        />
-      )}
-
       {workspace.review && (
-        <ProposalReview
-          key={workspace.review.proposalId}
-          review={workspace.review}
-          relationReviewCandidates={workspace.relationReviewCandidates}
-          relationReviewLoading={workspace.relationReviewLoading}
-          relationReviewError={workspace.relationReviewError}
-          busy={interactionLocked}
-          onChange={workspace.changeReview}
-          onApply={workspace.applyCurrentReview}
-          onPostpone={() => {
-            if (
-              confirmReviewDiscard(
-                hasUnsavedProposal,
-                UNSAVED_REVIEW_POSTPONE_MESSAGE,
-              )
-            ) workspace.postponeCurrentReview();
-          }}
-          onReject={workspace.rejectCurrentReview}
-          onRetryRelationReview={workspace.retryRelationReviewCandidates}
-          onTransientDirtyChange={setTransientReviewDirty}
-          feedback={workspace.feedback?.kind === 'error' ? workspace.feedback : null}
-          retryScope={workspace.retryAction?.scope}
-          retryLabel={workspace.retryAction?.label}
-          onRetry={retryFeedback}
-          onDismissFeedback={workspace.dismissFeedback}
-        />
+        <div id="review-pending">
+          <ProposalReview
+            key={workspace.review.proposalId}
+            review={workspace.review}
+            sourceTimeZone={workspace.reviewSourceTimeZone}
+            sourceTimeZoneError={workspace.reviewSourceTimeZoneError}
+            relationReviewCandidates={workspace.relationReviewCandidates}
+            relationReviewLoading={workspace.relationReviewLoading}
+            relationReviewError={workspace.relationReviewError}
+            busy={interactionLocked}
+            onChange={workspace.changeReview}
+            onApply={workspace.applyCurrentReview}
+            onPostpone={() => {
+              if (
+                confirmReviewDiscard(
+                  hasUnsavedProposal,
+                  UNSAVED_REVIEW_POSTPONE_MESSAGE,
+                )
+              ) workspace.postponeCurrentReview();
+            }}
+            onReject={workspace.rejectCurrentReview}
+            onRetryRelationReview={workspace.retryRelationReviewCandidates}
+            onRetrySourceTimeZone={workspace.retryReviewSourceTimeZone}
+            onTransientDirtyChange={setTransientReviewDirty}
+            feedback={workspace.feedback?.kind === 'error' ? workspace.feedback : null}
+            retryScope={workspace.retryAction?.scope}
+            retryLabel={workspace.retryAction?.label}
+            onRetry={retryFeedback}
+            onDismissFeedback={workspace.dismissFeedback}
+          />
+        </div>
       )}
 
       <MemoCapture

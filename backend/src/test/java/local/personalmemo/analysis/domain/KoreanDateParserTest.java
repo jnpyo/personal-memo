@@ -90,6 +90,57 @@ class KoreanDateParserTest {
   }
 
   @Test
+  void resolvesTodayAfternoonFromTheSuppliedBaseAndIanaZone() {
+    var result = parser.parse("오늘 오후 6시 디스코드 접속하기", BASE, SEOUL).getFirst();
+
+    assertThat(result.surfaceText()).isEqualTo("오늘 오후 6시");
+    assertThat(result.value()).isEqualTo("2026-08-05T18:00:00+09:00");
+    assertThat(result.precision()).isEqualTo(DatePrecision.RELATIVE_EXACT);
+    assertThat(result.timeSpecified()).isTrue();
+    assertThat(result.ambiguityReasons()).isEmpty();
+    assertThat(parser.unparsedTemporalCueCount(List.of(result))).isZero();
+  }
+
+  @Test
+  void invalidRelativeTwelveHourClockStaysUnknown() {
+    var result = parser.parse("오늘 오후 14시 회의", BASE, SEOUL).getFirst();
+
+    assertThat(result.surfaceText()).isEqualTo("오늘 오후 14시");
+    assertThat(result.value()).isNull();
+    assertThat(result.precision()).isEqualTo(DatePrecision.UNKNOWN);
+  }
+
+  @Test
+  void emitsAnUnknownCandidateForAnOtherwiseUnparsedBareTimeCue() {
+    var dates = parser.parse("6시 디스코드 접속하기", BASE, SEOUL);
+
+    assertThat(dates).hasSize(1);
+    assertThat(dates.getFirst().surfaceText()).isEqualTo("6시");
+    assertThat(dates.getFirst().value()).isNull();
+    assertThat(dates.getFirst().precision()).isEqualTo(DatePrecision.UNKNOWN);
+    assertThat(dates.getFirst().timeSpecified()).isFalse();
+    assertThat(dates.getFirst().ambiguityReasons()).containsExactly(AmbiguityReason.IMPRECISE_DATE);
+    assertThat(parser.unparsedTemporalCueCount(dates)).isEqualTo(1);
+  }
+
+  @Test
+  void doesNotCountAClockAlreadyCoveredByASupportedDateRule() {
+    var dates = parser.parse("다음 주 금요일 오후 3시에 방문", BASE, SEOUL);
+
+    assertThat(dates).hasSize(1);
+    assertThat(dates.getFirst().precision()).isEqualTo(DatePrecision.RELATIVE_EXACT);
+    assertThat(parser.unparsedTemporalCueCount(dates)).isZero();
+  }
+
+  @Test
+  void doesNotTreatADurationAsABareClockCue() {
+    var dates = parser.parse("6시간 집중 기록", BASE, SEOUL);
+
+    assertThat(dates).isEmpty();
+    assertThat(parser.unparsedTemporalCueCount(dates)).isZero();
+  }
+
+  @Test
   void resolvesAnyNextWeekWeekdayAsDateOnlyWhenTimeIsAbsent() {
     var result = parser.parse("다음 주 목요일까지 검수", BASE, SEOUL).getFirst();
 

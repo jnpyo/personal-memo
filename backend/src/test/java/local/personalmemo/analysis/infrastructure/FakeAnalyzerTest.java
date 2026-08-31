@@ -64,19 +64,23 @@ class FakeAnalyzerTest {
     assertThat(result.path("schemaVersion").asText()).isEqualTo("2");
     assertThat(result.path("memoId").asText()).isEqualTo(memoId.toString());
     assertThat(analyzer.proposalSchemaVersion()).isEqualTo("2");
-    assertThat(analyzer.version()).isEqualTo("fake-v6");
+    assertThat(analyzer.version()).isEqualTo("fake-v9");
     assertThat(analyzer.provenance().promptVersion()).isEqualTo("none");
     assertThat(analyzer.provenance().localModelVersion()).isEqualTo("none");
     assertThat(analyzer.provenance().embeddingModelVersion()).isEqualTo("none");
-    assertThat(result.at("/providerMetadata/analyzerVersion").asText()).isEqualTo("fake-v6");
+    assertThat(result.at("/providerMetadata/analyzerVersion").asText()).isEqualTo("fake-v9");
     assertThat(result.at("/providerMetadata/deterministicRulesVersion").asText())
-        .isEqualTo("korean-rules-v4");
+        .isEqualTo("korean-rules-v7");
     assertThat(result.at("/providerMetadata/promptVersion").asText()).isEqualTo("none");
     assertThat(result.at("/providerMetadata/localModelVersion").asText()).isEqualTo("none");
     assertThat(result.at("/providerMetadata/embeddingModelVersion").asText()).isEqualTo("none");
     assertThat(result.at("/providerMetadata/toolCalls").asInt()).isZero();
     assertThat(result.at("/providerMetadata/routingPolicyVersion").asText())
-        .isEqualTo("field-policy-v1");
+        .isEqualTo("field-policy-v2");
+    assertThat(result.at("/providerMetadata/classificationBasis").asText())
+        .isEqualTo("EXPLICIT_RULE");
+    assertThat(result.at("/providerMetadata/unparsedTemporalCueCount").asInt()).isZero();
+    assertThat(result.at("/providerMetadata/unrecognizedActionCueCount").asInt()).isZero();
     assertThat(result.path("relationCandidates").isArray()).isTrue();
     assertThat(result.path("itemCandidates").size()).isLessThanOrEqualTo(3);
   }
@@ -182,6 +186,57 @@ class FakeAnalyzerTest {
     assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("INFORMATION");
     assertThat(result.path("ambiguityReasons")).isEmpty();
     assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("LOCAL_REVIEW");
+    assertThat(result.at("/providerMetadata/classificationBasis").asText())
+        .isEqualTo("EXPLICIT_RULE");
+  }
+
+  @Test
+  void recognizesAnAffirmativeConnectActionWithoutInventingItsObject() {
+    var result = analyze("6시 디스코드 접속하기");
+
+    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("TASK");
+    assertThat(result.path("itemCandidates")).hasSize(1);
+    assertThat(result.at("/itemCandidates/0/kind").asText()).isEqualTo("TASK");
+    assertThat(result.at("/itemCandidates/0/action").asText()).isEqualTo("접속하기");
+    assertThat(result.at("/itemCandidates/0/object").asText()).isEqualTo("디스코드");
+    assertThat(result.at("/itemCandidates/0/sourceSpan/start").asInt()).isEqualTo("6시 ".length());
+    assertThat(result.at("/itemCandidates/0/sourceSpan/end").asInt())
+        .isEqualTo("6시 디스코드 접속하기".length());
+    assertThat(result.at("/dateCandidates/0/surfaceText").asText()).isEqualTo("6시");
+    assertThat(result.at("/dateCandidates/0/value").isNull()).isTrue();
+    assertThat(result.at("/dateCandidates/0/precision").asText()).isEqualTo("UNKNOWN");
+    assertThat(result.path("ambiguityReasons").toString())
+        .contains("IMPRECISE_DATE")
+        .doesNotContain("MISSING_ACTION", "MISSING_OBJECT");
+    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("CLOUD_ENRICH");
+    assertThat(result.at("/providerMetadata/classificationBasis").asText())
+        .isEqualTo("EXPLICIT_RULE");
+    assertThat(result.at("/providerMetadata/unparsedTemporalCueCount").asInt()).isEqualTo(1);
+    assertThat(result.at("/providerMetadata/unrecognizedActionCueCount").asInt()).isZero();
+    assertThat(result.at("/providerMetadata/detectedItemCandidateCount").asInt()).isEqualTo(1);
+    assertThat(result.at("/providerMetadata/emittedItemCandidateCount").asInt()).isEqualTo(1);
+  }
+
+  @Test
+  void keepsTheUnknownDatedAssignmentScaffoldDateFreeForManualReview() {
+    var result = analyze("unknown-e2e 11.25 운영체제 과제");
+
+    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("UNKNOWN");
+    assertThat(result.at("/suggestedTitle/value").asText()).isEqualTo("unknown-e2e 운영체제 과제");
+    assertThat(result.at("/itemCandidates/0/title").asText()).isEqualTo("unknown-e2e 운영체제 과제");
+    assertThat(result.at("/providerMetadata/classificationBasis").asText())
+        .isEqualTo("DEFAULT_FALLBACK");
+  }
+
+  @Test
+  void exposesAnExplicitTodayAfternoonCandidateForManualEventReview() {
+    var result = analyze("오늘 오후 6시 디스코드 접속하기");
+
+    assertThat(result.at("/dateCandidates/0/surfaceText").asText()).isEqualTo("오늘 오후 6시");
+    assertThat(result.at("/dateCandidates/0/value").asText())
+        .isEqualTo("2026-08-05T18:00:00+09:00");
+    assertThat(result.at("/dateCandidates/0/precision").asText()).isEqualTo("RELATIVE_EXACT");
+    assertThat(result.at("/dateCandidates/0/timeSpecified").asBoolean()).isTrue();
   }
 
   @Test
@@ -265,6 +320,9 @@ class FakeAnalyzerTest {
     assertThat(result.at("/itemCandidates/0/action").asText()).isEqualTo("장보기");
     assertThat(result.at("/itemCandidates/0/object").asText()).isEqualTo("사과, 생수");
     assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("LOCAL_REVIEW");
+    assertThat(result.at("/providerMetadata/classificationBasis").asText())
+        .isEqualTo("EXPLICIT_RULE");
+    assertThat(result.at("/providerMetadata/unrecognizedActionCueCount").asInt()).isZero();
   }
 
   @Test
@@ -336,10 +394,20 @@ class FakeAnalyzerTest {
   }
 
   @ParameterizedTest
+  @ValueSource(strings = {"보기 좋은 풍경 기록", "장보기 기록", "접속 기록"})
+  void keepsExplicitRecordFormsLocallyReviewable(String content) {
+    var result = analyze(content);
+
+    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("RECORD");
+    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("LOCAL_REVIEW");
+    assertThat(result.at("/providerMetadata/classificationBasis").asText())
+        .isEqualTo("EXPLICIT_RULE");
+    assertThat(result.at("/providerMetadata/unrecognizedActionCueCount").asInt()).isZero();
+  }
+
+  @ParameterizedTest
   @ValueSource(
       strings = {
-        "보기 좋은 풍경 기록",
-        "장보기 기록",
         "새 전화기 비교",
         "숫자 더하기 연습",
         "제출용 확인서 양식",
@@ -348,11 +416,28 @@ class FakeAnalyzerTest {
         "책상 정리함 구매",
         "10월 3일 회의록"
       })
-  void avoidsActionSubstringsThatAreNotCommands(String content) {
+  void failsClosedForShapesWithoutAnExplicitClassificationRule(String content) {
     var result = analyze(content);
 
-    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("RECORD");
-    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("LOCAL_REVIEW");
+    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("UNKNOWN");
+    assertThat(result.path("itemCandidates")).hasSize(1);
+    assertThat(result.at("/itemCandidates/0/kind").asText()).isEqualTo("RECORD");
+    assertThat(result.path("ambiguityReasons").toString()).contains("MISSING_ACTION");
+    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("CLOUD_ENRICH");
+    assertThat(result.at("/providerMetadata/classificationBasis").asText())
+        .isEqualTo("DEFAULT_FALLBACK");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"접속하기 싫다", "접속하기 좋은 시간"})
+  void doesNotCountNegatedOrDescriptiveActionFormsAsAffirmativeCues(String content) {
+    var result = analyze(content);
+
+    assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("UNKNOWN");
+    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("CLOUD_ENRICH");
+    assertThat(result.at("/providerMetadata/classificationBasis").asText())
+        .isEqualTo("DEFAULT_FALLBACK");
+    assertThat(result.at("/providerMetadata/unrecognizedActionCueCount").asInt()).isZero();
   }
 
   @Test

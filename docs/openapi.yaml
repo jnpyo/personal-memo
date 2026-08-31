@@ -2,10 +2,14 @@ openapi: 3.1.0
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 info:
   title: Personal Memo API
-  version: 0.7.0
+  version: 0.13.0
   description: >-
     Server-session 인증, Milestone 1의 AI-free vertical slice, 외부 모델 없는 결정론적 분석,
-    Milestone 5의 privacy-first exact lexical memo-search 계약입니다.
+    Milestone 5의 privacy-first exact lexical memo-search와 Milestone 6A.2a의
+    dark-compatible proposal-v3 EVENT temporal-candidate 계약, Milestone 6B의 인증된 단발성
+    iCalendar preview/download, Milestone 6C의 수신자별 선택형 읽기 전용 calendar-feed,
+    Milestone 6D.1의 server-owned public-origin capability 계약, 그리고 V23의 명시적
+    feed별 외부 공개 동의 계약입니다.
     분석 결과는 제안이며, canonical 태그와 할 일은 사용자 승인 endpoint를
     통해서만 생성됩니다. Cookie-authenticated mutation은 CSRF header가 필요합니다.
     Owner-scoped 요청은 선택적인 X-Expected-Owner-Id client snapshot guard를 지원하지만,
@@ -20,6 +24,8 @@ tags:
   - name: Memos
   - name: Analysis
   - name: Tasks
+  - name: Events
+  - name: Calendar Feeds
   - name: Graph
   - name: Search
 
@@ -454,11 +460,17 @@ paths:
         interpretation uses client_recorded_at and source_time_zone from the referenced
         immutable memo revision, rather than request time or mutable user settings. A
         Draft 2020-12 and domain-validated local proposal is assessed by a versioned,
-        field-level server policy. A clear proposal is persisted with route LOCAL and
-        NOT_REQUIRED cloud evidence. For critical ambiguity, the configured gateway returns one
-        immutable binding containing an executor identity and a server-owned descriptor with
-        transfer mode and gateway, provider, model, and consent-policy versions. The current
-        NO_NETWORK Fake adapter needs no consent. An EXTERNAL_MEMO_CONTENT adapter is not called
+        field-level server policy. The default Fake plus UNCERTAINTY_ONLY runtime persists a clear
+        proposal with route LOCAL and NOT_REQUIRED cloud evidence, and binds the NO_NETWORK Fake
+        gateway only for semantic uncertainty. The personal overlay instead pins AI_PREFERRED and
+        invokes the exact LOCAL_MACHINE_MEMO_CONTENT localhost Ollama/LiquidAI binding for every
+        schema/domain-valid current revision, even when the deterministic decision is clear. It
+        records invocation separately and never invents ambiguity to justify that call. A gateway
+        invocation uses one immutable binding containing an executor identity and a server-owned
+        descriptor with transfer mode and gateway, provider, model, and consent-policy versions.
+        Neither Fake nor the personal local adapter needs external-cloud consent; the local adapter
+        requires a bounded in-memory input from the current immutable memo revision. An
+        EXTERNAL_MEMO_CONTENT adapter is not called
         unless the authenticated owner's consent pins the exact policy version and a grant
         timestamp no later than the authorization-check instant; future-dated consent also makes
         zero gateway calls. Otherwise the validated local proposal is persisted with route HYBRID,
@@ -491,8 +503,9 @@ paths:
         The bounded gateway invocation then runs outside every database transaction. Finalization
         locks and rechecks memo ownership, active state, revision, and dispatch fence, then
         atomically stores the proposal, final run evidence, finalized dispatch, and idempotency
-        response. It scrubs the serialized context while retaining its hash, version, and candidate
-        count. A revision change is committed as STALE before this operation returns 409
+        response. It scrubs the serialized tag context while retaining its hash, version, and
+        candidate count. It also scrubs any V20 approved-correction offset snapshot while retaining
+        only hash, version, and count. A revision change is committed as STALE before this operation returns 409
         STALE_MEMO_REVISION; stale detected before a provider attempt uses the internal
         CANCELLED_STALE outcome and makes zero gateway calls. The endpoint remains synchronous and
         never returns its internal QUEUED, RUNNING, or PENDING states. A same-key live lease or call
@@ -504,8 +517,14 @@ paths:
         rows; each candidate reuses the owner+operation+raw-key advisory transaction lock and live
         leases are skipped. Recovery after restart therefore reuses the persisted binding, deadline,
         attempt count, lease/fence, exact V16 database context snapshot, bounded out-of-transaction
-        Fake call, V17 fence observation, revision-rechecking finalization, and the same
-        provider-request token. Any gateway result is STARTED. Executor rejection proves
+        configured-gateway call, V17 fence observation, revision-rechecking finalization, and the same
+        provider-request token. The personal adapter accepts only KEEP or a narrow exact-substring
+        semantic patch over existing grounded candidates. Redirects, proxies, tools, endpoint/model/digest
+        drift, truncation, and invalid schema/domain output fail closed to revalidated local detailed
+        review. Default-RECORD fallback evidence is normalized to UNKNOWN, while an existing explicit
+        grounded candidate is preserved. Its provisional num_predict=1024
+        hidden-reasoning budget does not relax separate visible-output, response, or proposal size
+        limits. Any gateway result is STARTED. Executor rejection proves
         NOT_STARTED and is distinct from a gateway-returned UNAVAILABLE. After submission, timeout,
         caller interruption, or unexpected local termination is STARTED when start was observed and
         otherwise UNKNOWN, never NOT_STARTED. Those terminations and process loss leave remote result
@@ -514,7 +533,7 @@ paths:
         run. Observed local elapsed uses a monotonic clock; process-loss duration is unknown.
         A local termination observation for the no-model Fake keeps model-token/cost evidence
         NOT_APPLICABLE with null numbers even when start is uncertain, while observation-free
-        process-loss evidence is UNKNOWN. A future real-model attempt is NOT_APPLICABLE only when
+        process-loss evidence is UNKNOWN. A model-backed attempt is NOT_APPLICABLE only when
         definitively NOT_STARTED, UNKNOWN when execution or remote completion is uncertain, and
         NOT_REPORTED after an observed result until usage/cost reporting is wired; missing evidence is
         never replaced by zero. Retrieval is not
@@ -526,10 +545,22 @@ paths:
         providerMetadata, UI, evaluation reports, recovery responses, ordinary logs, browser storage,
         or service-worker caches. Attempt rows store no provider text or identifier, request token,
         raw memo, or retrieval context and follow current run-data retention until an approved purge
-        policy; V17 adds no arbitrary TTL. The public POST and every response schema remain unchanged
+        policy; V17 adds no arbitrary TTL. V19 adds only versioned raw-free deterministic-decision,
+        fallback-reason, model-contribution, and semantic-changed-field evidence to the dispatch. It
+        copies no memo, prompt, response, or user-selected text and exposes none of that internal
+        evidence in this API. V20 adds model-invocation-v1 mode/reason evidence separately from
+        semantic uncertainty. When enabled only in the personal overlay, same-owner eligible latest
+        APPLIED type corrections may yield at most K=3 conflict-free short exact-unique anchors. The
+        retry snapshot contains only current-memo UTF-16 offsets and approved kind; the locked current
+        revision materializes anchor text plus kind for the local model. Historical memo text,
+        selection, identifiers, title, tag, due, and relation values are not copied into that
+        snapshot or prompt. Invalid snapshot/binding evidence makes zero model calls and uses the
+        validated Fake fallback. User correction is never automatic training or rule promotion.
+        Fine-tuning, LoRA, RAG/vector/embedding ingestion, external providers, automatic Apply, and
+        alarm/reminder delivery are absent. KEEP and PATCH remain untrusted proposals requiring the
+        ordinary explicit Apply API. No V20 accuracy result is claimed. The public POST and every response schema remain unchanged
         and synchronous. Numeric real-model usage/cost reporting and aggregation, related-memo
-        retrieval, fuzzy/vector search, embeddings, and a configured real provider or Ollama/LiquidAI
-        adapter remain absent.
+        retrieval, fuzzy/vector search, embeddings, and any external provider remain absent.
       parameters:
         - $ref: "#/components/parameters/CsrfHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -571,9 +602,10 @@ paths:
         "200":
           description: >-
             Negotiated structured proposal. Omitting X-Analysis-Proposal-Schema-Version or
-            requesting 1 returns a strict version-1 projection. Requesting 2 returns the stored
-            version: new Fake analyses are version 2 with explicit TASK-to-due-date candidate
-            references, while historical version-1 proposals remain version 1.
+            requesting 1 returns a strict version-1 projection. Requesting 2 removes version-3
+            EVENT temporal-candidate fields while preserving version-2 date/TASK-due references.
+            Requesting 3 returns the supported stored version. New Fake analyses remain version 2;
+            historical lower-version proposals are never synthesized upward.
           headers:
             Cache-Control:
               description: Proposal responses are owner-scoped and are never stored by caches.
@@ -666,7 +698,8 @@ paths:
             Newest owner-scoped proposals in the requested review state whose memo is
             ACTIVE and whose analyzed revision is still current. Omitting
             X-Analysis-Proposal-Schema-Version or requesting 1 returns strict version-1
-            projections; requesting 2 preserves each stored version.
+            projections; requesting 2 down-projects stored version 3 to strict version 2; requesting
+            3 preserves each supported stored version. Historical proposals are never upgraded.
           headers:
             Cache-Control:
               description: Proposal recovery responses are owner-scoped and are never cached.
@@ -701,11 +734,13 @@ paths:
       operationId: applyAnalysisProposal
       summary: Apply only the user's reviewed selection
       description: >-
-        Validates owner, current memo revision, tags, items, due values, and the user's explicit
-        relation-candidate indexes, then creates the application and all selected derived records
-        in one transaction.
-        The due timeZone request field is compatibility input only; persisted task source time zones
-        are canonicalized from the locked immutable memo revision.
+        Validates owner, current memo revision, tags, items, TASK due values, explicit EVENT
+        schedules, and the user's explicit relation-candidate indexes, then creates the application
+        and all selected derived records in one transaction. EVENT schedules require
+        selectionSchemaVersion 2 and stay distinct from TASK due values. A missing EVENT end remains
+        null; no duration is inferred.
+        The due and eventSchedule timeZone request fields are compatibility inputs only; persisted
+        task and event source time zones are canonicalized from the locked immutable memo revision.
         For each selected proposal index the server resolves the full relation from the locked
         stored proposal, requires its sourceCandidateId to map to exactly one applied item, and
         re-locks the owner-owned ACTIVE MEMO or TAG target. The request cannot choose a target,
@@ -951,11 +986,11 @@ paths:
                         due: 0
                     byAnalysisVersion:
                       - route: LOCAL
-                        analyzerVersion: fake-v6
+                        analyzerVersion: fake-v9
                         promptVersion: none
                         localModelVersion: none
                         embeddingModelVersion: none
-                        routingPolicyVersion: field-policy-v1
+                        routingPolicyVersion: field-policy-v2
                         proposals:
                           total: 4
                           withApplication: 3
@@ -1021,6 +1056,129 @@ paths:
                     fieldErrors: []
                     correlationId: 8cda55ca-a46e-49ea-8e43-b14d1591ce69
 
+  /analysis-path-evidence/summary:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Analysis]
+      operationId: getAnalysisPathEvidenceSummary
+      summary: Read an owner-scoped count-only aggregate of recent analysis-path evidence
+      description: >-
+        Returns operational counters only for the authenticated owner's analysis runs. The rolling
+        cohort uses analysis_runs.created_at in the half-open interval [fromInclusive, toExclusive)
+        and left joins an optional durable dispatch row so runs with no dispatch row remain visible.
+        The server
+        reads at most 1,001 unordered rows to enforce a hard 1,000-run cap and returns 422 rather than
+        a sorted or partial summary. It selects only bounded state/version/enum/count values and fixed JSON containment
+        booleans. The response never contains memo, proposal, selection, evidence or provider text;
+        IDs, hashes, offsets, tokens, credentials, model output, provider descriptors, or per-run
+        values. A configured path, a dispatch row, or a PENDING or LOCAL_FALLBACK contribution does
+        not prove that a model call occurred. ACCEPTED_CHANGED and ACCEPTED_UNCHANGED mean only that
+        a result recorded as successful on the local-model route was accepted into a proposal; neither status proves
+        correctness or improvement. Approved correction snapshot signals prove only that bounded
+        signals were fixed to the dispatch, not that a model used them. All counters are operational
+        evidence, not an accuracy, quality, cost, or provider-readiness score.
+      parameters:
+        - name: days
+          in: query
+          required: false
+          description: Rolling number of 24-hour periods ending at the server's current instant.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 90
+            default: 14
+      responses:
+        "200":
+          description: Owner-scoped, raw-content-free analysis-path evidence aggregate.
+          headers:
+            Cache-Control:
+              description: Prevents storage or reuse of this owner-specific aggregate.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisPathEvidenceSummary"
+              examples:
+                recentAnalysisPathEvidence:
+                  value:
+                    schemaVersion: "1"
+                    aggregationPolicyVersion: analysis-path-evidence-summary-v1
+                    cohort:
+                      basis: ANALYSIS_RUN_CREATED_AT
+                      days: 14
+                      fromInclusive: 2026-08-14T03:00:00Z
+                      toExclusive: 2026-08-28T03:00:00Z
+                      maxRuns: 1000
+                    runs:
+                      total: 8
+                      withDispatch: 7
+                      withoutDispatch: 1
+                    localDecisionEvidence:
+                      current: 6
+                      legacy: 1
+                    lifecycle:
+                      prepared: 3
+                      running: 1
+                      finalized: 3
+                    dispatchRoutes:
+                      localModel: 4
+                      externalMemoTransfer: 1
+                      builtInFake: 1
+                      legacyOrOther: 1
+                    invocationModes:
+                      legacyUnknown: 2
+                      uncertaintyOnly: 2
+                      aiPreferred: 3
+                    invocationReasons:
+                      legacyUnknown: 2
+                      semanticUncertainty: 3
+                      aiPreferredPolicy: 2
+                    localModelContributions:
+                      notRecorded: 0
+                      pending: 1
+                      acceptedChanged: 1
+                      acceptedUnchanged: 1
+                      localFallback: 1
+                    approvedCorrectionSnapshots:
+                      withSignals: 2
+                      totalSignals: 3
+                    fallbackReasons:
+                      defaultRecordFallback: 1
+                      unparsedTemporalCue: 1
+                      unrecognizedActionCue: 0
+                      lowTypeMargin: 2
+                      tagUncertainty: 1
+                      dateUncertainty: 0
+                      unresolvedReference: 0
+                      incompleteTask: 0
+                      multiIntent: 1
+                      candidateLimit: 0
+                      localConflict: 0
+                    changedFields:
+                      suggestedTitle: 1
+                      typeCandidates: 1
+                      dateCandidates: 0
+                      tagCandidates: 0
+                      itemCandidates: 0
+                      relationCandidates: 0
+                      ambiguityReasons: 0
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          description: >-
+            days is not an integer or is outside 1 through 90, or the selected owner/time window
+            contains more than 1,000 analysis runs. The latter returns
+            ANALYSIS_PATH_EVIDENCE_WINDOW_TOO_LARGE and no partial aggregate.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /tasks:
     parameters:
       - $ref: "#/components/parameters/ExpectedOwnerId"
@@ -1041,6 +1199,646 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/OwnerOrDomainConflict"
+
+  /events:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Events]
+      operationId: listEvents
+      summary: List current canonical scheduled EVENT items for the authenticated owner
+      description: >-
+        Returns only owner-scoped EVENT items whose application is APPLIED, memo is ACTIVE, item
+        revision is current, item is not archived, and canonical event_details is complete. It
+        excludes title-only EVENT items, raw memo content, and analysis/application provenance.
+        The server selects a bounded window by most recent application first, then returns that
+        window in schedule-start order so newly approved schedules are not hidden by older rows.
+        The response is no-store and performs no canonical write.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: Current canonical scheduled EVENT items.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 100
+                items:
+                  $ref: "#/components/schemas/EventView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /events/calendar.ics:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Events]
+      operationId: exportAuthenticatedEventCalendar
+      summary: Export current canonical scheduled EVENT items as an authenticated iCalendar file
+      description: >-
+        Produces one deterministic RFC 5545 snapshot for the signed-in owner. It reuses the same
+        APPLIED, ACTIVE, current-revision, unarchived and temporally complete EVENT eligibility as
+        GET /events, but never silently truncates: more than 100 eligible rows fails closed. Timed
+        values are UTC whole-second DATE-TIME values and all-day end dates remain exclusive. The
+        document contains stable opaque UIDs, canonical-item creation DTSTAMP values, SEQUENCE 0,
+        explicit starts and only explicit ends. It excludes raw memo bodies, TASK values, tags,
+        relations, internal UUIDs, analysis/application provenance, VALARM, recurrence and public
+        sharing state. This is a no-store one-time download, not a subscription URL, and reading it
+        performs no canonical write.
+      responses:
+        "200":
+          description: A non-empty UTF-8 RFC 5545 calendar snapshot with CRLF line endings.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+            Content-Disposition:
+              schema:
+                const: 'attachment; filename="personal-memo-calendar.ics"'
+          content:
+            text/calendar:
+              schema:
+                type: string
+                contentMediaType: text/calendar
+                description: >-
+                  UTF-8 calendar bytes. The server fails closed before returning a completed
+                  document larger than 131072 bytes; this is a byte limit, not a character limit.
+                x-maxBytes: 131072
+        "204":
+          description: No current canonical scheduled EVENT is eligible for export.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          description: >-
+            Export validation failed with ICALENDAR_EVENT_LIMIT_EXCEEDED,
+            ICALENDAR_EXPORT_TOO_LARGE, INVALID_ICALENDAR_EVENT, or ICALENDAR_UNSAFE_TEXT.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /calendar-feeds/capabilities:
+    get:
+      tags: [Calendar Feeds]
+      operationId: getCalendarFeedCapabilities
+      summary: Read the server-owned recipient-feed publication capability
+      description: >-
+        Authenticated, read-only Milestone 6D.1 implementation. The fail-closed server property
+        defaults to LOCAL_ONLY/null/null; enabling it requires a canonical HTTPS multi-label ASCII
+        hostname origin and an exact server-owned consent-policy version. Invalid
+        enabled/origin/policy combinations prevent startup. Request input,
+        Host, forwarded headers,
+        feed metadata, and memo text cannot select that origin. The strict PWA decoder treats a valid
+        LOCAL_ONLY response as permission to build only a clearly warned private/local URL from the
+        current exact HTTP(S) origin; only PUBLIC_HTTPS uses this server origin. A missing, malformed,
+        or failed capability response must not silently fall back. Hostname syntax validation does
+        not prove public-suffix ownership or DNS reachability. The personal stack remains
+        LOCAL_ONLY. A stopped Cloudflare route and bounded disposable external transport/path/cache
+        qualification do not publish a feed: each feed must separately rotate to a fresh bearer and
+        pin this exact policy through the external-publication mutation. Provider/customer-log and
+        receipt-level replica proof, live activation, real-feed publication, and Google/Apple client
+        smoke remain NO_GO or NOT_AUTHORIZED.
+      responses:
+        "200":
+          description: Exact disabled or public-HTTPS capability shape.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarFeedCapabilities"
+              examples:
+                localOnly:
+                  value:
+                    mode: LOCAL_ONLY
+                    publicOrigin: null
+                    consentPolicyVersion: null
+                publicHttps:
+                  value:
+                    mode: PUBLIC_HTTPS
+                    publicOrigin: https://calendar.example.com
+                    consentPolicyVersion: calendar-feed-public-v1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /calendar-feeds/eligible-events:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Calendar Feeds]
+      operationId: listCalendarFeedEligibleEvents
+      summary: List the bounded canonical EVENT choices for explicit feed membership
+      description: >-
+        Probes 101 current canonical scheduled EVENT items. When truncated is true the PWA must
+        fail closed instead of offering a partial picker. Reading this endpoint creates no feed,
+        membership, or canonical write.
+      responses:
+        "200":
+          description: Eligible schedule choices and an explicit completeness signal.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarFeedEligibleEvents"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+
+  /calendar-feeds:
+    parameters:
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Calendar Feeds]
+      operationId: listCalendarFeeds
+      summary: List the authenticated owner's recipient feed metadata
+      description: >-
+        Returns no bearer secret, verifier, subscription URL, raw memo, or event title.
+      responses:
+        "200":
+          description: Feed metadata ordered by most recent update.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 100
+                items:
+                  $ref: "#/components/schemas/CalendarFeedSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+    post:
+      tags: [Calendar Feeds]
+      operationId: createCalendarFeed
+      summary: Create one recipient feed from explicitly selected EVENT items
+      description: >-
+        bearerSecret is generated in PWA memory and is never returned or stored verbatim. The
+        idempotency response contains metadata only. No future event is added automatically. An
+        owner can retain at most 100 lifetime feeds, including REVOKED feeds; Milestone 6C has no
+        delete or capacity-reclamation operation. Each feed can retain at most 100 lifetime entries,
+        including cancellation tombstones. Creation always produces LOCAL_ONLY scope with no public
+        consent, even when the deployment capability is PUBLIC_HTTPS. In that deployment mode the
+        create-time local bearer is not presented as a usable subscription URL. External publication
+        requires the separate grant operation and another fresh bearer.
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCalendarFeedRequest"
+      responses:
+        "201":
+          description: >-
+            Recipient feed created. In LOCAL_ONLY deployment the client may retain its one-time local
+            secret in memory; in PUBLIC_HTTPS deployment it must not present the create-time local
+            secret as a usable subscription URL.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarFeedDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /calendar-feeds/{feedId}:
+    parameters:
+      - $ref: "#/components/parameters/CalendarFeedId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    get:
+      tags: [Calendar Feeds]
+      operationId: getCalendarFeed
+      summary: Read one owner-scoped feed and its bounded entry projections
+      responses:
+        "200":
+          description: Feed detail without any bearer or verifier material.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarFeedDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+    patch:
+      tags: [Calendar Feeds]
+      operationId: updateCalendarFeed
+      summary: Change the private label or disclosure mode of an active feed
+      description: >-
+        A disclosure change increments every active entry sequence. TITLE can expose only the
+        current approved canonical event title; BUSY_ONLY emits fixed Busy text. A PUBLIC_HTTPS
+        feed cannot change disclosure mode through this operation because expanding or changing
+        external disclosure requires a new explicit consent flow.
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCalendarFeedRequest"
+      responses:
+        "200":
+          description: Updated metadata and entries.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarFeedDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /calendar-feeds/{feedId}/rotate:
+    parameters:
+      - $ref: "#/components/parameters/CalendarFeedId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    post:
+      tags: [Calendar Feeds]
+      operationId: rotateCalendarFeedSecret
+      summary: Replace an active feed's bearer verifier immediately
+      description: >-
+        The old bearer becomes the same generic 404 as an unknown bearer. The response and
+        idempotency replay contain no bearer, verifier, or URL.
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RotateCalendarFeedRequest"
+      responses:
+        "200":
+          description: Feed verifier rotated.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarFeedDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /calendar-feeds/{feedId}/external-publication/enable:
+    parameters:
+      - $ref: "#/components/parameters/CalendarFeedId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    post:
+      tags: [Calendar Feeds]
+      operationId: enableCalendarFeedExternalPublication
+      summary: Explicitly consent to external publication with a fresh bearer
+      description: >-
+        Requires a PUBLIC_HTTPS deployment capability and its exact current consent-policy version.
+        The owner supplies a new client-generated bearer whose verifier differs from the current
+        verifier. Verifier rotation, PUBLIC_HTTPS scope, consent pin/time, and one feed-version
+        increment commit atomically. No existing local or public bearer is promoted or retained,
+        and the response/idempotency replay contains no secret, verifier, or URL. This operation
+        never adds an event or changes canonical schedule data. A later policy change makes the
+        feed unreadable until this operation is repeated with another fresh bearer.
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnableCalendarFeedExternalPublicationRequest"
+      responses:
+        "200":
+          description: Feed externally publishable under the exact current consent policy.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicCalendarFeedDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /calendar-feeds/{feedId}/revoke:
+    parameters:
+      - $ref: "#/components/parameters/CalendarFeedId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    post:
+      tags: [Calendar Feeds]
+      operationId: revokeCalendarFeed
+      summary: Permanently revoke one recipient feed
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedCalendarFeedRequest"
+      responses:
+        "200":
+          description: Feed revoked; already copied or cached recipient data is not recalled.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarFeedDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /calendar-feeds/{feedId}/events:
+    parameters:
+      - $ref: "#/components/parameters/CalendarFeedId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    post:
+      tags: [Calendar Feeds]
+      operationId: addCalendarFeedEvent
+      summary: Explicitly add or reactivate one eligible canonical EVENT entry
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddCalendarFeedEventRequest"
+      responses:
+        "200":
+          description: Feed detail after the explicit membership change.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarFeedDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /calendar-feeds/{feedId}/events/{entryId}/remove:
+    parameters:
+      - $ref: "#/components/parameters/CalendarFeedId"
+      - $ref: "#/components/parameters/CalendarFeedEntryId"
+      - $ref: "#/components/parameters/ExpectedOwnerId"
+    post:
+      tags: [Calendar Feeds]
+      operationId: removeCalendarFeedEvent
+      summary: Replace one active entry with a persisted cancellation tombstone
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedCalendarFeedRequest"
+      responses:
+        "200":
+          description: Feed detail with the entry marked CANCELLED and its sequence incremented.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarFeedDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CsrfForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/OwnerOrDomainConflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /calendar/v1/feed.ics:
+    parameters:
+      - name: token
+        in: query
+        required: true
+        description: >-
+          Canonical unpadded base64url encoding of exactly 32 random bytes. It is a bearer
+          credential and must not be placed in owned logs, Referer, browser storage, or response
+          metadata.
+        schema:
+          type: string
+          minLength: 43
+          maxLength: 43
+          pattern: "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    get:
+      servers:
+        - url: /
+      tags: [Calendar Feeds]
+      operationId: readCalendarFeed
+      summary: Read one recipient's no-store RFC 5545 subscription projection
+      security: []
+      description: >-
+        This fixed path is stateless and bearer-only. It emits at most 100 persisted recipient
+        entries and 131072 completed bytes. BUSY_ONLY emits fixed Busy text; TITLE emits only the
+        current approved title. Cancellation tombstones retain recipient UID and temporal shape,
+        increment SEQUENCE, and emit STATUS:CANCELLED. Publication performs no database write.
+        Missing, malformed, unknown, rotated, revoked, disabled-owner, deployment/feed publication-
+        scope mismatch, stale or absent consent pin, and impossible projection integrity states have
+        the same empty 404 response; the server never returns a partial feed. LOCAL_ONLY deployment
+        serves only local-scope feeds. PUBLIC_HTTPS deployment serves only explicitly consented
+        public-scope feeds pinned to the exact current server policy.
+      responses:
+        "200":
+          description: Non-empty UTF-8 RFC 5545 calendar with CRLF line endings.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                pattern: "(^|, )no-store($|, )"
+            Referrer-Policy:
+              schema:
+                const: no-referrer
+            Content-Type:
+              schema:
+                const: text/calendar; charset=UTF-8
+            Content-Length:
+              schema:
+                type: integer
+                minimum: 1
+                maximum: 131072
+          content:
+            text/calendar:
+              schema:
+                type: string
+                contentMediaType: text/calendar
+                x-maxBytes: 131072
+        "204":
+          description: The valid active feed has no serializable entry.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                pattern: "(^|, )no-store($|, )"
+            Referrer-Policy:
+              schema:
+                const: no-referrer
+        "404":
+          description: Empty generic response for every invalid or inactive bearer state.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                pattern: "(^|, )no-store($|, )"
+            Referrer-Policy:
+              schema:
+                const: no-referrer
+    head:
+      servers:
+        - url: /
+      tags: [Calendar Feeds]
+      operationId: inspectCalendarFeedHeaders
+      summary: Return the same status and content headers as GET without a response body
+      security: []
+      responses:
+        "200":
+          description: The active feed has at least one serializable entry.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                pattern: "(^|, )no-store($|, )"
+            Referrer-Policy:
+              schema:
+                const: no-referrer
+            Content-Type:
+              schema:
+                const: text/calendar; charset=UTF-8
+            Content-Length:
+              schema:
+                type: integer
+                minimum: 1
+                maximum: 131072
+        "204":
+          description: The active feed has no serializable entry.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                pattern: "(^|, )no-store($|, )"
+            Referrer-Policy:
+              schema:
+                const: no-referrer
+        "404":
+          description: Empty generic response for every invalid or inactive bearer state.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                pattern: "(^|, )no-store($|, )"
+            Referrer-Policy:
+              schema:
+                const: no-referrer
 
   /tasks/{taskId}:
     parameters:
@@ -1360,11 +2158,13 @@ components:
       description: >-
         Maximum proposal schema understood by the client. Omission and value 1 return a strict
         version-1 representation for forward compatibility with an installed older PWA. Value 2
-        allows a stored version-2 proposal; a historical stored version-1 proposal remains version
-        1. Any other or combined value returns 422 UNSUPPORTED_PROPOSAL_SCHEMA_VERSION.
+        preserves date candidate IDs and TASK due references while removing version-3 EVENT
+        temporal-candidate and suggestion fields. Value 3 allows any supported stored version.
+        Historical lower-version proposals are never synthesized upward. Any other or combined
+        value returns 422 UNSUPPORTED_PROPOSAL_SCHEMA_VERSION.
       schema:
         type: string
-        enum: ["1", "2"]
+        enum: ["1", "2", "3"]
         default: "1"
     CsrfHeader:
       name: X-XSRF-TOKEN
@@ -1408,6 +2208,20 @@ components:
         format: uuid
     TaskId:
       name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CalendarFeedId:
+      name: feedId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CalendarFeedEntryId:
+      name: entryId
       in: path
       required: true
       schema:
@@ -1729,7 +2543,7 @@ components:
     MemoView:
       type: object
       additionalProperties: false
-      required: [id, currentRevision, content, status, analysisState, createdAt, pinned]
+      required: [id, currentRevision, content, status, analysisState, createdAt, pinned, sourceTimeZone]
       properties:
         id:
           type: string
@@ -1748,6 +2562,11 @@ components:
           format: date-time
         pinned:
           type: boolean
+        sourceTimeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Server-owned IANA time zone captured on the current immutable memo revision.
 
     StartAnalysisRequest:
       type: object
@@ -1861,6 +2680,56 @@ components:
             task_details.source_time_zone comes from the immutable analyzed memo revision.
         timeSpecified:
           type: boolean
+    EventScheduleSelection:
+      type: object
+      additionalProperties: false
+      required: [mode, start, end, timeZone]
+      description: >-
+        Explicitly reviewed EVENT schedule. TIMED values are whole-second offset timestamps; fractional
+        seconds fail with INVALID_EVENT_SCHEDULE_PRECISION. ALL_DAY values are
+        local calendar dates and end is exclusive. A null end remains absent and never becomes an
+        inferred duration. For TIMED values, each explicit offset must be valid in the locked memo
+        revision's source IANA time zone, including DST gaps and overlaps. timeZone is compatibility
+        input; the server persists that locked source time zone.
+      allOf:
+        - if:
+            properties:
+              mode:
+                const: TIMED
+          then:
+            properties:
+              start:
+                type: string
+                format: date-time
+              end:
+                type: [string, "null"]
+                format: date-time
+        - if:
+            properties:
+              mode:
+                const: ALL_DAY
+          then:
+            properties:
+              start:
+                type: string
+                format: date
+              end:
+                type: [string, "null"]
+                format: date
+      properties:
+        mode:
+          type: string
+          enum: [TIMED, ALL_DAY]
+        start:
+          type: string
+          maxLength: 100
+        end:
+          type: [string, "null"]
+          maxLength: 100
+        timeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
     ApplyItem:
       type: object
       additionalProperties: false
@@ -1887,6 +2756,13 @@ components:
           oneOf:
             - $ref: "#/components/schemas/DueSelection"
             - type: "null"
+        eventSchedule:
+          oneOf:
+            - $ref: "#/components/schemas/EventScheduleSelection"
+            - type: "null"
+          description: >-
+            Allowed only for EVENT. Omission or null preserves a title-only EVENT without creating
+            a canonical schedule.
     SelectedRelation:
       type: object
       additionalProperties: false
@@ -1954,6 +2830,10 @@ components:
       additionalProperties: false
       required: [expectedMemoRevision, selectedType, title, selectedTags, items]
       properties:
+        selectionSchemaVersion:
+          type: string
+          const: "2"
+          description: Required whenever any item contains a non-null eventSchedule.
         expectedMemoRevision:
           type: integer
           minimum: 1
@@ -2203,9 +3083,11 @@ components:
         comparisonPolicyVersion:
           const: review-default-v3
           description: >-
-            Reconstructs explicit version-2 TASK due references while retaining the former
-            conservative single-task/single-date projection only for historical version-1
-            proposals.
+            Reconstructs explicit version-2 or version-3 TASK due references while retaining the
+            former conservative single-task/single-date projection only for historical version-1
+            proposals. It does not preselect or score proposal-version-3 EVENT temporal candidates;
+            temporal-candidate-bearing version-3 proposals and schedule-bearing selections remain
+            unclassifiable.
         cohort:
           $ref: "#/components/schemas/ReviewOutcomeCohort"
         proposals:
@@ -2219,6 +3101,294 @@ components:
           maxItems: 1000
           items:
             $ref: "#/components/schemas/ReviewOutcomeAnalysisVersion"
+    AnalysisPathEvidenceCount:
+      type: integer
+      minimum: 0
+      maximum: 1000
+    AnalysisPathEvidenceSignalCount:
+      type: integer
+      minimum: 0
+      maximum: 3000
+    AnalysisPathEvidenceCohort:
+      type: object
+      additionalProperties: false
+      description: >-
+        Rolling analysis-run-created-at cohort represented as a half-open UTC interval whose instant
+        duration is exactly days multiplied by 24 hours.
+      required: [basis, days, fromInclusive, toExclusive, maxRuns]
+      properties:
+        basis:
+          const: ANALYSIS_RUN_CREATED_AT
+        days:
+          type: integer
+          minimum: 1
+          maximum: 90
+        fromInclusive:
+          type: string
+          format: date-time
+        toExclusive:
+          type: string
+          format: date-time
+        maxRuns:
+          type: integer
+          const: 1000
+    AnalysisPathEvidenceRunCounters:
+      type: object
+      additionalProperties: false
+      description: >-
+        withDispatch counts runs with a durable dispatch row; withoutDispatch counts runs without
+        one. They sum to total, and neither counter alone proves a model call occurred.
+      required: [total, withDispatch, withoutDispatch]
+      properties:
+        total:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        withDispatch:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        withoutDispatch:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+    AnalysisPathEvidenceLocalDecisionCounters:
+      type: object
+      additionalProperties: false
+      description: >-
+        Current local-decision-v1 and legacy none-version counters. They sum to runs.withDispatch.
+        legacy is no greater than either invocationModes.legacyUnknown or
+        invocationReasons.legacyUnknown, but rolling V19 rows mean equality is not required.
+      required: [current, legacy]
+      properties:
+        current:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        legacy:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+    AnalysisPathEvidenceLifecycleCounters:
+      type: object
+      additionalProperties: false
+      description: >-
+        Durable dispatch-row lifecycle counters that sum to runs.withDispatch. PREPARED, RUNNING,
+        and FINALIZED are persistence states and do not by themselves prove a model call occurred.
+      required: [prepared, running, finalized]
+      properties:
+        prepared:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        running:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        finalized:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+    AnalysisPathEvidenceDispatchRouteCounters:
+      type: object
+      additionalProperties: false
+      description: >-
+        Mutually exclusive server-classified configured routes that sum to runs.withDispatch.
+        localModel is a LOCAL_MACHINE_MEMO_CONTENT route with a recorded model version;
+        externalMemoTransfer is an EXTERNAL_MEMO_CONTENT route; builtInFake is the exact fixed
+        no-network Fake descriptor tuple recognized inside the server; and legacyOrOther contains
+        remaining valid legacy or custom no-network routes. Descriptor strings never leave the
+        server. A route counter or dispatch row does not prove an invocation or transfer occurred.
+      required: [localModel, externalMemoTransfer, builtInFake, legacyOrOther]
+      properties:
+        localModel:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        externalMemoTransfer:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        builtInFake:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        legacyOrOther:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+    AnalysisPathEvidenceInvocationModeCounters:
+      type: object
+      additionalProperties: false
+      description: >-
+        Invocation-mode counters that sum to runs.withDispatch. legacyUnknown equals
+        invocationReasons.legacyUnknown.
+      required: [legacyUnknown, uncertaintyOnly, aiPreferred]
+      properties:
+        legacyUnknown:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        uncertaintyOnly:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        aiPreferred:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+    AnalysisPathEvidenceInvocationReasonCounters:
+      type: object
+      additionalProperties: false
+      description: >-
+        Invocation-reason counters that sum to runs.withDispatch. semanticUncertainty is at least
+        invocationModes.uncertaintyOnly, and aiPreferredPolicy is no greater than
+        invocationModes.aiPreferred.
+      required: [legacyUnknown, semanticUncertainty, aiPreferredPolicy]
+      properties:
+        legacyUnknown:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        semanticUncertainty:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        aiPreferredPolicy:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+    AnalysisPathEvidenceLocalModelContributionCounters:
+      type: object
+      additionalProperties: false
+      description: >-
+        Contribution statuses only for dispatchRoutes.localModel; the five counters sum to that
+        route count. PENDING and LOCAL_FALLBACK do not prove a model call occurred.
+        ACCEPTED_CHANGED and ACCEPTED_UNCHANGED mean only that a result recorded as successful on the
+        local-model route was accepted into a proposal; they do not prove correctness or improvement. pending is no
+        greater than lifecycle.prepared plus lifecycle.running, and acceptedChanged plus
+        acceptedUnchanged plus localFallback is no greater than lifecycle.finalized. notRecorded is
+        no greater than localDecisionEvidence.legacy. The sum of pending, acceptedChanged,
+        acceptedUnchanged, and localFallback is no greater than localDecisionEvidence.current.
+      required: [notRecorded, pending, acceptedChanged, acceptedUnchanged, localFallback]
+      properties:
+        notRecorded:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        pending:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        acceptedChanged:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        acceptedUnchanged:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        localFallback:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+    AnalysisPathEvidenceApprovedCorrectionSnapshotCounters:
+      type: object
+      additionalProperties: false
+      description: >-
+        Dispatches whose bounded approved-correction snapshot contains one or more signals and the
+        aggregate number of fixed signals. withSignals is no greater than either
+        localDecisionEvidence.current or invocationModes.aiPreferred. totalSignals is between one
+        and three times withSignals. These counters do not prove that a model used the signals and
+        are not restricted to dispatchRoutes.localModel.
+      required: [withSignals, totalSignals]
+      properties:
+        withSignals:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        totalSignals:
+          $ref: "#/components/schemas/AnalysisPathEvidenceSignalCount"
+    AnalysisPathEvidenceFallbackReasonCounters:
+      type: object
+      additionalProperties: false
+      description: >-
+        Non-exclusive membership counters over the fixed V19 local-decision fallback and uncertainty
+        reason allow-list. Each counter is no greater than localDecisionEvidence.current. These
+        memberships are distinct from invocationReasons: they are not necessarily causal for the
+        configured route and do not prove that a model call occurred. Their total is at least
+        localDecisionEvidence.current minus invocationReasons.aiPreferredPolicy because only that
+        current policy tuple permits an empty V19 reason set.
+      required:
+        - defaultRecordFallback
+        - unparsedTemporalCue
+        - unrecognizedActionCue
+        - lowTypeMargin
+        - tagUncertainty
+        - dateUncertainty
+        - unresolvedReference
+        - incompleteTask
+        - multiIntent
+        - candidateLimit
+        - localConflict
+      properties:
+        defaultRecordFallback:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        unparsedTemporalCue:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        unrecognizedActionCue:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        lowTypeMargin:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        tagUncertainty:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        dateUncertainty:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        unresolvedReference:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        incompleteTask:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        multiIntent:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        candidateLimit:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        localConflict:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+    AnalysisPathEvidenceChangedFieldCounters:
+      type: object
+      additionalProperties: false
+      description: >-
+        Non-exclusive counters over the fixed V19 changed-field allow-list for accepted, changed
+        local-model-route results. Each value is no greater than
+        localModelContributions.acceptedChanged; when that count is nonzero, the sum is between one
+        and seven times that count.
+      required:
+        - suggestedTitle
+        - typeCandidates
+        - dateCandidates
+        - tagCandidates
+        - itemCandidates
+        - relationCandidates
+        - ambiguityReasons
+      properties:
+        suggestedTitle:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        typeCandidates:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        dateCandidates:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        tagCandidates:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        itemCandidates:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        relationCandidates:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+        ambiguityReasons:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCount"
+    AnalysisPathEvidenceSummary:
+      type: object
+      additionalProperties: false
+      description: >-
+        Owner-scoped aggregate only. It contains no raw content, identifiers, hashes, offsets,
+        evidence JSON, provider descriptors or output, or per-run values. runs, local-decision,
+        lifecycle, dispatch-route, invocation-mode, and invocation-reason partitions are validated
+        fail closed. A configured path, dispatch row, PENDING status, or LOCAL_FALLBACK status is not
+        evidence of an actual model call. Only localModelContributions.acceptedChanged and
+        acceptedUnchanged represent results recorded as successful on the local-model route and accepted into proposals;
+        they are not correctness or improvement scores.
+      required:
+        - schemaVersion
+        - aggregationPolicyVersion
+        - cohort
+        - runs
+        - localDecisionEvidence
+        - lifecycle
+        - dispatchRoutes
+        - invocationModes
+        - invocationReasons
+        - localModelContributions
+        - approvedCorrectionSnapshots
+        - fallbackReasons
+        - changedFields
+      properties:
+        schemaVersion:
+          const: "1"
+        aggregationPolicyVersion:
+          const: analysis-path-evidence-summary-v1
+        cohort:
+          $ref: "#/components/schemas/AnalysisPathEvidenceCohort"
+        runs:
+          $ref: "#/components/schemas/AnalysisPathEvidenceRunCounters"
+        localDecisionEvidence:
+          $ref: "#/components/schemas/AnalysisPathEvidenceLocalDecisionCounters"
+        lifecycle:
+          $ref: "#/components/schemas/AnalysisPathEvidenceLifecycleCounters"
+        dispatchRoutes:
+          $ref: "#/components/schemas/AnalysisPathEvidenceDispatchRouteCounters"
+        invocationModes:
+          $ref: "#/components/schemas/AnalysisPathEvidenceInvocationModeCounters"
+        invocationReasons:
+          $ref: "#/components/schemas/AnalysisPathEvidenceInvocationReasonCounters"
+        localModelContributions:
+          $ref: "#/components/schemas/AnalysisPathEvidenceLocalModelContributionCounters"
+        approvedCorrectionSnapshots:
+          $ref: "#/components/schemas/AnalysisPathEvidenceApprovedCorrectionSnapshotCounters"
+        fallbackReasons:
+          $ref: "#/components/schemas/AnalysisPathEvidenceFallbackReasonCounters"
+        changedFields:
+          $ref: "#/components/schemas/AnalysisPathEvidenceChangedFieldCounters"
     ReviewDispositionView:
       type: object
       additionalProperties: false
@@ -2273,6 +3443,403 @@ components:
           $ref: "#/components/schemas/TaskStatus"
         updated:
           type: boolean
+
+    EventView:
+      type: object
+      additionalProperties: false
+      required:
+        [id, title, scheduleKind, startAt, endAt, startDate, endDateExclusive, sourceTimeZone]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        scheduleKind:
+          type: string
+          enum: [TIMED, ALL_DAY]
+        startAt:
+          type: [string, "null"]
+          format: date-time
+        endAt:
+          type: [string, "null"]
+          format: date-time
+        startDate:
+          type: [string, "null"]
+          format: date
+        endDateExclusive:
+          type: [string, "null"]
+          format: date
+        sourceTimeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+
+    CalendarFeedCapabilities:
+      type: object
+      additionalProperties: false
+      required: [mode, publicOrigin, consentPolicyVersion]
+      properties:
+        mode:
+          type: string
+          enum: [LOCAL_ONLY, PUBLIC_HTTPS]
+          default: LOCAL_ONLY
+          description: >-
+            Server-owned deployment capability. LOCAL_ONLY is the fail-closed default for public
+            publication.
+        publicOrigin:
+          type: [string, "null"]
+          maxLength: 255
+          default: null
+          description: >-
+            Null in LOCAL_ONLY mode. In PUBLIC_HTTPS mode, an exact normalized maximum 255-character
+            HTTPS ASCII multi-label hostname origin and optional non-default port from 1 through
+            65535; userinfo, IP literals, localhost or its subdomains, path, query, fragment,
+            explicit port 443, and trailing slash are forbidden.
+        consentPolicyVersion:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 64
+          default: null
+          pattern: "^[a-z0-9][a-z0-9._-]{0,63}$"
+          description: >-
+            Null in LOCAL_ONLY mode. In PUBLIC_HTTPS mode, the exact server-owned disclosure policy
+            that an explicit per-feed publication grant must accept.
+      oneOf:
+        - title: Local-only publication disabled
+          required: [mode, publicOrigin, consentPolicyVersion]
+          properties:
+            mode:
+              const: LOCAL_ONLY
+            publicOrigin:
+              type: "null"
+            consentPolicyVersion:
+              type: "null"
+        - title: Public HTTPS origin configured
+          required: [mode, publicOrigin, consentPolicyVersion]
+          properties:
+            mode:
+              const: PUBLIC_HTTPS
+            publicOrigin:
+              type: string
+              format: uri
+              minLength: 11
+              maxLength: 255
+              pattern: "^https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$"
+              allOf:
+                - not:
+                    pattern: "(?:^|\\.)localhost(?::[0-9]{1,5})?$"
+                - not:
+                    pattern: ":443$"
+            consentPolicyVersion:
+              type: string
+              minLength: 1
+              maxLength: 64
+              pattern: "^[a-z0-9][a-z0-9._-]{0,63}$"
+
+    CalendarFeedDisclosureMode:
+      type: string
+      enum: [BUSY_ONLY, TITLE]
+      default: BUSY_ONLY
+      description: >-
+        BUSY_ONLY hides titles but still discloses the explicitly selected dates and times.
+    CalendarFeedStatus:
+      type: string
+      enum: [ACTIVE, REVOKED]
+    CalendarFeedPublicationScope:
+      type: string
+      enum: [LOCAL_ONLY, PUBLIC_HTTPS]
+      default: LOCAL_ONLY
+      description: >-
+        Per-feed scope. Existing and newly created feeds are LOCAL_ONLY until the owner completes
+        the separate external-publication grant with a fresh bearer.
+    CalendarFeedEntryState:
+      type: string
+      enum: [ACTIVE, CANCELLED]
+    CalendarFeedSummaryBase:
+      type: object
+      required:
+        [id, displayName, disclosureMode, status, publicationScope, publicConsentPolicyVersion,
+         publicConsentGrantedAt, version, eventCount, createdAt, updatedAt, rotatedAt, revokedAt]
+      oneOf:
+        - title: Active local-only feed
+          properties:
+            status:
+              const: ACTIVE
+            publicationScope:
+              const: LOCAL_ONLY
+            publicConsentPolicyVersion:
+              type: "null"
+            publicConsentGrantedAt:
+              type: "null"
+            revokedAt:
+              type: "null"
+        - title: Revoked local-only feed
+          properties:
+            status:
+              const: REVOKED
+            publicationScope:
+              const: LOCAL_ONLY
+            publicConsentPolicyVersion:
+              type: "null"
+            publicConsentGrantedAt:
+              type: "null"
+            revokedAt:
+              type: string
+              format: date-time
+        - title: Explicitly consented public feed
+          properties:
+            status:
+              const: ACTIVE
+            publicationScope:
+              const: PUBLIC_HTTPS
+            publicConsentPolicyVersion:
+              type: string
+              minLength: 1
+              maxLength: 64
+              pattern: "^[a-z0-9][a-z0-9._-]{0,63}$"
+            publicConsentGrantedAt:
+              type: string
+              format: date-time
+            revokedAt:
+              type: "null"
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: Private owner-only recipient label; never published in the calendar.
+        disclosureMode:
+          $ref: "#/components/schemas/CalendarFeedDisclosureMode"
+        status:
+          $ref: "#/components/schemas/CalendarFeedStatus"
+        publicationScope:
+          $ref: "#/components/schemas/CalendarFeedPublicationScope"
+        publicConsentPolicyVersion:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 64
+          pattern: "^[a-z0-9][a-z0-9._-]{0,63}$"
+          description: Null unless publicationScope is PUBLIC_HTTPS.
+        publicConsentGrantedAt:
+          type: [string, "null"]
+          format: date-time
+          description: Server time of the latest atomic external-publication grant.
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        eventCount:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Number of ACTIVE recipient entries; cancellation tombstones are excluded.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        rotatedAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: [string, "null"]
+          format: date-time
+    CalendarFeedSummary:
+      allOf:
+        - $ref: "#/components/schemas/CalendarFeedSummaryBase"
+      unevaluatedProperties: false
+    CalendarFeedEntry:
+      type: object
+      additionalProperties: false
+      required:
+        [id, eventId, title, scheduleKind, startAt, endAt, startDate, endDateExclusive,
+         sourceTimeZone, state, sequence]
+      properties:
+        id:
+          type: string
+          format: uuid
+        eventId:
+          type: [string, "null"]
+          format: uuid
+          description: Owner-only current canonical item identity; null for a tombstone.
+        title:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 200
+          description: Owner-only current canonical title; null for a tombstone.
+        scheduleKind:
+          type: string
+          enum: [TIMED, ALL_DAY]
+        startAt:
+          type: [string, "null"]
+          format: date-time
+        endAt:
+          type: [string, "null"]
+          format: date-time
+        startDate:
+          type: [string, "null"]
+          format: date
+        endDateExclusive:
+          type: [string, "null"]
+          format: date
+        sourceTimeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+        state:
+          $ref: "#/components/schemas/CalendarFeedEntryState"
+        sequence:
+          type: integer
+          minimum: 0
+    CalendarFeedDetail:
+      allOf:
+        - $ref: "#/components/schemas/CalendarFeedSummaryBase"
+        - type: object
+          required: [entries]
+          properties:
+            entries:
+              type: array
+              maxItems: 100
+              items:
+                $ref: "#/components/schemas/CalendarFeedEntry"
+      unevaluatedProperties: false
+    PublicCalendarFeedDetail:
+      allOf:
+        - $ref: "#/components/schemas/CalendarFeedDetail"
+        - type: object
+          required:
+            [status, publicationScope, publicConsentPolicyVersion, publicConsentGrantedAt, revokedAt]
+          properties:
+            status:
+              const: ACTIVE
+            publicationScope:
+              const: PUBLIC_HTTPS
+            publicConsentPolicyVersion:
+              type: string
+              minLength: 1
+              maxLength: 64
+              pattern: "^[a-z0-9][a-z0-9._-]{0,63}$"
+            publicConsentGrantedAt:
+              type: string
+              format: date-time
+            revokedAt:
+              type: "null"
+    CalendarFeedEligibleEvents:
+      type: object
+      additionalProperties: false
+      required: [items, truncated]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/EventView"
+        truncated:
+          type: boolean
+          description: True when a 101st eligible EVENT exists and this picker is incomplete.
+    CalendarFeedBearerSecret:
+      type: string
+      minLength: 43
+      maxLength: 43
+      pattern: "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+      writeOnly: true
+      description: >-
+        Canonical unpadded base64url encoding of exactly 32 client-generated random bytes. The
+        server stores only a domain-separated SHA-256 verifier and never returns this value.
+    CreateCalendarFeedRequest:
+      type: object
+      additionalProperties: false
+      required: [displayName, disclosureMode, eventIds, bearerSecret]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: ".*\\S.*"
+        disclosureMode:
+          $ref: "#/components/schemas/CalendarFeedDisclosureMode"
+        eventIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        bearerSecret:
+          $ref: "#/components/schemas/CalendarFeedBearerSecret"
+    UpdateCalendarFeedRequest:
+      type: object
+      additionalProperties: false
+      required: [displayName, disclosureMode, expectedVersion]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: ".*\\S.*"
+        disclosureMode:
+          $ref: "#/components/schemas/CalendarFeedDisclosureMode"
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 1
+    VersionedCalendarFeedRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 1
+    RotateCalendarFeedRequest:
+      type: object
+      additionalProperties: false
+      required: [bearerSecret, expectedVersion]
+      properties:
+        bearerSecret:
+          $ref: "#/components/schemas/CalendarFeedBearerSecret"
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 1
+    EnableCalendarFeedExternalPublicationRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, bearerSecret, consentPolicyVersion]
+      properties:
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 1
+        bearerSecret:
+          $ref: "#/components/schemas/CalendarFeedBearerSecret"
+        consentPolicyVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: "^[a-z0-9][a-z0-9._-]{0,63}$"
+          description: Must exactly equal the current server capability policy.
+    AddCalendarFeedEventRequest:
+      type: object
+      additionalProperties: false
+      required: [eventId, expectedVersion]
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 1
 
     MemoSearchLifecycleStatus:
       type: string

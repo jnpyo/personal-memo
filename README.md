@@ -25,6 +25,32 @@
 - **재시도를 안전하게 처리합니다.** 주요 mutation은 요청 본문 해시와 `Idempotency-Key`를 함께 저장합니다. 같은 요청은 원래 응답을 재생하고, 같은 키의 다른 요청은 거절합니다. 메모 수정 재시도도 최초 시도에서 고정한 원문·client timestamp·시간대·키를 그대로 사용합니다.
 - **승인 단위를 되돌립니다.** application provenance를 따라 파생 데이터만 제거하며 원본 메모와 revision 이력은 남깁니다.
 - **기한 초과는 사실이 아니라 시점에 따른 상태입니다.** `OVERDUE`를 저장하지 않고 `TODO`와 현재 시각을 기준으로 조회할 때 계산합니다. 날짜만 지정한 기한은 UTC 자정으로 왜곡하지 않고 `due_local_date`로 보존합니다.
+- **일정과 공유도 명시적입니다.** EVENT schedule은 사용자가 timed/all-day 값을 직접 검토해
+  Apply한 뒤에만 canonical해집니다. 로그인 사용자는 current confirmed schedule만 담은 RFC 5545
+  `.ics`를 미리보고 같은 Blob을 다운로드할 수 있습니다. 별도의 6C UI는 수신자별
+  `BUSY_ONLY`/`TITLE` feed와 직접 선택한 일정만 관리하고 rotate/revoke 가능한 URL을 한 번만
+  memory에서 보여 줍니다. 이 기능은 개인 V23 private route에 배포됐지만 공개 internet edge나
+  알람을 만들지 않습니다. 6D.1은 public origin을 server-owned exact capability로 제공하기 위한
+  backend fail-closed 설정/API와 frontend strict decoder/warned UI를 source에 구현했고, owner 승인으로
+  개인 stack에도 public 설정이 없는 `LOCAL_ONLY` 상태로 배포했습니다. 이어지는 **6D public-edge
+  preflight**는 별도 loopback-only edge와 isolated synthetic smoke를 source에 추가했지만
+  `PUBLIC_HTTPS`를 켜거나 외부 구독 edge를 활성화하지 않습니다. 후속 public operator는
+  **Cloudflare의 remotely-managed named Tunnel**로 선택했습니다. 공식 Windows binary는
+  `DOWNLOADED_VERIFIED`이고, remote Tunnel과 exact-path published route/DNS는 configured 상태입니다.
+  Hardened `PersonalMemoCalendarCloudflareTunnel` service는 token-file-only ImagePath에 inline token이
+  없음을 포함해 `Stopped`/`Manual`/`LocalSystem`으로 설치·검증했습니다. 일반 기본 `Cloudflared`
+  service는 제거했고, 현재 `cloudflared` process와 port `8787`/`49312` listener는 모두 0입니다.
+  External synthetic qualification은 46개 bounded probe로 transport/path/cache와 owned-log 경계를
+  확인한 뒤 rollback했습니다. Cloudflare dashboard에서 cleanup 전후 모두 active replica `0`, route
+  `1`, status `Down`을 수동 확인했고 로컬 connector/process/listener도 0으로 복구했습니다. 다만 현재
+  account plan에서는 provider/customer request-log sentinel을 확인할 수 없고 receipt의 replica field도
+  `REQUIRED_NOT_VERIFIED`이므로 판정은
+  `TRANSPORT_PATH_CACHE_PASS_LOG_AND_REPLICA_REQUIRED`, activation은 `NO_GO`, 기능 상태는
+  `SOLO_PROVISIONAL`/`REPORT_ONLY`입니다. V23 source는 여기에 feed별 명시적 공개 동의 gate를
+  추가합니다. 모든 기존/신규 feed는 local-only이고, exact server policy 동의와 fresh bearer 회전이
+  한 transaction으로 성공해야만 public scope가 됩니다. 따라서 배포 설정만으로 기존 URL이 공개되지
+  않습니다. 개인 database는 owner-authorized backup/restore rehearsal 뒤 V23으로 전환됐지만
+  publication environment는 계속 0이고 public activation은 실행하지 않았습니다.
 - **그래프는 canonical 데이터의 투영입니다.** 메모 유형을 거대한 공통 노드로 만들지 않고 노드의 속성·필터·아이콘으로 표현합니다.
 - **그래프 노드는 실제 탐색 진입점입니다.** 고정·기한 초과·미완료·가까운 기한·현재 원문
   revision 순으로 제한된 홈을 만들되, node 예산이 찰 때도 memo가 tag를 전부 밀어내지 않도록
@@ -46,7 +72,7 @@
   no-store로 다시 엽니다.
 - **소유권 경계는 서버와 데이터베이스에 있습니다.** 각 로그인 수단은 internal user UUID에 매핑되고, 명시적으로 연결한 local·Google 수단은 같은 UUID를 사용합니다. 서버가 Spring Security principal에서 `owner_id`를 결정하며, V5의 owner-aware composite foreign key는 서로 다른 사용자의 하위 record를 데이터베이스 수준에서도 연결할 수 없게 합니다.
 - **브라우저에 인증 token을 보관하지 않습니다.** opaque session은 PostgreSQL에 저장하고 항상 HttpOnly인 cookie(운영에서는 Secure)와 CSRF 검증을 사용합니다. Google email 일치만으로 계정을 합치지 않으며, 기존 로그인 뒤 명시적으로 연결해야 합니다.
-- **라우팅은 신호 기반으로 결정합니다.** 모델의 confidence 하나에 의존하지 않고 날짜·참조·행동·복합 의도 신호를 enum으로 검증합니다. 명확한 메모는 cloud를 호출하지 않으며, 모호한 메모도 현재는 외부 통신 없는 Fake adapter만 거칩니다.
+- **semantic 판단과 모델 호출 정책을 분리합니다.** 모델 confidence 하나에 의존하지 않고 날짜·참조·행동·복합 의도 신호를 enum으로 검증합니다. 기본 Fake + `UNCERTAINTY_ONLY`에서는 명확한 메모가 model을 호출하지 않습니다. 개인 overlay만 `AI_PREFERRED`로 exact pinned localhost LiquidAI를 모든 검증된 current revision에 호출하되, clear 입력에 ambiguity를 지어내지 않고 별도 V20 invocation evidence를 남깁니다.
 - **태그 문맥은 owner 안에서 작고 결정적으로 만듭니다.** 구조 검증을 통과한 proposal의 tag 후보를 최대 10개만 보고 canonical name과 alias에서 최대 20개의 정규화 term을 만듭니다. 현재 owner의 `ACTIVE` tag/alias와 exact equality로 찾은 전체 결과를 먼저 사용해 단 하나의 tag로만 귀결될 때 proposal 후보를 안전하게 해소한 뒤, score·원래 후보 순서·match 종류·이름·UUID의 고정 순서로 중복을 제거한 최대 8개의 내부 hint를 gateway request에 제공합니다. raw/related memo, fuzzy·vector·embedding 검색은 사용하지 않습니다.
 - **외부 전송 경계는 서버가 소유합니다.** 모호한 경로의 gateway descriptor가 transfer mode·gateway·provider·model·consent-policy version을 선언하고 서버가 run evidence와 proposal metadata를 덮어씁니다. `NO_NETWORK` Fake에는 동의가 필요 없지만, `EXTERNAL_MEMO_CONTENT`는 현재 owner가 정확히 같은 policy version을 승인했고 `granted_at`이 권한 확인 시각보다 늦지 않을 때만 호출됩니다. 미동의·policy mismatch·미래 시각 grant는 gateway 0-call입니다.
 - **보완 분석 실패도 원문을 잃게 하지 않습니다.** LOCAL, cloud SUCCESS, fallback의 모든 새 proposal은 `providerMetadata`를 공통 허용 목록으로 다시 만듭니다. typed failure, gateway 예외, invalid cloud proposal은 provider 오류 문구를 노출하지 않고 이미 검증된 local proposal로 되돌아가며, run은 `HYBRID`/`REVIEW_REQUIRED`와 제한된 outcome만 저장하고 UI는 상세 검토를 엽니다. canonical 데이터는 명시적 승인 전까지 바뀌지 않습니다.
@@ -68,6 +94,8 @@
 - 제안 승인·보류·거절과 마지막 application 되돌리기
 - 새로고침 뒤 마지막 application과 검토 중·보류한 제안 복구
 - `TODO` / `DONE` / `CANCELLED` 전환, 날짜 전용 기한과 기한 초과 표시
+- 수동 승인된 timed/all-day EVENT 목록과 owner/session-guarded iCalendar plain-text preview 및
+  exact-Blob download; API/service worker cache, public URL과 자동 동기화 없음
 - `@xyflow/react` 기반 bounded 메모–태그 홈, full-corpus 1-hop pagination, keyboard/touch detail
   drawer, off-home memo raw-detail navigation과 pin control
 - current raw body/latest applied title의 literal substring과 active canonical tag/alias exact
@@ -81,7 +109,10 @@
 - Java 21 + Spring Boot 모듈러 모놀리스
 - Spring Security local authentication과 선택적 Google OIDC, PostgreSQL-backed Spring Session, 명시적 Google 연결/안전한 해제
 - delegating bcrypt password hash, session fixation 방지, JSON `401`/`403`, 모든 domain API의 security-context owner scope
-- `LocalAnalyzer`와 `CloudAnalysisGateway` 경계, 실제 모델 대신 `FakeAnalyzer`와 Fake cloud adapter
+- 기본 application은 `FakeAnalyzer`, `NO_NETWORK` Fake gateway와 `UNCERTAINTY_ONLY`를 유지한다.
+  개인 overlay만 고정 localhost LiquidAI semantic-patch gateway를 `AI_PREFERRED`로 사용해
+  schema/domain-valid memo마다 호출한다. clear deterministic decision과 invocation reason은 분리된다.
+  공개 fixture 전용 `SoloLiquidAi*` runner는 이 제품 경로와 분리된 별도 평가 도구다.
 - revision의 기록 시각·IANA 시간대를 사용하는 한국어 날짜 파서와 versioned 결정론적 ambiguity gate
 - Draft 2020-12 runtime contract, domain 규칙, 날짜 의미, owner reference로 local/cloud proposal 재검증
 - run마다 analyzer·prompt·local model·embedding model·routing policy version을 저장하고, 동일한 필수 provenance와 `toolCalls`를 담은 `providerMetadata`를 서버 값과 대조(각 version 1–64자, `toolCalls` 0–100)
@@ -90,12 +121,72 @@
 - V15의 호출 전 durable prepare commit, immutable gateway binding·descriptor 검증, deadline/lease/fence 기반 caller-driven retry, DB transaction 밖 bounded gateway 실행과 revision 재검사 finalize
 - V16의 owner-scoped exact tag/alias K=8 context와 호출 전 raw/hash/version/count snapshot; retry와 restart recovery는 재조회 없이 같은 DB snapshot만 사용하고 `FINALIZED`에서 raw context를 지우되 hash/version/count는 보존
 - V17의 owner-scoped fence별 `gateway-attempt-v1` 내부 ledger; gateway result의 `STARTED`, executor 거절의 확정적 `NOT_STARTED`, 제출 뒤 시작 관측이 없는 종료의 `UNKNOWN`을 구분하고, monotonic local elapsed time과 원격 결과·model token·cost evidence를 숫자와 분리
+- V19의 raw-free local-decision evidence와 fallback reason/model-contribution diff
+- V20의 별도 `model-invocation-v1` mode/reason과 personal-only
+  `approved-type-anchor-k3-v1`; eligible same-owner latest `APPLIED` type 교정에서 current memo에도
+  exact-unique한 짧은 anchor 최대 3개의 UTF-16 offset+kind만 retry snapshot으로 저장하고
+  finalization에서 raw offset을 지운 뒤 hash/version/count만 보존
 - 운영 프로필에서 30초 간격으로 `PREPARED` 또는 lease가 만료된 `RUNNING` dispatch를 한 번에 최대 25건 복구하는 bounded scheduler; owner와 기존 idempotency key는 owner 일치 DB row에서만 가져오며 live lease는 건너뜀
 - LOCAL·cloud SUCCESS·fallback 모두에 같은 `providerMetadata` allowlist canonicalizer를 적용해 임의 provider detail 제거
 - 직렬화된 proposal 64 KiB, `providerMetadata` 8 KiB 상한으로 분석 결과 저장 크기 제한
 - authoritative routing reason을 전달하는 provider-independent cloud request, typed success/failure 결과와 no-tool `NO_NETWORK` Fake adapter
 - owner-scoped memo/analysis/task/graph/search API, no-store raw/detail/search reads, idempotent memo pin, 승인
   transaction 안의 tag 및 item-scoped typed relation application
+- owner/current/active/APPLIED scheduled EVENT projection과 인증된 no-store
+  `GET /events/calendar.ics`; 100-event/128-KiB fail-closed bound, opaque UID, UTC/all-day RFC 5545,
+  UTF-8 CRLF escaping/folding, zero canonical write
+- V22 recipient calendar feeds: default BUSY_ONLY, explicit membership, client-generated
+  256-bit bearer의 digest-only 저장, metadata-only idempotency response, recipient UID/sequence와
+  cancellation tombstone, fixed stateless no-store GET/HEAD; personal V22는 배포됐고 public activation은 미배포
+- 6D.1 + V23 public authority: authenticated no-store exact union
+  `LOCAL_ONLY`/null/null 또는 `PUBLIC_HTTPS`/strict HTTPS multi-label ASCII hostname/exact consent policy;
+  server-owned/default disabled, strict decoder, warned local-only URL. Personal `LOCAL_ONLY` 배포
+  smoke는 통과했고, V23은 기존/new feed local default, fresh-secret atomic external enable,
+  current-policy publication filter와 revoke consent clearing을 source에 추가합니다. Personal V23
+  backup/restore rehearsal, migration/rebuild와 `LOCAL_ONLY` smoke는 통과했고 activation, provider-log,
+  real-feed/client qualification은 미실행입니다.
+- 6D public-edge preflight source: host loopback에만 bind한 dedicated edge, exact bodyless
+  canonical-token GET/HEAD allowlist, generic empty local/upstream 404, bodyless rate 429, fixed safe
+  route/method-class logs, caller-header stripping, edge-only preflight overlay와 별도 final activation
+  overlay. Recorded local disposable synthetic smoke는 query/path/header/custom-method bearer sentinel
+  0건을 통과했지만 public TLS/operator activation 또는 external qualification 증거는 아님
+- 6D Cloudflare operator decision: Cloudflare account와 Cloudflare DNS를 사용하는 소유 domain을
+  prerequisite로 하고, stable single-label `calendar.<zone>` hostname의 remotely-managed named Tunnel만
+  사용한다. 임시 `*.trycloudflare.com` Quick Tunnel은 금지한다. Query bearer는 Cloudflare 처리 경계에
+  들어가므로 customer log field는 query 없는 `ClientRequestPath` 등으로 allow-list하고
+  `ClientRequestURI`/request headers/cookies/referer와 `cloudflared --loglevel debug`를 금지한다. Exact
+  host/path Cache Rule은 bypass이고 외부 probe의 `CF-Cache-Status`는 `HIT`가 아니어야 한다. 현재 remote
+  Tunnel과 single-label published application/DNS 및 exact-path loopback route는 configured 상태다.
+  Hardened `PersonalMemoCalendarCloudflareTunnel` service는 `Stopped`/`Manual`/`LocalSystem`, protected
+  token-file-only, inline-token 없음으로 검증됐고 일반 기본 `Cloudflared` service는 제거됐다. 현재
+  `cloudflared` process와 port `8787`/`49312` listener는 모두 0이며 stop 뒤 Cloudflare status는 `Down`이다.
+  이 준비는 public activation 완료를 뜻하지 않는다. 확보한 공식
+  binary는 version `2026.8.2`, SHA-256
+  `c29eee2b121f5436a642eed69fd9767da7e7b8c510fa50aaa130337f931357b5`, Authenticode
+  `Valid` / signer `Cloudflare, Inc.`로 검증됐다.
+- Cloudflare 운영 source에는 Windows PowerShell 5.1용
+  `Install-PersonalMemoCloudflareTunnel.ps1`, `Start-PersonalMemoCloudflareConnector.ps1`,
+  `Stop-PersonalMemoCloudflareConnector.ps1`가 있다. Installer의 hidden input은 raw Tunnel token 또는
+  exact Windows `cloudflared.exe service install <token>` command 한 줄만 받아 token을 추출하고 malformed/
+  multiline input은 실행하거나 반영하지 않고 거절한다. Installer는 protected token file과 manifest를
+  가진 stopped/Manual LocalSystem service만 준비하고, Start는 manifest/hash/현재 version/Cloudflare
+  signer/ACL/reparse/ObjectName을 다시 검증한 뒤 `warn`/transport `warn`, grace `30s`, loopback-only
+  metrics/diagnostic으로 시작한다. 시작 실패 시 service를 자동 stop하고 진단 실패도 함께 보고한다.
+  Private Start/Stop은 Cloudflare public topology가 active이면 fail closed한다.
+  `Test-PersonalMemoCloudflareSourceContracts.ps1`의 PS5/source contract가 통과했다.
+- `Test-PersonalMemoCloudflareExternal.ps1`와 `compose.public-feed.cloudflare-test.yaml`은 disposable
+  `127.0.0.1:8787` origin의 prepare → explicit external qualification → connector와 remote replica stop
+  확인 뒤 cleanup을 분리한다. 기록된 external run은 strict non-secret receipt를 작성했고 총 46개
+  probe(exact positive 3, origin deny 8, remote catch-all deny 5, bounded rate attempt 30)를 실행했다.
+  Cache 결과는 `BYPASS 0`/`DYNAMIC 46`/`HIT 0`, 최대 관측 latency는 `873.816 ms`였고 owned-log 및
+  external-artifact-reflection sentinel은 PASS였다. Bounded 30회 안에서 429는
+  `NOT_OBSERVED_WITHIN_BOUNDED_ATTEMPTS`였으므로 rate enforcement 성공으로 해석하지 않는다. Current
+  account plan에서 provider/customer log sentinel은 unavailable/unverified이고 receipt의 replica field는
+  dashboard 관측과 별개로 `REQUIRED_NOT_VERIFIED`다. 따라서 overall PASS가 아니라
+  `TRANSPORT_PATH_CACHE_PASS_LOG_AND_REPLICA_REQUIRED`/`NO_GO`다. Harness는 curl HEAD의
+  `size_download`를 output header block과 혼동하지 않게 고쳤고, 재현 불가능한 method marker를 HEAD
+  marker와 force-recreate log boundary로 교체했다. Disposable containers/network/local image는 제거됐고
+  personal stack은 healthy/unchanged였다.
 - 저장된 relation 후보의 bounded owner-visible label, 기본 미선택 review, index-only Apply,
   owner/ACTIVE target 재잠금과 application-scoped undo; V18 relation은 현재 MEMO_TAG graph에 미투영
 - 메모 lifecycle API와 owner-scoped 보류 제안/마지막 application 복구 API
@@ -111,8 +202,18 @@
   변환, 재시도 identity 단위 테스트
 - 12개 regression + 12개 visible synthetic challenge 한국어 memo fixture, fixture JSON Schema, content-free
   평가 report와 prompt-injection/no-tool 경계 테스트
+- 일반 Maven/CI가 선택하지 않는 `SoloLiquidAi*` test-runner family; 외부 orchestrator가 정확한
+  loopback Ollama preflight와 종료 후 process/resource 복구를 책임지고, 모든 runner는 공개 24개만
+  평가함. 보존된 v1–v5 direct-generation, deterministic guarded skill v6, v7-A output-cap,
+  v7-B prompt-overhead, v8-A compact-wire report와 companion attestation은 서로 다른 artifact이며,
+  모두 `SOLO_PROVISIONAL`/`REPORT_ONLY`이고 LiquidAI shadow 최종 결정은 `NO_GO`임
 - Testcontainers PostgreSQL + MockMvc 통합 테스트
 - primary flow, 중복 요청, owner 격리, stale revision, apply rollback, memo lifecycle/recovery, task 상태/overdue, undo 원문 보존 검증
+- EVENT timed/all-day/whole-second Apply, owner/lifecycle/undo exclusion, deterministic iCalendar
+  UID/DTSTAMP/explicit end, Unicode/injection/folding/size bounds, 401/owner-change/no-store/Blob 검증
+- V22 recipient-feed owner/CSRF/idempotency/version 경계, digest-only bearer, strict response decoder,
+  recipient UID/sequence/cancellation, generic empty no-store 404, GET/HEAD 무기록과 모바일 PWA의
+  BUSY_ONLY/명시적 membership/one-time copy-only/rotate/revoke 흐름 검증
 - exact consent pin, 미동의 external gateway 0-call, typed/exception/invalid cloud fallback, server-owned evidence와 provider 오류 문구 비노출 통합 검증
 - V15 fresh/V14-upgrade migration, durable prepare·binding mismatch·bounded timeout·caller-driven 및 운영 scheduler recovery·fence·stale finalize·owner 격리 통합 검증
 - V16의 V15 `none/0/NULL/NULL` 보존, exact lookup owner 격리·결정성·unique resolution, strict context codec와 PREPARED/RUNNING/FINALIZED raw lifecycle 통합 검증
@@ -120,6 +221,9 @@
 - V18 relation proposal source mapping, owner/ACTIVE target race, semantic duplicate/rollback/undo,
   target-tag orphan protection와 no-store label privacy 통합 검증
 - V18 relation table을 current `MEMO_TAG` graph query input에 포함하지 않는 구조적 비투영 경계
+- V20 default clear-input model 0-call과 personal `AI_PREFERRED` clear-input call, `KEEP`/`PATCH`/
+  fallback, owner/Undo/offset/hash/retry/final-scrub 경계 통합 검증; source qualification 결과는
+  `docs/PRIVATE_BETA.md`의 current status를 따름
 - 명시적 opt-in 10,000-memo worst-case all-match PostgreSQL search plan runner와 bounded JSON report.
   한 hot-buffer 실행은 네 page/digest plan이 각각 1.1초 미만이고 shared read/temp I/O가 0임을
   관측했지만 endpoint latency나 SLA로 사용하지 않으며, search 전용 migration/index는 추가하지 않음
@@ -129,6 +233,91 @@
 - 로컬 초안 owner 격리·저장 실패, 교차 탭 인증 전이, 미저장 편집 guard와 prompt형 service-worker 업데이트 단위 테스트
 - GitHub Actions에서 OpenAPI/JSON Schema, backend, frontend, 브라우저 E2E 검사를 실행
 
+2026-08-25의 Milestone 6C source-only qualification은 격리 PostgreSQL의 Flyway V1–V22와 backend
+845 tests / 0 failures / 0 errors / 1 skipped, Spotless/SpotBugs, frontend lint와 44 files / 377 tests,
+TypeScript/PWA build, Redocly 2.44.1, production/personal Compose render, Windows source contract,
+secure-localhost Playwright 24/24 (25.5 s)을 통과했다. Private isolated Nginx unknown-token GET/HEAD는
+empty no-store 404였고 owned frontend/backend synthetic sentinel은 0건이었다. 추가 synthetic tests는
+정확한 lifetime cap/rollback, ALL_DAY active/cancelled와 6개 source-mutation race를 검증했다. 최초
+835-test 실행 전의 cached-context synthetic PostgreSQL connection-limit 6 error는 test-only Hikari
+pool 4/minimum-idle 0을 저장소 test resource에 고정해 해결했고 별도 CLI override 없는 fresh full
+verify가 845 tests로 통과했다. 이 결과는 `SOLO_PROVISIONAL`/`REPORT_ONLY` source evidence이며 personal
+V22 migration/rebuild/private-route smoke, public edge, Google/Apple subscription smoke 또는 alarm
+delivery가 아니다. Exact 6C temporary Docker resources는 제거했고 개인 V20 stack, 개인 PostgreSQL/
+메모/canonical data와 Ollama는 접근하거나 변경하지 않았다.
+
+이 source-only 기록 이후 2026-08-27 owner 승인으로 exact personal stack을 V20에서 V22로 전환했다.
+Checksummed cutover backup의 disposable V20→V22 restore rehearsal, failed migration 0/zero calendar
+backfill, rebuilt service와 trusted private HTTPS health, synthetic unknown-token private GET/HEAD 및
+query-free frontend/backend log 검증이 통과했다. 개인 feed row나 schedule은 만들거나 읽지 않았으며
+public activation과 외부 calendar-client smoke는 여전히 미실행이다.
+
+당시 6D.1은 OpenAPI 0.12.0, backend fail-closed property/authenticated no-store controller와
+frontend strict decoder/warned UI를 source에 추가했다. 인증된
+`GET /api/v1/calendar-feeds/capabilities`는 `{mode:"LOCAL_ONLY",publicOrigin:null}` 또는
+`{mode:"PUBLIC_HTTPS",publicOrigin:"https://<public-fqdn>[:port]"}`의 exact no-store 응답을 정의한다.
+기본은 `LOCAL_ONLY`이고 public origin은 server-owned다. PUBLIC_HTTPS만 server origin을 쓰며 valid
+LOCAL_ONLY는 외부 전달 금지 경고가 있는 local/isolated URL만 만든다. Failed/malformed capability는
+조용한 private-origin fallback이 아니다. Origin validator는 maximum 255-character canonical HTTPS
+multi-label ASCII hostname, optional non-default port만 검사하며 `localhost` 및 `*.localhost`, IP, explicit
+`:443`, URL suffix를 거절한다. Public suffix 소유권이나 DNS reachability는 증명하지 않는다.
+현행 OpenAPI 0.13.0/V23은 `consentPolicyVersion`을 포함한 3-field exact union과 feed별 explicit
+publication consent로 이 capability 계약을 확장한다.
+Fresh isolated qualification은 backend 119 suites / 854 tests / 0 failures / 0 errors / 1 skipped와
+Spotless/SpotBugs, frontend lint와 44 files / 401 tests, TypeScript/PWA production build,
+production/personal Compose render, Windows source contract와 fixed local Node OpenAPI
+YAML/ref/operationId/origin matrix를 통과했다. Private spec의 third-party image mount가 환경 정책으로
+거절돼 Redocly Docker lint는 이번 slice에서 실행하지 않았고, exact temporary Docker resources는
+모두 제거했다.
+이어진 owner-authorized personal 배포는 checksummed backup
+`personal-memo-20260827-033109271Z.dump`, pre-6D.1 rollback image tags, backend/frontend 새 image
+`sha256:3d1295b84aa41ef27e0adf0120775b3b0c021f6eae9bcde94658393d317772d4` /
+`sha256:4593d22806a46ab69ceae5630196c74cc59fb356b5d815535c4fcc2090830f52`를 보존했다. 배포 후 세
+service health, Flyway V22/failed 0, publication environment entry 0, trusted PWA 200, session 없는
+capability 401 `AUTHENTICATION_REQUIRED` + `no-store`, synthetic private GET/HEAD와 token-free log가
+통과했다. 따라서 배포 설정은 fail-closed `LOCAL_ONLY`다. 개인 session을 사용하지 않았으므로
+authenticated 200 body 자체는 runtime smoke하지 않았다.
+
+Public hostname/DNS/TLS/operator route와 external bounds/log proof는 이 private deployment에서
+구현·실행하지 않았다. 이후 별도 owner 승인으로 remote named Tunnel과 single-label published
+application/DNS, exact-path loopback route를 configured 상태로 만들었다. Hardened
+`PersonalMemoCalendarCloudflareTunnel` service는 `Stopped`/`Manual`/`LocalSystem`과 protected
+token-file-only ImagePath/no-inline-token을 검증했고, 일반 기본 `Cloudflared` service는 제거했다. 현재
+`cloudflared` process와 port `8787`/`49312` listener는 모두 0이며 connector stop 뒤 Cloudflare status는
+`Down`이다. 이후 disposable external synthetic qualification은 위 46-probe receipt를 남기고 완전히
+rollback했다. Transport/path/cache와 owned-log sentinel은 통과했지만 provider/customer log sentinel은
+현재 account plan에서 확인할 수 없고 receipt의 remote replica proof는 `REQUIRED_NOT_VERIFIED`다.
+별도 dashboard에서 cleanup 전후 active replica 0/routes 1/status Down을 수동 관측했어도 receipt의 strict
+proof를 대체하지 않는다. 실제 activation, real-feed qualification과 Google/Apple smoke는 실행하지
+않았으므로 activation은 계속 `NO_GO`다. 전체 상태는 `SOLO_PROVISIONAL`/`REPORT_ONLY`다.
+
+그 뒤 공식 명칭 **`6D public-edge preflight`**로 loopback-only `calendar-feed-edge`,
+`compose.public-feed.yaml`, final activation 전용 `compose.public-feed-activation.yaml`,
+`.env.public-feed.example`과 isolated test topology를 source에 추가했다. Preflight overlay만으로는
+backend publication property가 바뀌지 않아 `LOCAL_ONLY`이고, edge host bind는
+`127.0.0.1:${PERSONAL_MEMO_CALENDAR_EDGE_PORT:-8787}`뿐이다. PWA/API/OAuth/backend host port와
+PostgreSQL은 이 edge로 공개되지 않는다.
+
+Recorded isolated smoke는 disposable Nginx upstream과 generated synthetic bearer만 사용해 exact
+GET/HEAD, deny surface, stripped caller headers, generic empty local/upstream 404, bodyless rate 429,
+provisional origin-side bounds와 query/path/header/custom-method bearer sentinel의 owned edge/upstream
+log 0건을 통과했다. Personal PostgreSQL/session/memo/feed/event/canonical schedule/Apply는 사용하지
+않았고 external operator log 증명도 아니다. Bounds는 60 requests/minute + burst 20, connection 8,
+upstream connect/send/read 2s/5s/10s이며 external per-client quota나 total external deadline/SLA가 아니다.
+
+Cloudflare cutover는 connector를 멈춘 채 remotely-managed named Tunnel, single-label
+`calendar.<zone>`, exact feed hostname/path 정책, cache bypass와 query-free customer log field를 먼저
+준비한다. Connector는 disposable synthetic origin에만 잠시 연결해 외부 path/method/cache/log
+sentinel을 검증한 뒤 다시 stop하고 synthetic 자원을 제거한다. 그 다음 live loopback edge를 올리고,
+activation overlay를 적용한 뒤, connector를 **마지막에** 시작한다. Cloudflare WAF rate rule은
+per-data-center counter와 enforcement delay가 있으므로 보조 방어일 뿐 origin bound를 대체하지 않는다.
+Cloudflare Tunnel만으로 total 10s deadline이나 128 KiB hard response cap을 보장했다고 주장하지 않는다.
+Rollback은 connector stop 및 tunnel을 통한 성공 feed response가 없음(non-2xx이며 Cloudflare edge error
+허용)을 확인 → activation overlay 없이 backend recreate 및
+`LOCAL_ONLY` 확인 → loopback edge 제거 순서다. Database migration/data rollback은 없다. 실제 public
+activation과 Google/Apple smoke는 계속 `NOT_AUTHORIZED`; 상태는
+`SOLO_PROVISIONAL`/`REPORT_ONLY`다.
+
 ## 아키텍처
 
 ```text
@@ -137,7 +326,7 @@ Android Chrome PWA
              │ session cookie + CSRF / REST JSON
              ▼
 Spring Boot modular monolith
-  auth │ memo │ analysis │ taxonomy │ task │ graph │ search
+  auth │ memo │ analysis │ taxonomy │ task │ event │ graph │ search
       │ optional Google OIDC
              │
              ▼
@@ -171,13 +360,37 @@ frontend container는 unprivileged Nginx로 빌드된 PWA를 제공하고 `/api`
 
 ### 개인 PC에서 Galaxy S24로 사용
 
-공개 스토어에 올리기 전 한 사람이 시험하는 경로는 `compose.personal.yaml`과
-`scripts/personal`에 분리되어 있습니다. 같은 application image와 PostgreSQL schema를 사용하므로
-나중에 서버로 옮길 때 앱을 다시 만들 필요가 없습니다. 개인 mode는 선택한 private LAN IP의
-frontend HTTPS만 공개하고 Spring Boot와 PostgreSQL port는 공개하지 않습니다.
-사설 IP callback을 쓰는 이 개인 overlay에서는 Google OAuth와 provider credential을 의도적으로
-비활성화합니다. 자체 로그인으로 먼저 안정화한 뒤, 공개 HTTPS domain을 준비해 일반 production
-overlay로 이전하면 기존의 명시적 Google 계정 연결 기능을 켤 수 있습니다.
+1차 비공개 베타는 **운영자가 provision한 단일 owner가 신뢰하는 RFC1918 사설 LAN에서 온라인으로
+사용하는 범위**입니다. 이 경로는 `compose.personal.yaml`과 `scripts/personal`에 분리되어 있습니다.
+같은 application image와 PostgreSQL schema를 사용하므로 나중에 서버로 옮길 때 앱을 다시 만들
+필요가 없습니다. 개인 mode는 local CA를 신뢰한 기기에 선택한 private LAN IP의 frontend HTTPS만
+공개하고 Spring Boot와 PostgreSQL port는 공개하지 않습니다. 공유기 port forwarding, DMZ, 공용
+Wi-Fi 공개는 베타 범위가 아닙니다.
+사설 IP callback을 쓰는 이 개인 overlay에서는 Google OAuth와 외부 provider credential을 의도적으로
+비활성화하고 local/Google registration도 닫습니다. 일반 application은 계속 Fake gateway가
+기본이며 invocation mode는 `UNCERTAINTY_ONLY`입니다. 이 개인 overlay만 `AI_PREFERRED`를 켜
+`host.docker.internal:11434`의 exact tag/digest LiquidAI를 모든 schema/domain-valid current revision에
+호출합니다. deterministic 판단이 clear여도 호출하되 ambiguity는 발명하지 않습니다. 응답은
+semantic-patch v2 `KEEP` 또는 기존 grounded candidate의 제한된 `PATCH`일 뿐이고
+실패·timeout·schema/domain 위반은 재검증된 local 상세 검토로 닫힙니다. 그 local evidence가 default
+`RECORD` fallback이었다면 `UNKNOWN`으로 정규화되고, 기존의 명시적 grounded candidate까지 임의로
+`UNKNOWN`으로 바꾸지는 않습니다.
+현재 `ollama-local-gateway-v2`는 optional bounded textual `thinking`을 검증한 뒤 무시하고 visible
+`content`만 strict JSON/schema/domain validation에 사용합니다. non-text·oversized·extra field 또는
+malformed/truncated content는 계속 fail-closed fallback입니다.
+사용자가 명시적으로 Apply한 eligible type 교정은 같은 owner 안에서만 current memo에도
+exact-unique한 짧은 anchor 최대 K=3의 약한 hint가 될 수 있습니다. retry snapshot에는 current memo
+UTF-16 offset와 approved kind만 있고 historical memo, selection, ID, title/tag/date/relation은 없습니다.
+finalization은 raw offset snapshot을 지우고 hash/version/count만 남깁니다. 이는 RAG corpus/vector/
+embedding, automatic rule promotion 또는 training이 아닙니다.
+현재 `num_predict=1024`는 synthetic smoke에서 STOP을 얻기 위한 provisional hidden-reasoning
+budget이며 visible output/response/proposal 상한은 별도 제한됩니다. 자동 Apply, RAG ingestion,
+fine-tuning, LoRA와 알람/reminder delivery는 하지 않습니다. 모든 result는 manual Apply 전까지
+untrusted proposal이고 상태는 `SOLO_PROVISIONAL`/`REPORT_ONLY`입니다. 2026-08-24 owner-authorized
+backup/restore rehearsal, personal Flyway V18→V20, rebuild와 health verification을 완료했고 rollout은
+`GO_TO_DEVICE_ACCEPTANCE`입니다. product smoke는 별도 disposable synthetic DB에서만 실행했으며 자체
+로그인으로 먼저 안정화한 뒤, 공개 HTTPS domain을 준비해 일반 production overlay로 이전하면
+기존의 명시적 Google 계정 연결 기능을 켤 수 있습니다.
 
 ```powershell
 # 이 창에서만 로컬 스크립트 실행을 허용합니다. 시스템 정책은 바꾸지 않습니다.
@@ -327,24 +540,209 @@ docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.p
 docker compose --env-file .env.prod -p $prodProject -f compose.yaml -f compose.prod.yaml ps
 ```
 
-일반 운영 overlay는 frontend만 loopback에 열며 외부 HTTPS same-origin edge를 별도로 요구합니다. 개인 PC overlay는 같은 production 경계 위에서 private LAN용 local TLS listener와 일회성 초기 계정 command를 제공하고 Google OAuth를 강제로 끕니다. local 가입과 신규 Google 사용자 자동 생성은 모두 fail-closed입니다. 추후 공개 HTTPS domain의 일반 production overlay로 이전한 뒤 Google 로그인을 켤 때는 client 자격 증명과 절대형 HTTPS redirect URI가 모두 필요하며, 이미 연결된 Google identity 로그인과 로그인한 local 계정의 명시적 Google 연결만 지원합니다. 현재 형태는 공개 self-service 출시가 아니라 접근을 제한한 포트폴리오·평가용 checkpoint입니다. 환경 변수, health check, Google 설정, backup/restore, Flyway와 rollback 절차는 [배포 및 운영 가이드](docs/DEPLOYMENT.md)를 따릅니다.
+일반 운영 overlay는 frontend만 loopback에 열며 외부 HTTPS same-origin edge를 별도로 요구합니다. 개인 PC overlay는 같은 production 경계 위에서 private LAN용 local TLS listener와 일회성 초기 계정 command를 제공하고 Google OAuth를 강제로 끕니다. local 가입과 신규 Google 사용자 자동 생성은 모두 fail-closed입니다. 추후 공개 HTTPS domain의 일반 production overlay로 이전한 뒤 Google 로그인을 켤 때는 client 자격 증명과 절대형 HTTPS redirect URI가 모두 필요하며, 이미 연결된 Google identity 로그인과 로그인한 local 계정의 명시적 Google 연결만 지원합니다. 현재 형태는 단일 operator-provisioned owner를 위한 접근 제한형 **private beta**이며 공개 self-service 또는 multi-user/internet beta가 아닙니다. 환경 변수, health check, Google 설정, backup/restore, Flyway와 rollback 절차는 [배포 및 운영 가이드](docs/DEPLOYMENT.md)를 따릅니다.
 
 ## 현재 경계
 
 이 저장소는 포트폴리오용 MVP 체크포인트이며 다음 기능은 아직 연결하지 않았습니다.
 
-- 실제 로컬 AI 모델 또는 클라우드 LLM
+- 개인 overlay 밖의 실제 로컬 AI 모델 또는 모든 cloud LLM
 - 실제 external provider 설정과 사용자 consent grant/revoke API
 - related-memo analysis context와 fuzzy/vector/embedding retrieval; 현재 exact lexical search보다
   넓은 fuzzy/semantic 검색과 cluster reveal
 - 실제 model token·cost 숫자 수집·예산 집행·집계와 승인된 attempt 보존/삭제 정책
 - local email 검증·비밀번호 재설정 delivery, IP·edge rate limit/abuse protection, MFA/passkey, 완전한 계정 삭제 자동화
+- public DNS/TLS feed-only edge, token-free owned/external log proof 및 Google/Apple subscription smoke
 - 완전한 오프라인 동기화와 IndexedDB outbox
 - Web Push 및 reminder dispatcher
 - 자동 태그 병합·분리, 의미 검색, 노드 압축
 - Neo4j, Kafka, Redis, 별도 AI 마이크로서비스
 
-local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 적용되며 잠금 중 추가 시도로 만료가 연장되지 않습니다. 만료 뒤 정상 로그인하면 실패 기록을 초기화합니다. V13은 과거 boolean-only cloud consent를 모두 폐기하고, true consent가 owner row의 정확한 policy version과 승인 시각을 함께 갖도록 강제합니다. V14는 내부 authorization/grant/token snapshot을 도입했고, V15는 `analysis_runs`의 `QUEUED`/`PENDING` row와 `analysis_run_dispatches`의 검증된 local proposal·reserved proposal ID·idempotency/request hash·immutable executor binding·deadline을 gateway 호출 전에 함께 commit합니다. V16은 owner의 `ACTIVE` tag/alias에 대한 exact equality 결과로 만든 deterministic K=8 context를 같은 dispatch에 raw/hash/version/count로 저장합니다. 기존 V15 dispatch는 과거 문맥을 지어내지 않고 `none/0/NULL/NULL`로 남습니다. V17은 새 dispatch를 `gateway-attempt-v1`로 표시하고 claim한 각 fence마다 owner-scoped ledger row를 `max_attempts` 상한 안에서 하나씩 만듭니다. 과거 dispatch는 `attempt_history_version=none`으로 남고 attempt row를 backfill하지 않습니다. gateway result가 반환되면 execution은 `STARTED`다. executor가 작업을 받지 못하면 local `EXECUTOR_REJECTED`, execution `NOT_STARTED`, remote result `UNKNOWN`으로 남겨 gateway가 실제로 반환한 `UNAVAILABLE` result와 구분합니다. 제출 뒤 timeout·caller interruption·unexpected local termination이 발생하면 시작이 관측된 경우 `STARTED`, 관측되지 않은 경우 `UNKNOWN`이며 후자를 `NOT_STARTED`로 단정하지 않습니다. 완료·timeout·caller interruption처럼 프로세스가 종료를 관측한 시도는 `System.nanoTime` 기반 local elapsed millisecond를 저장하지만, process loss는 duration과 remote result를 `UNKNOWN`/null로 남깁니다. local termination을 관측하고 descriptor가 model version `none`의 `NO_NETWORK` Fake임을 확인한 경우 execution uncertainty와 무관하게 model-token/cost가 `NOT_APPLICABLE`/null입니다. 미래 real-model은 확정적 `NOT_STARTED`일 때만 `NOT_APPLICABLE`/null이고, 실행 또는 remote completion이 불확실하면 `UNKNOWN`/null이며, 관측된 result도 usage/cost가 gateway 계약에 연결되기 전까지 `NOT_REPORTED`/null입니다. `REPORTED` 숫자 저장 shape만 DB가 검증하며 미확인 값을 0으로 지어내지 않습니다. caller는 lease와 fence를 claim한 뒤 DB transaction 밖에서 bounded gateway 호출을 수행하며, 같은 key/body retry와 운영 scheduler recovery는 tag를 다시 조회하지 않고 저장된 context와 같은 provider token을 사용합니다. 운영 프로필에서는 bounded scheduler가 30초 fixed delay로 DB에서 `PREPARED` 또는 lease가 만료된 `RUNNING`을 최대 25건 고르고, row가 가리키는 owner와 기존 raw idempotency key에 같은 owner+operation+key advisory lock을 적용해 동일 lifecycle을 실행합니다. live lease는 호출하지 않고 다음 주기로 넘기며, process 재시작 뒤에도 남은 dispatch가 같은 상한 안에서 다시 선택됩니다. finalize는 memo owner·활성 상태·revision을 다시 잠가 확인하고, 변경되었으면 결과를 `STALE`로 확정한 transaction을 commit한 뒤 caller에게 `409 STALE_MEMO_REVISION`을 반환합니다. 이때 prepared local proposal과 retrieval-context raw text를 지우고 각 hash와 context version/count는 보존합니다. context는 hint일 뿐이며 최종 owner/reference validation이 계속 authoritative합니다. 공개 POST·DTO·proposal·`providerMetadata`·UI·평가 report는 V17에서 바뀌지 않았습니다. attempt ledger와 내부 상태, 복구용 key, prepared payload/context, provider/model ID, binding, lease, fence, provider token은 일반 log·browser/service-worker storage에도 노출하지 않습니다. ledger에는 provider text·ID·token·raw memo·retrieval context를 저장하지 않으며, 승인된 purge 정책이 생기기 전까지 현재 run data와 함께 보존하고 임의 TTL로 지우지 않습니다. 현재 Fake descriptor는 `NO_NETWORK`라 동의 없이 동작하며, 실제 external provider, Ollama/LiquidAI와 consent grant/revoke HTTP API는 구성되어 있지 않습니다. 이 경계는 exactly-once가 아니라 at-least-once이므로 실제 provider는 동일 token의 중복 호출을 멱등하게 처리해야 합니다. raw/related memo와 fuzzy/vector/embedding retrieval, 실제 model-token/cost 숫자 수집·집계·budget enforcement는 아직 구현하지 않았습니다.
+개인 overlay의 LiquidAI 연결은 authoritative analyzer 승인이 아니라
+`SOLO_PROVISIONAL`/`REPORT_ONLY` proposal 경로입니다. 기본 application은 Fake +
+`UNCERTAINTY_ONLY`라 clear input에서 model 0-call이지만, 개인 overlay는 `AI_PREFERRED`로 고정
+model/tag/digest를 machine-local Docker host bridge에서 모든 검증된 memo에 호출합니다. 결과는
+`KEEP` 또는 bounded `PATCH`여도 정확성 주장이 아니며 explicit Apply 전에는 canonical을 바꾸지
+않습니다. 별도 test-scope
+`SoloLiquidAi*` runner family도 이미 설치된 모델을 고정 localhost endpoint에서만 호출해
+공개 synthetic v2 12+12, 총 24건을 Fake와 비교하며 개인 DB/API/Apply 경로에 접근하지 않습니다.
+이 runner들은 일반 Maven/CI가 선택하지 않고 외부 orchestrator의 정확한 loopback preflight와
+process/resource cleanup을 요구합니다.
+
+보존된 v1 관측 결과 24회 중 scored response와 inference-schema valid output은 18건, canonical proposal
+schema valid는 3건, domain valid는 1건이었고, wrong-local 9건, invented precise date 11건,
+missing overflow signal 1건, unresolved hallucination 2건이었습니다. 성공 응답 LiquidAI
+latency는 p50 `15451.417 ms`, p95/max `33236.766 ms`, mean `17431.567 ms`였고 Fake는 p50
+`0.453 ms`, p95 `1.581 ms`였습니다. Ollama allocation은 `3166835834` bytes/context `8192`였습니다.
+외부 device-wide 853개 sample은 baseline `3501 MiB`, peak `6990 MiB`, utilization `92%`, post-run
+`3543 MiB`였지만 model-exclusive 측정이 아닙니다. 결과 report는
+`backend/target/evaluation/solo-liquidai-shadow-baseline.json`, SHA-256은
+`360660c5e283f719465262088e91b168a88dea27944a0e61c5fcd065a830b020`이며
+`SOLO_PROVISIONAL`/`REPORT_ONLY`/`NOT_CONFIGURED`입니다. 공개 24건은 blind, independently
+human-adjudicated, train/validation data가 아니므로 당시 결정은 `NO_GO_FOR_TRAINING`,
+prompt/schema iteration `RECOMMENDED`였습니다. 이 historical recommendation은 v8-A에서
+종료됐으며 현재 결정은 LiquidAI `NO_GO`와 skill-only 유지입니다. 이는 provider, 제품 adapter
+또는 fine-tuning 허가가 아닙니다.
+
+완료된 v2 prompt/schema 개발 실행은 같은 공개 visible 24건과 정확한 설치 모델
+`hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q8_0`(digest
+`677b7229e7816d6bbdf3f7b777a5321f9719ecd3ab6e2658a2ff3798d3185822`)을 사용했습니다. v2 report
+SHA-256은 `7507690bc6f80c937f382ce428a210540cede1fde621249b5441755b18cb4f26`, companion attestation은
+`solo-liquidai-shadow-baseline-v2-attestation.json`에 postflight/isolation evidence로 남고, frozen
+execution source bundle SHA-256은 `2f19402e7ee004de93a4508fecd6b55f344445ce381636742de00b55bd79e76d`입니다. LiquidAI는
+24/24 response, inference/canonical/domain valid `20/24`/`20/24`/`10/24`, route accuracy
+`0.541667`이었고 wrong-local 4, invented precise date 0, local overflow 0, missing overflow signal 1,
+unresolved hallucination 0을 기록했습니다. inference/canonical/domain invalid 4/4/14의 합계 22는
+겹치는 category observation이지 22개 고유 case가 아닙니다. Fake는 canonical/domain `24/24`, route
+accuracy `1.0`, 같은 safety error 전부 0이었습니다.
+
+v2 LiquidAI all-attempt min/p50/p95/max/mean latency는
+`9896.043`/`16754.523`/`24241.698`/`24655.245`/`17540.866 ms`, successful-response는
+`9895.774`/`16754.176`/`24241.137`/`24654.879`/`17540.185 ms`, Fake는
+`0.377`/`0.547`/`11.795`/`114.698`/`5.872 ms`였습니다. Ollama allocation은 context `8192`에서
+VRAM `3166835834` bytes였지만 report는 peak/utilization을 `NOT_AVAILABLE`로 둡니다. attestation의
+coarse device-wide 9개 sample은 baseline `3197 MiB`, maximum observed `6671 MiB`, maximum
+utilization `89%`로, model/process-exclusive 측정도 peak claim도 아닙니다.
+
+v2도 `SOLO_PROVISIONAL`/`REPORT_ONLY`/`NOT_CONFIGURED`이며 개발 역할은
+`PUBLIC_VISIBLE_PROMPT_SCHEMA_DEVELOPMENT_ONLY`입니다. 공개 24건은 blind 또는 independently
+human-adjudicated가 아닙니다. `dueDateCandidateId`와 `sourceSpan`은 v2 test schema에서 null-only인
+`DISABLED_NULL_ONLY_IN_SHADOW_V2`이고, relation은 empty-array로 disabled, tag ranking은 미채점입니다.
+network는 OS-level egress isolation이 아니라 runner `127.0.0.1:11435` → container-local relay →
+`host.docker.internal:11435`(expected gateway `192.168.65.254`) → Windows loopback Ollama의
+machine-local Docker host bridge였으며 published port는 없었습니다. 실험 뒤 runner/relay와 model
+allocation이 종료되고 exact model tag/digest, listener/process, scoped temp/log 상태가 원복됐습니다.
+관측 runner 범위에서 product HTTP, canonical read/write, Apply는 모두 0이었고 개인 메모·PostgreSQL을
+사용하지 않았습니다. 개발 acceptance는 `NOT_MET`, training은 `NO_GO_FOR_TRAINING`, LoRA는
+`NO_GO`입니다. fine-tuning/학습 또는 학습 도구 설치, provider/product adapter/API/DB/Apply 변경,
+`PASS`나 target-phone readiness를 승인하지 않습니다.
+
+후속 v3/v4도 같은 공개 visible fixture, 고정 모델, sequential no-retry/no-tool, proposal-only
+경계를 유지하며 이전 report를 덮어쓰지 않았습니다. v3 report
+`solo-liquidai-shadow-baseline-v3.json`은 `33530` bytes, SHA-256
+`f6d6e8de0fc7aad342c0bd68487f1e416f922c75e6ba87cd8463c9b990468fa8`, v4 report
+`solo-liquidai-shadow-baseline-v4.json`은 `34697` bytes, SHA-256
+`ce95d1c3a765ffd6805a1062b8cfa26e476f0f1c8dc3cf843407b856a17741f5`입니다. 각 companion은
+`solo-liquidai-shadow-baseline-v3-attestation.json`과
+`solo-liquidai-shadow-baseline-v4-attestation.json`입니다. 둘 다
+`SOLO_PROVISIONAL`/`REPORT_ONLY`, acceptance `NOT_MET`, training `NO_GO_FOR_TRAINING`, LoRA
+`NO_GO`이며 `PASS`가 아닙니다. v4는 response/inference `24/24`, semantic IR/canonical/domain
+`1/1/1`, failure observation `69`(unique case `23`, overlap `46`), wrong-local `23`, invented precise
+date `0`, local overflow `1`, missing overflow `1`을 기록했습니다.
+
+완료된 v5 report는
+`backend/target/evaluation/solo-liquidai-shadow-baseline-v5.json` (`35035` bytes, SHA-256
+`ba9c069d85c038d5c5603f8ddddfeae03aa8778cca7a949180142fee9b873102`)이며 restoration companion은
+`solo-liquidai-shadow-baseline-v5-attestation.json`입니다. LiquidAI response/inference는
+`24/24`, semantic IR/canonical/domain은 `8/8/7`, failure observation은 `49`(unique case `17`,
+overlap `32`)였습니다. wrong-local `16`, invented precise date `2`, local overflow `1`, missing
+overflow `1`, route accuracy `0.375`였고, Fake는 canonical/domain `24/24`, route accuracy `1.0`,
+같은 safety error `0`이었습니다. all-attempt p50/p95/max/mean latency는
+`17172.783`/`31117.602`/`31305.739`/`18804.994 ms`였고 Ollama allocation은 context `8192`에서
+`3166835834` bytes였습니다. 비독점 device-wide 관측은 sample/miss `906/0`,
+baseline/first/last/maximum `3260`/`3243`/`3249`/`7196 MiB`, maximum utilization `93%`이며
+model-exclusive peak는 `NOT_AVAILABLE`입니다.
+
+v4→v5에서 semantic/canonical/domain `1/1/1→8/8/7`, failure `69→49`, unique case `23→17`,
+wrong-local `23→16`, p50 `22542.110→17172.783 ms`로 개선됐지만 invented precise-date는 `0→2`,
+p95는 `30973.996→31117.602 ms`로 악화됐고 local/missing overflow가 각각 `1`로 남았습니다.
+따라서 v5도 `SOLO_PROVISIONAL`/`REPORT_ONLY`/`NOT_CONFIGURED`, acceptance `NOT_MET`, training
+`NO_GO_FOR_TRAINING`, LoRA `NO_GO`입니다. attestation은 runner·relay/model/listener/process와 scoped
+temporary resource 복구, exact model tag/digest 보존, 관측 범위의 product HTTP/canonical
+read/write/Apply `0`을 기록합니다. 개인 메모·개인 PostgreSQL·canonical data는 읽거나 바꾸지
+않았습니다.
+
+완료된 deterministic guarded skill v6 report는
+`backend/target/evaluation/solo-liquidai-deterministic-skill-v6.json` (`45708` bytes, SHA-256
+`a761cd89276ebecbed8a09f2aa6b37d041f16944bbf8491fd87d1f1201a0b35f`)이며 companion은
+`solo-liquidai-deterministic-skill-v6-attestation.json`입니다. Fake가 authoritative proposal을
+생성하고 deterministic skill은 그 proposal을 검증·projection합니다. LiquidAI는 이미 존재하는 item
+title ordinal과 proposal을 바꾸지 않는 topic ordinal만 선택할 수 있었지만 24개 요청 모두
+`MODEL_TRUNCATED_RESPONSE`로 거절되어 response/accepted contribution은 `0/0`, skill fallback은
+`24`였습니다.
+
+| Metric | Fake | Skill only | LiquidAI guarded |
+| --- | ---: | ---: | ---: |
+| canonical schema / domain valid | 24 / 24 | 24 / 24 | 24 / 24 |
+| route accuracy | 1.0 | 1.0 | 1.0 |
+| wrong-local / safety error | 0 / 0 | 0 / 0 | 0 / 0 |
+| protected proposal mismatch | 0 | 0 | 0 |
+
+`GuardedSystem MET`는 LiquidAI 결과가 아니라 24/24 deterministic Fake/skill fallback에만 귀속됩니다.
+LiquidAI model contribution과 전체 development acceptance는 `NOT_MET`입니다. p95 latency는 Fake
+`9.509 ms`, skill `0.923 ms`, selector `491.271 ms`, end-to-end `497.976 ms`였고, Ollama allocation은
+context `2048`에서 `2977033092` bytes였습니다. 이 실행은
+`SOLO_PROVISIONAL`/`REPORT_ONLY`/`PUBLIC_VISIBLE_DEVELOPMENT_ONLY`이며 개인 메모·개인 PostgreSQL·
+canonical data·제품 API/Apply에 접근하지 않았고 RAG도 사용하지 않았습니다. companion은 runner와
+relay 종료, model unload, Ollama process/listener `0`, Docker Desktop `OFF` 원복, canonical Docker
+fingerprint 불변, scoped temporary resource 제거를 기록합니다.
+
+후속 v7-A output-cap 진단은 `num_predict`를 `64→128`로 늘렸지만 STOP `0`, LENGTH `24`, accepted
+contribution `0`, fallback `24`였습니다. report는 `5925` bytes, SHA-256
+`5b6a578b2b2222fc6180a4f70af7718526ccce2e127b070a404477a30c19d20f`, attestation은 `7874`
+bytes, SHA-256 `bccc6a0856ea9055f199d381e7be28e0e8587373687ab1d148f3617e69c4c617`입니다. prompt
+tokens는 `9765`, selector p95는 `923.668 ms`였습니다.
+
+v7-B는 prompt overhead를 `5973` tokens로 줄여 v7-A 대비 `3792` total, case당 `158` tokens를
+절감했고 selector p95는 `823.686 ms`였지만 STOP `0`, LENGTH `24`, accepted `0`, fallback
+`24`는 그대로였습니다. report는 `7081` bytes, SHA-256
+`c81939c516a002aef5b53f867d9bf9cb9f176a8204894e870e0134ccc66c6b37`, attestation은 `9743`
+bytes, SHA-256 `ff057509f5cc24dce0cbf25337a9d841f3d293821c1d73280b94dfdbccbe233d`입니다.
+
+최종 v8-A는 strict compact `{v,p,t}` wire와 무수정 deterministic mapping을 사용했지만 24/24가
+128-token evaluation cap에서 LENGTH로 끝났고 STOP/accepted/fallback은 `0/0/24`였습니다. report는
+`backend/target/evaluation/solo-liquidai-compact-wire-diagnostic-v8a.json` (`11150` bytes, SHA-256
+`bd9f4419fb26b8a2950b80722eef746fff41e4418a8c52ccb94aafc7333365e3`), attestation은
+`solo-liquidai-compact-wire-diagnostic-v8a-attestation.json` (`12184` bytes, SHA-256
+`97e7c67a9a1f01140be7ad25734ce7080002b367ea7c87772c8a4c8287b4cdab`)입니다. prompt tokens는
+`6093`, Fake/selector p95는 `10.131`/`855.907 ms`로 selector가 `84.482×` 느렸습니다. guarded
+schema/domain은 `24/24`, 누출과 protected mutation은 `0`이었습니다. 비독점 device-wide sampler는
+sample/miss `59/0`, baseline/max `3033`/`6175 MiB`, maximum utilization `92%`였고 model-exclusive
+peak는 주장하지 않습니다. 실행 뒤 Ollama, Docker Desktop, model allocation, listener/process와 scoped
+temporary resource는 원래 상태로 복구됐습니다.
+
+v7-A의 cap 증가, v7-B의 prompt overhead 감소, v8-A의 compact wire 모두 24/24 truncation을
+해결하지 못했습니다. v7-B는 overhead 감소만 입증했으며 LiquidAI 기여는 계속 `0`입니다. 따라서
+LiquidAI shadow 경로는 authoritative 분석과 학습에 계속 `NO_GO`입니다. 개인 beta에서는 사용자
+결정에 따라 제한된 AI-preferred semantic patch path만 `SOLO_PROVISIONAL`/`REPORT_ONLY`로 사용합니다.
+eligible approved type 교정은 K=3 current-memo exact-unique anchor hint에만 쓰며 자동 규칙으로 승격하지
+않습니다. 장기 dependency reduction은 별도로 public synthetic positive/negative fixture를 검토해
+deterministic Fake 규칙을 사람이 승격하는 hardening입니다.
+fine-tuning/LoRA와 학습 도구 설치는 수행하지 않았고 training `NO_GO_FOR_TRAINING`, LoRA `NO_GO`를
+유지합니다. 현재 실패는 retrieval 부족이 아니므로 RAG도 사용하지 않습니다. 별도의
+retrieval-solvable 요구가 확인될 때만 허용 목록과 문서 크기·검색 건수·context 크기를 고정한
+public/de-identified corpus로 비교합니다. 모든 후속 비교는 JSON Schema/domain validation,
+proposal-only/no-Apply, Fake 비교, aggregate-only `SOLO_PROVISIONAL`/`REPORT_ONLY`를 유지합니다.
+개인 path는 ADR 0008의 좁은 경계이며 provider 권한, 정확도 주장, 학습 또는 automatic Apply 승인으로
+이어지지 않습니다.
+
+2026-08-21의 별도 product-like synthetic smoke에서는 `6시 디스코드 접속하기`가 약 `5.304 s`에
+`STOP`으로 끝나 strict `TASK` semantic patch가 수용됐습니다. action/object/time은 각각 원문의
+`접속하기`/`디스코드`/`6시`였고, 오늘 18시 같은 정확한 날짜는 만들지 않았습니다. 부정·설명형
+두 문장은 각각 약 `9.523 s`/`8.485 s`에 `LENGTH`로 끝나 상세 검토로 안전하게 복귀했습니다.
+이는 3건의 안전 smoke이지 정확도 benchmark가 아니며, historical Fake p95 `9.509 ms`와 같은
+cohort도 아닙니다. 개인 API·DB·메모는 사용하지 않았고 Ollama/process/listener/model allocation과
+임시 자원은 원래 상태로 복구했습니다. 상태는 `SOLO_PROVISIONAL`/`REPORT_ONLY`; 알람 저장·전달,
+fine-tuning/LoRA, RAG, 자동 Apply는 포함하지 않습니다.
+
+2026-08-24의 현재 product API smoke도 fresh disposable PostgreSQL과 synthetic memo만 사용했습니다.
+이전 adapter-v1/diagnostic의 malformed·length-bounded visible content는 strict validation에서 fail
+closed했고, `ollama-local-gateway-v2+local-semantic-patch-v2` exact-sentence 재실행은 같은 strict contract 아래 두 번
+성공했습니다. clean run은 gateway/wall 약 `4.596 s`/`4.713 s`, `SUCCESS`,
+`ACCEPTED_UNCHANGED`, tool/mutation 0이었습니다. `fake-v8` / `korean-rules-v6` proposal은 `6시
+디스코드 접속하기`를 TASK(action `접속하기`, object `디스코드`)로 제안하지만 날짜 없는 `6시`는
+due나 오늘 18시 알람으로 만들지 않습니다. smoke에서는 Apply와 canonical item write를 하지
+않았습니다. 이 한 문장 compatibility 성공은 broad model 품질 승인이 아니며 provider 결정은 계속
+`NO_GO`입니다.
+
+local 로그인에는 같은 계정의 연속 5회 실패 시 15분 잠금이 적용되며 잠금 중 추가 시도로 만료가 연장되지 않습니다. 만료 뒤 정상 로그인하면 실패 기록을 초기화합니다. V13은 과거 boolean-only cloud consent를 모두 폐기하고, true consent가 owner row의 정확한 policy version과 승인 시각을 함께 갖도록 강제합니다. V14는 내부 authorization/grant/token snapshot을 도입했고, V15는 `analysis_runs`의 `QUEUED`/`PENDING` row와 `analysis_run_dispatches`의 검증된 local proposal·reserved proposal ID·idempotency/request hash·immutable executor binding·deadline을 gateway 호출 전에 함께 commit합니다. V16은 owner의 `ACTIVE` tag/alias에 대한 exact equality 결과로 만든 deterministic K=8 context를 같은 dispatch에 raw/hash/version/count로 저장합니다. 기존 V15 dispatch는 과거 문맥을 지어내지 않고 `none/0/NULL/NULL`로 남습니다. V17은 새 dispatch를 `gateway-attempt-v1`로 표시하고 claim한 각 fence마다 owner-scoped ledger row를 `max_attempts` 상한 안에서 하나씩 만듭니다. 과거 dispatch는 `attempt_history_version=none`으로 남고 attempt row를 backfill하지 않습니다. gateway result가 반환되면 execution은 `STARTED`다. executor가 작업을 받지 못하면 local `EXECUTOR_REJECTED`, execution `NOT_STARTED`, remote result `UNKNOWN`으로 남겨 gateway가 실제로 반환한 `UNAVAILABLE` result와 구분합니다. 제출 뒤 timeout·caller interruption·unexpected local termination이 발생하면 시작이 관측된 경우 `STARTED`, 관측되지 않은 경우 `UNKNOWN`이며 후자를 `NOT_STARTED`로 단정하지 않습니다. 완료·timeout·caller interruption처럼 프로세스가 종료를 관측한 시도는 `System.nanoTime` 기반 local elapsed millisecond를 저장하지만, process loss는 duration과 remote result를 `UNKNOWN`/null로 남깁니다. local termination을 관측하고 descriptor가 model version `none`의 `NO_NETWORK` Fake임을 확인한 경우 execution uncertainty와 무관하게 model-token/cost가 `NOT_APPLICABLE`/null입니다. model-backed gateway는 확정적 `NOT_STARTED`일 때만 `NOT_APPLICABLE`/null이고, 실행 또는 remote completion이 불확실하면 `UNKNOWN`/null이며, 관측된 result도 usage/cost가 gateway 계약에 연결되기 전까지 `NOT_REPORTED`/null입니다. `REPORTED` 숫자 저장 shape만 DB가 검증하며 미확인 값을 0으로 지어내지 않습니다. caller는 lease와 fence를 claim한 뒤 DB transaction 밖에서 bounded gateway 호출을 수행하며, 같은 key/body retry와 운영 scheduler recovery는 tag를 다시 조회하지 않고 저장된 context와 같은 provider token을 사용합니다. 운영 프로필에서는 bounded scheduler가 30초 fixed delay로 DB에서 `PREPARED` 또는 lease가 만료된 `RUNNING`을 최대 25건 고르고, row가 가리키는 owner와 기존 raw idempotency key에 같은 owner+operation+key advisory lock을 적용해 동일 lifecycle을 실행합니다. live lease는 호출하지 않고 다음 주기로 넘기며, process 재시작 뒤에도 남은 dispatch가 같은 상한 안에서 다시 선택됩니다. finalize는 memo owner·활성 상태·revision을 다시 잠가 확인하고, 변경되었으면 결과를 `STALE`로 확정한 transaction을 commit한 뒤 caller에게 `409 STALE_MEMO_REVISION`을 반환합니다. 이때 prepared local proposal과 retrieval-context raw text를 지우고 각 hash와 context version/count는 보존합니다. context는 hint일 뿐이며 최종 owner/reference validation이 계속 authoritative합니다. 공개 POST·DTO·proposal·`providerMetadata`·UI·평가 report는 V17에서 바뀌지 않았습니다. attempt ledger와 내부 상태, 복구용 key, prepared payload/context, provider/model ID, binding, lease, fence, provider token은 일반 log·browser/service-worker storage에도 노출하지 않습니다. ledger에는 provider text·ID·token·raw memo·retrieval context를 저장하지 않으며, 승인된 purge 정책이 생기기 전까지 현재 run data와 함께 보존하고 임의 TTL로 지우지 않습니다. 일반 application의 Fake descriptor는 `NO_NETWORK`라 동의 없이 동작하고, personal overlay만 exact endpoint/model/digest의 `LOCAL_MACHINE_MEMO_CONTENT` Ollama/LiquidAI gateway를 구성합니다. 실제 external provider와 consent grant/revoke HTTP API는 없습니다. 이 경계는 exactly-once가 아니라 at-least-once이므로 실제 provider는 동일 token의 중복 호출을 멱등하게 처리해야 합니다. raw/related memo와 fuzzy/vector/embedding retrieval, 실제 model-token/cost 숫자 수집·집계·budget enforcement는 아직 구현하지 않았습니다.
+
+V19는 raw-free local decision/fallback/model-contribution evidence를 추가합니다. V20은 semantic
+fallback reason과 별도로 invocation mode/reason을 기록하고, personal approved-correction hint의
+target-memo UTF-16 offset+kind snapshot을 retry에 고정합니다. 이 raw snapshot은 finalization에서
+지워지고 hash/version/count만 남습니다. public POST/DTO/proposal/`providerMetadata` shape는 그대로며,
+historical raw/selection/ID는 hint나 prompt로 복제하지 않습니다. 이 V20 feature의 source/personal rollout은
+정확도 `PASS`가 아니며, LiquidAI는 provider `NO_GO`인 proposal-only 경로입니다.
 
 위 `NOT_APPLICABLE`은 descriptor로 no-model임을 확인하고 local termination을 관측한 Fake 또는 확정적으로 시작되지 않은 real-model 실행에만 해당합니다. 시작 여부나 remote completion이 불확실한 real-model attempt와 observation 없이 유실된 process의 duration·model-token·cost evidence는 `UNKNOWN`/null로 남깁니다.
 
@@ -354,16 +752,17 @@ target을 다시 잠가 확인합니다. undo는 relation을 source item보다 �
 raw revision을 보존합니다. 이 typed relation은 TAG membership과 다르며, 현재 MEMO_TAG graph에
 투영하는 의미·중복 제거·예산 정책은 아직 결정하지 않았습니다.
 
-결정론적 평가 v2는 regression의 proposal schema/domain 유효성, wrong-local 0, 정밀 날짜 발명 0, local overflow 0, 누락된 overflow 신호 0, 미해결 action/object 환각 0을 hard gate로 검사합니다. `fake-v6` / `korean-rules-v4`는 순차 item과 immutable 원문의 UTF-16 source span을 보존하면서 proposal schema v2의 날짜 candidate ID와 TASK별 정밀 due candidate 참조를 제안합니다. 과거 schema v1 proposal은 복구할 수 있고 기존의 단일 TASK·단일 정밀 날짜 보수적 기본값만 유지합니다. 현재 공개 합성 자료에서 item 수는 regression/challenge 각각 12/12 case, source span은 15/15·14/14개가 일치하지만, dataset v2에는 date-to-item binding gold가 없으므로 report capability는 `SUPPORTED_NOT_SCORED_DATASET_V2`이며 binding 품질을 hard gate로 사용하지 않습니다. 엄격한 v2 2인 review manifest schema/verifier와 immutable v2 release를 참조하는 ID-only v3 binding overlay integrity validator는 준비됐지만, 실제 human manifest·adjudication·v3 dataset·binding score·`PASS`는 없습니다. [평가 label 정책](docs/EVALUATION_LABEL_POLICY.md)도 아직 human approval이 필요한 draft입니다. 외부 blind runner는 원문을 저장소나 CI에 넣지 않는 aggregate-only 경계까지만 준비됐고 metric gate는 `NOT_CONFIGURED`입니다. 실제 AI provider와 로컬 모델 연결은 독립적인 gold 검토, 사전 승인된 threshold, provider/region·보존·비용·실패 수명주기 경계가 준비되기 전까지 보류합니다.
+결정론적 평가 v2는 regression의 proposal schema/domain 유효성, wrong-local 0, 정밀 날짜 발명 0, local overflow 0, 누락된 overflow 신호 0, 미해결 action/object 환각 0을 hard gate로 검사합니다. `fake-v8` / `korean-rules-v6`는 순차 item과 immutable 원문의 UTF-16 source span을 보존하면서 proposal schema v2의 날짜 candidate ID와 TASK별 정밀 due candidate 참조를 제안하고, default fallback과 미해석 시간·행동 cue를 `field-policy-v2`에서 보수적으로 라우팅합니다. guarded affirmative `접속하기`는 TASK로 추출하되 부정·설명형은 제외합니다. `6시 디스코드 접속하기`의 action/object는 `접속하기`/`디스코드`지만 날짜 없는 `6시`는 정밀 due나 알람으로 만들지 않습니다. 과거 schema v1 proposal은 복구할 수 있고 기존의 단일 TASK·단일 정밀 날짜 보수적 기본값만 유지합니다. 현재 공개 합성 실행은 schema/domain 24/24이고 wrong-local·정밀 날짜 발명·overflow 오류·미해결 action/object 환각이 모두 0이며, 이전 v7 기록과 같은 aggregate를 재현했습니다. item 수는 regression 11/12, challenge 12/12 case가 정확하며, 필수 gold source span recall은 15/15·14/14개입니다. regression에는 default fallback scaffold로 인한 추가 span 1개가 있습니다. dataset v2에는 date-to-item binding gold가 없으므로 report capability는 `SUPPORTED_NOT_SCORED_DATASET_V2`이며 binding 품질을 hard gate로 사용하지 않습니다. 엄격한 v2 2인 review manifest schema/verifier와 immutable v2 release를 참조하는 ID-only v3 binding overlay integrity validator는 준비됐지만, 실제 human manifest·adjudication·v3 dataset·binding score·`PASS`는 없습니다. [평가 label 정책](docs/EVALUATION_LABEL_POLICY.md)도 아직 human approval이 필요한 draft입니다. 외부 blind runner는 원문을 저장소나 CI에 넣지 않는 aggregate-only 경계까지만 준비됐고 metric gate는 `NOT_CONFIGURED`입니다. 외부 AI provider와 authoritative 모델 승인은 독립적인 gold 검토, 사전 승인된 threshold, provider/region·보존·비용·실패 수명주기 경계가 준비되기 전까지 보류합니다. personal overlay의 localhost LiquidAI는 ADR 0008의 좁은 proposal-only `AI_PREFERRED` path일 뿐 그 승인을 대체하지 않습니다.
 
 명시 실행 전용 `PublicGoldReviewPacketRunner`는 같은 clean candidate commit을 읽기 전과 원자 게시 직전에 확인한 뒤, 공개 합성 fixture의 source·date·item gold만 허용 목록으로 렌더링한 정적 UTF-8 HTML을 `backend/target/evaluation/public-v2-review-packet.html`에 만듭니다. fixture `notes`, route/type/tag/signal gold, analyzer/Fake output, 평가 report와 다른 reviewer의 입력은 포함하지 않고, source span은 숫자 반개구간 UTF-16 `[start,end)`와 강조 표시를 함께 보여 줍니다. 이 packet에는 verdict 입력, manifest 생성, reviewer identity 또는 attestation 기능이 없습니다.
 
 두 사람이 packet을 서로 독립적으로 검토해 strict manifest를 저장소 밖에 직접 작성한 뒤에만 `ExternalPublicGoldReviewRunner`를 명시 실행할 수 있습니다. 이 runner는 두 외부 파일과 깨끗하게 고정된 commit을 fail-closed로 검증하고 aggregate-only `public-v2-review-summary.json`만 만듭니다. `CONSENSUS_ACCEPTED`는 제출된 두 manifest의 구조와 verdict 집계일 뿐 사람의 신원·독립성, policy 승인, adjudication 완료, binding 품질, blind `PASS` 또는 provider 사용 허가를 증명하지 않습니다. 실제 manifest와 완료된 human evidence는 현재 없습니다.
 
-설치된 구형 PWA와의 단계적 호환을 위해 proposal GET/recovery는 헤더가 없거나 `X-Analysis-Proposal-Schema-Version: 1`이면 strict v1을 반환하고, 현재 PWA는 `2`를 명시해 저장된 v2 binding을 받습니다. 이 응답 projection은 JSONB와 hash를 바꾸지 않으며 `no-store`와 `Vary`로 캐시를 분리합니다. 승인 요청의 due `timeZone`도 canonical 선택값이 아니며, 서버는 immutable memo revision의 capture time zone을 `task_details.source_time_zone`에 저장합니다.
+설치된 구형 PWA와의 단계적 호환을 위해 proposal GET/recovery는 헤더가 없거나 `X-Analysis-Proposal-Schema-Version: 1`이면 strict v1을 반환하고, 현재 PWA는 이해 가능한 최대 version `3`을 명시합니다. 저장된 v1/v2는 합성 upgrade하지 않으며, max-v2 client에는 저장된 v3의 EVENT temporal fields만 제거해 반환합니다. 이 응답 projection은 JSONB와 hash를 바꾸지 않으며 `no-store`와 `Vary`로 캐시를 분리합니다. 승인 요청의 due `timeZone`도 canonical 선택값이 아니며, 서버는 immutable memo revision의 capture time zone을 `task_details.source_time_zone`에 저장합니다.
 
 ## 문서
 
+- [1차 비공개 베타 체크포인트](docs/PRIVATE_BETA.md)
 - [제품 및 인수 조건](docs/REQUIREMENTS.md)
 - [아키텍처](docs/ARCHITECTURE.md)
 - [현재 API 계약](docs/API.md)
@@ -372,6 +771,7 @@ raw revision을 보존합니다. 이 typed relation은 TAG membership과 다르�
 - [AI 안전 경계](docs/AI_PIPELINE.md)
 - [분석 평가 기준선과 실제 LLM 진입 조건](docs/EVALUATION.md)
 - [평가 label 검토와 v3 binding 준비 정책 초안](docs/EVALUATION_LABEL_POLICY.md)
+- [EVENT temporal-binding dataset-v4 label 정책 초안](docs/EVALUATION_EVENT_TEMPORAL_LABEL_POLICY.md)
 - [배포 및 운영 가이드](docs/DEPLOYMENT.md)
 - [마일스톤](docs/ROADMAP.md)
 - [ADR](docs/adr)

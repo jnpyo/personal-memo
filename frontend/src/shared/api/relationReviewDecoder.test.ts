@@ -20,6 +20,8 @@ function proposal(): Proposal {
       {
         candidateId: ' source-1 ',
         dueDateCandidateId: null,
+        eventScheduleCandidates: [],
+        suggestedEventScheduleCandidateId: null,
         kind: 'TASK',
         title: '출발 항목',
         sourceSpan: null,

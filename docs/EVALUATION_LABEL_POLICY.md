@@ -10,6 +10,12 @@ provider gate. No completed reviewer manifest or binding overlay is currently ch
 deterministic/Fake analyzer remains the only analyzer, and no local model or cloud LLM is authorized
 by this draft.
 
+The "version-3 binding overlay" in this document is dataset version 3 for TASK due only. It is not
+proposal schema version 3 and grants no EVENT schedule authority. EVENT temporal-label preparation
+has a separate strict contract and the separate
+[`EVALUATION_EVENT_TEMPORAL_LABEL_POLICY.md`](EVALUATION_EVENT_TEMPORAL_LABEL_POLICY.md), which is
+also human-unapproved and contains no labels.
+
 The code can validate structure, coverage, release identity, and aggregate agreement. It cannot prove
 that a token belongs to a person or that two people worked independently. Opaque reviewer tokens and
 boolean attestations are human process attestations, not cryptographic evidence. An Agent must not

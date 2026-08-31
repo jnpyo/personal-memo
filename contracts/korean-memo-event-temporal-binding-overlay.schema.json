@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://personal-memo.local/schemas/korean-memo-event-temporal-binding-overlay-v1.json",
+  "title": "KoreanMemoEventTemporalBindingOverlayV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "overlaySchemaVersion",
+    "datasetVersion",
+    "overlayKind",
+    "baseDataset",
+    "bindingLabelPolicyVersion",
+    "cases"
+  ],
+  "properties": {
+    "overlaySchemaVersion": {
+      "const": "1"
+    },
+    "datasetVersion": {
+      "const": "4"
+    },
+    "overlayKind": {
+      "const": "PUBLIC_EVENT_TEMPORAL_BINDING"
+    },
+    "baseDataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "datasetVersion",
+        "releaseId",
+        "releaseDigestSha256",
+        "adjudicationPolicyVersion"
+      ],
+      "properties": {
+        "datasetVersion": {
+          "const": "2"
+        },
+        "releaseId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "releaseDigestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "adjudicationPolicyVersion": {
+          "$ref": "#/$defs/opaqueId"
+        }
+      }
+    },
+    "bindingLabelPolicyVersion": {
+      "$ref": "#/$defs/opaqueId"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/caseBinding"
+      }
+    }
+  },
+  "$defs": {
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "goldId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "caseBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "itemSetBindings"
+      ],
+      "properties": {
+        "caseId": {
+          "$ref": "#/$defs/goldId"
+        },
+        "itemSetBindings": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/itemSetBinding"
+          }
+        }
+      }
+    },
+    "itemSetBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "itemSetId",
+        "resolution",
+        "acceptableAssignmentAlternatives"
+      ],
+      "properties": {
+        "itemSetId": {
+          "$ref": "#/$defs/goldId"
+        },
+        "resolution": {
+          "enum": [
+            "RESOLVED",
+            "USER_INPUT_NEEDED"
+          ]
+        },
+        "acceptableAssignmentAlternatives": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/assignmentAlternative"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "resolution": {
+                "const": "RESOLVED"
+              }
+            },
+            "required": [
+              "resolution"
+            ]
+          },
+          "then": {
+            "properties": {
+              "acceptableAssignmentAlternatives": {
+                "maxItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "resolution": {
+                "const": "USER_INPUT_NEEDED"
+              }
+            },
+            "required": [
+              "resolution"
+            ]
+          },
+          "then": {
+            "properties": {
+              "acceptableAssignmentAlternatives": {
+                "minItems": 2
+              }
+            }
+          }
+        }
+      ]
+    },
+    "assignmentAlternative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alternativeId",
+        "assignments"
+      ],
+      "properties": {
+        "alternativeId": {
+          "$ref": "#/$defs/goldId"
+        },
+        "assignments": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/assignment"
+          }
+        }
+      }
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "itemGoldId",
+        "schedule"
+      ],
+      "properties": {
+        "itemGoldId": {
+          "$ref": "#/$defs/goldId"
+        },
+        "schedule": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/eventSchedule"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "eventSchedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "startDateGoldId",
+        "end"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "TIMED",
+            "ALL_DAY"
+          ]
+        },
+        "startDateGoldId": {
+          "$ref": "#/$defs/goldId"
+        },
+        "end": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/eventEnd"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "eventEnd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dateGoldId",
+        "boundary"
+      ],
+      "properties": {
+        "dateGoldId": {
+          "$ref": "#/$defs/goldId"
+        },
+        "boundary": {
+          "enum": [
+            "EXCLUSIVE_AT_VALUE",
+            "INCLUSIVE_THROUGH_VALUE"
+          ]
+        }
+      }
+    }
+  }
+}

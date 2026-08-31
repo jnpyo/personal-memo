@@ -5,18 +5,25 @@ import {
   buildApplyRequest,
   changeItemDue,
   changeItemDueValue,
+  changeItemEventSchedule,
+  changeItemEventScheduleField,
+  changeItemKind,
   changeItemTitle,
   changeRelationSelection,
   changeSelectedType,
   changeReviewTitle,
   createCustomDateOnly,
+  eventScheduleFromDateCandidate,
+  eventScheduleFromProposalCandidate,
   createReviewDraft,
   isValidDue,
+  isValidEventSchedule,
   isValidIsoDate,
   isValidOffsetDateTime,
   isValidReviewDraft,
   isRelationSelectionReady,
   preferredItemKind,
+  referencedProposalDateCandidateIds,
   removeReviewItem,
   requiresExplicitDateMapping,
   usableDateCandidates,
@@ -30,6 +37,8 @@ function proposalItem(
   return {
     candidateId,
     dueDateCandidateId: null,
+    eventScheduleCandidates: [],
+    suggestedEventScheduleCandidateId: null,
     kind,
     title,
     sourceSpan: null,
@@ -118,6 +127,82 @@ function explicitBindingProposal(): Proposal {
         dueDateCandidateId: 'date-presentation',
       },
     ],
+  };
+}
+
+function eventProposalV3(): Proposal {
+  return {
+    ...proposal,
+    schemaVersion: '3',
+    suggestedTitle: { value: '디스코드 접속하기', confidence: 0.94, needsConfirmation: true },
+    typeCandidates: [{ value: 'EVENT', score: 0.94 }],
+    dateCandidates: [
+      {
+        candidateId: 'date-timed-start',
+        surfaceText: '오늘 오후 6시',
+        value: '2026-08-05T18:00:00+09:00',
+        precision: 'EXACT_TIME',
+        timeSpecified: true,
+        confidence: 0.93,
+        ambiguityReasons: [],
+      },
+      {
+        candidateId: 'date-timed-end',
+        surfaceText: '오늘 오후 7시',
+        value: '2026-08-05T19:00:00+09:00',
+        precision: 'EXACT_TIME',
+        timeSpecified: true,
+        confidence: 0.9,
+        ambiguityReasons: [],
+      },
+      {
+        candidateId: 'date-all-day-start',
+        surfaceText: '8월 6일',
+        value: '2026-08-06',
+        precision: 'DATE_ONLY',
+        timeSpecified: false,
+        confidence: 0.89,
+        ambiguityReasons: [],
+      },
+      {
+        candidateId: 'date-all-day-through',
+        surfaceText: '8월 7일까지',
+        value: '2026-08-07',
+        precision: 'DATE_ONLY',
+        timeSpecified: false,
+        confidence: 0.88,
+        ambiguityReasons: [],
+      },
+    ],
+    itemCandidates: [
+      {
+        ...proposalItem('item-event', 'EVENT', '디스코드 접속하기'),
+        eventScheduleCandidates: [
+          {
+            candidateId: 'schedule-timed',
+            mode: 'TIMED',
+            startDateCandidateId: 'date-timed-start',
+            end: {
+              dateCandidateId: 'date-timed-end',
+              boundary: 'EXCLUSIVE_AT_VALUE',
+            },
+            score: 0.91,
+          },
+          {
+            candidateId: 'schedule-all-day',
+            mode: 'ALL_DAY',
+            startDateCandidateId: 'date-all-day-start',
+            end: {
+              dateCandidateId: 'date-all-day-through',
+              boundary: 'INCLUSIVE_THROUGH_VALUE',
+            },
+            score: 0.72,
+          },
+        ],
+        suggestedEventScheduleCandidateId: 'schedule-timed',
+      },
+    ],
+    ambiguityReasons: ['CONFLICTING_DATES'],
   };
 }
 
@@ -337,6 +422,161 @@ describe('review model', () => {
         },
       },
     ]);
+  });
+
+  it('builds a separately versioned timed EVENT schedule without inventing an end', () => {
+    let draft = createReviewDraft('proposal-event', explicitBindingProposal());
+    draft = removeReviewItem(draft, 1);
+    draft = changeItemKind(draft, 0, 'EVENT');
+    draft = changeItemEventSchedule(
+      draft,
+      0,
+      eventScheduleFromDateCandidate(explicitBindingProposal().dateCandidates[1]),
+    );
+
+    const request = buildApplyRequest(draft, 'Asia/Seoul');
+
+    expect(request.selectionSchemaVersion).toBe('2');
+    expect(request.items).toEqual([
+      {
+        proposalCandidateId: 'item-report',
+        kind: 'EVENT',
+        title: '보고서 제출',
+        due: null,
+        eventSchedule: {
+          mode: 'TIMED',
+          start: '2026-11-25T18:00:00+09:00',
+          end: null,
+          timeZone: 'Asia/Seoul',
+        },
+      },
+    ]);
+  });
+
+  it('keeps every v3 EVENT candidate unselected until the user explicitly chooses one', () => {
+    const eventProposal = eventProposalV3();
+    const draft = createReviewDraft('proposal-event-v3', eventProposal);
+
+    expect(draft.items[0].eventSchedule).toBeNull();
+    expect(draft.items[0].eventScheduleProposalCandidateId).toBeNull();
+    expect(draft.items[0].suggestedEventScheduleCandidateId).toBe('schedule-timed');
+    expect(requiresExplicitDateMapping(draft)).toBe(true);
+    expect([...referencedProposalDateCandidateIds(eventProposal)]).toEqual([
+      'date-timed-start',
+      'date-timed-end',
+      'date-all-day-start',
+      'date-all-day-through',
+    ]);
+  });
+
+  it('copies a v3 timed candidate only through an explicit draft change and keeps Apply separate', () => {
+    const eventProposal = eventProposalV3();
+    let draft = createReviewDraft('proposal-event-v3', eventProposal);
+    const candidate = eventProposal.itemCandidates[0].eventScheduleCandidates[0];
+    const schedule = eventScheduleFromProposalCandidate(eventProposal, candidate);
+
+    expect(schedule).toEqual({
+      mode: 'TIMED',
+      start: '2026-08-05T18:00:00+09:00',
+      end: '2026-08-05T19:00:00+09:00',
+    });
+    expect(draft.items[0].eventSchedule).toBeNull();
+
+    draft = changeItemEventSchedule(draft, 0, schedule, candidate.candidateId);
+    expect(draft.items[0].eventScheduleProposalCandidateId).toBe('schedule-timed');
+    expect(buildApplyRequest(draft, 'Asia/Seoul')).toMatchObject({
+      selectionSchemaVersion: '2',
+      selectedType: 'EVENT',
+      items: [
+        {
+          eventSchedule: {
+            mode: 'TIMED',
+            start: '2026-08-05T18:00:00+09:00',
+            end: '2026-08-05T19:00:00+09:00',
+            timeZone: 'Asia/Seoul',
+          },
+        },
+      ],
+    });
+  });
+
+  it('converts an explicitly chosen inclusive all-day end to an exclusive date without overflow', () => {
+    const eventProposal = eventProposalV3();
+    const candidate = eventProposal.itemCandidates[0].eventScheduleCandidates[1];
+
+    expect(eventScheduleFromProposalCandidate(eventProposal, candidate)).toEqual({
+      mode: 'ALL_DAY',
+      start: '2026-08-06',
+      end: '2026-08-08',
+    });
+
+    const overflow: Proposal = {
+      ...eventProposal,
+      dateCandidates: eventProposal.dateCandidates.map((date) =>
+        date.candidateId === 'date-all-day-through'
+          ? { ...date, value: '9999-12-31' }
+          : date,
+      ),
+    };
+    expect(eventScheduleFromProposalCandidate(
+      overflow,
+      overflow.itemCandidates[0].eventScheduleCandidates[1],
+    )).toBeNull();
+  });
+
+  it('clears v3 candidate provenance when the user edits the copied schedule', () => {
+    const eventProposal = eventProposalV3();
+    let draft = createReviewDraft('proposal-event-v3', eventProposal);
+    const candidate = eventProposal.itemCandidates[0].eventScheduleCandidates[0];
+    draft = changeItemEventSchedule(
+      draft,
+      0,
+      eventScheduleFromProposalCandidate(eventProposal, candidate),
+      candidate.candidateId,
+    );
+
+    draft = changeItemEventScheduleField(
+      draft,
+      0,
+      'end',
+      '2026-08-05T19:30:00+09:00',
+    );
+
+    expect(draft.items[0].eventScheduleProposalCandidateId).toBeNull();
+    expect(isValidReviewDraft(draft)).toBe(true);
+  });
+
+  it('validates all-day exclusive ends and clears EVENT time on a kind change', () => {
+    let draft = createReviewDraft('proposal-event-all-day', proposal);
+    draft = changeItemKind(draft, 0, 'EVENT');
+    draft = changeItemEventSchedule(draft, 0, {
+      mode: 'ALL_DAY',
+      start: '2026-08-24',
+      end: '2026-08-27',
+    });
+
+    expect(isValidReviewDraft(draft)).toBe(true);
+    expect(isValidEventSchedule(draft.items[0].eventSchedule)).toBe(true);
+
+    draft = changeItemEventScheduleField(draft, 0, 'end', '2026-08-24');
+    expect(isValidReviewDraft(draft)).toBe(false);
+
+    draft = changeItemKind(draft, 0, 'INFORMATION');
+    expect(draft.items[0].eventSchedule).toBeNull();
+    expect(isValidReviewDraft(draft)).toBe(true);
+  });
+
+  it('blocks offset-less or reversed timed EVENT values', () => {
+    expect(isValidEventSchedule({
+      mode: 'TIMED',
+      start: '2026-08-24T18:00:00',
+      end: '',
+    })).toBe(false);
+    expect(isValidEventSchedule({
+      mode: 'TIMED',
+      start: '2026-08-24T18:00:00+09:00',
+      end: '2026-08-24T17:00:00+09:00',
+    })).toBe(false);
   });
 
   it('preserves only the exact proposal item source identity in the apply body', () => {

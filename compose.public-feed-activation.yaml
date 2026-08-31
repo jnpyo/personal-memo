@@ -1,0 +1,6 @@
+services:
+  backend:
+    environment:
+      APP_CALENDAR_FEED_PUBLICATION_ENABLED: "true"
+      APP_CALENDAR_FEED_PUBLIC_ORIGIN: ${APP_CALENDAR_FEED_PUBLIC_ORIGIN:?Set a reviewed canonical public HTTPS origin}
+      APP_CALENDAR_FEED_PUBLIC_CONSENT_POLICY_VERSION: ${APP_CALENDAR_FEED_PUBLIC_CONSENT_POLICY_VERSION:?Set the reviewed public calendar consent policy version}

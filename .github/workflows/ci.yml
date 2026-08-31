@@ -34,17 +34,62 @@ jobs:
       PERSONAL_MEMO_HTTPS_PORT: '8443'
       PERSONAL_MEMO_TLS_CERT_FILE: /tmp/personal-memo-config-cert.pem
       PERSONAL_MEMO_TLS_KEY_FILE: /tmp/personal-memo-config-key.pem
+      APP_CALENDAR_FEED_PUBLIC_ORIGIN: https://calendar.example.com
+      APP_CALENDAR_FEED_PUBLIC_CONSENT_POLICY_VERSION: calendar-feed-public-v1
+      PUBLIC_APP_HOSTNAME: memo.example.com
+      AI_PRODUCT_SMOKE_DATABASE_PASSWORD: synthetic-config-validation-only
+      AI_PRODUCT_SMOKE_BACKEND_IMAGE: personal-memo-ai-smoke:config-validation
+      AI_PRODUCT_SMOKE_BACKEND_PORT: '18080'
+      AI_PRODUCT_SMOKE_LOCAL_MODEL_ENABLED: 'false'
+      AI_PRODUCT_SMOKE_INVOCATION_MODE: UNCERTAINTY_ONLY
+      AI_PRODUCT_SMOKE_APPROVED_CORRECTIONS_ENABLED: 'false'
+      AI_PRODUCT_SMOKE_LOCAL_MODEL_NAME: ''
+      AI_PRODUCT_SMOKE_LOCAL_MODEL_DIGEST: ''
     steps:
       - uses: actions/checkout@v5
       - name: Validate private deployment source contracts
         shell: pwsh
         run: ./scripts/personal/Test-PersonalMemoSourceContracts.ps1
+      - name: Validate public-feed edge source contracts
+        shell: pwsh
+        run: ./scripts/public/Test-PersonalMemoPublicFeedSourceContracts.ps1
+      - name: Validate Cloudflare connector source contracts
+        shell: pwsh
+        run: ./scripts/public/Test-PersonalMemoCloudflareSourceContracts.ps1
+      - name: Validate owner-only public app source contracts
+        shell: pwsh
+        run: ./scripts/public/Test-PersonalMemoPublicAppSourceContracts.ps1
+      - name: Validate isolated AI product-smoke source contracts
+        shell: pwsh
+        run: ./scripts/analysis/Test-PersonalMemoAiProductSmokeSourceContracts.ps1
       - name: Validate the production Compose overlay
         run: docker compose -f compose.yaml -f compose.prod.yaml config --quiet
       - name: Validate the private-PC Compose overlay
         run: >-
           docker compose -f compose.yaml -f compose.prod.yaml -f compose.personal.yaml
           config --quiet
+      - name: Validate the public-feed preflight Compose overlay
+        run: >-
+          docker compose -f compose.yaml -f compose.prod.yaml -f compose.public-feed.yaml
+          config --quiet
+      - name: Validate the owner-only public app Compose overlay
+        run: >-
+          docker compose -f compose.yaml -f compose.prod.yaml -f compose.public-app.yaml
+          config --quiet
+      - name: Validate the disposable Cloudflare synthetic Compose file
+        run: docker compose -f compose.public-feed.cloudflare-test.yaml config --quiet
+      - name: Validate the isolated AI product-smoke Compose file
+        run: docker compose -f compose.ai-product-smoke.yaml config --quiet
+      - name: Validate the explicit public-feed activation overlay
+        run: >-
+          docker compose -f compose.yaml -f compose.prod.yaml -f compose.public-feed.yaml
+          -f compose.public-feed-activation.yaml config --quiet
+      - name: Run the isolated public-feed edge smoke
+        shell: pwsh
+        run: ./scripts/public/Test-PersonalMemoPublicFeedEdge.ps1
+      - name: Run the isolated owner-only public app edge smoke
+        shell: pwsh
+        run: ./scripts/public/Test-PersonalMemoPublicAppEdge.ps1
       - name: Validate the private-PC Nginx TLS configuration
         shell: bash
         run: |
@@ -72,11 +117,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Parse personal deployment scripts with Windows PowerShell 5.1
+      - name: Parse personal and public deployment scripts with Windows PowerShell 5.1
         shell: powershell
         run: |
           $failed = $false
-          Get-ChildItem -LiteralPath scripts\personal -Filter *.ps1 -File | ForEach-Object {
+          Get-ChildItem -LiteralPath scripts\personal,scripts\public,scripts\analysis -Filter *.ps1 -File | ForEach-Object {
             $tokens = $null
             $errors = $null
             [Management.Automation.Language.Parser]::ParseFile(
@@ -90,11 +135,23 @@ jobs:
             }
           }
           if ($failed) {
-            throw 'One or more personal deployment scripts failed Windows PowerShell 5.1 parsing.'
+            throw 'One or more personal, public, or analysis scripts failed Windows PowerShell 5.1 parsing.'
           }
       - name: Validate private ACL and command contracts
         shell: powershell
         run: .\scripts\personal\Test-PersonalMemoSourceContracts.ps1
+      - name: Validate public-feed edge source contracts
+        shell: powershell
+        run: .\scripts\public\Test-PersonalMemoPublicFeedSourceContracts.ps1
+      - name: Validate Cloudflare connector source contracts
+        shell: powershell
+        run: .\scripts\public\Test-PersonalMemoCloudflareSourceContracts.ps1
+      - name: Validate owner-only public app source contracts
+        shell: powershell
+        run: .\scripts\public\Test-PersonalMemoPublicAppSourceContracts.ps1
+      - name: Validate isolated AI product-smoke source contracts
+        shell: powershell
+        run: .\scripts\analysis\Test-PersonalMemoAiProductSmokeSourceContracts.ps1
       - name: Validate Windows PowerShell UTF-8 and protected stdin
         shell: powershell
         run: .\scripts\personal\Test-PersonalMemoUtf8Capture.ps1

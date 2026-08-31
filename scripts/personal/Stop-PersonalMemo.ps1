@@ -15,5 +15,6 @@ if (-not [string]::IsNullOrWhiteSpace($EnvFile)) {
 $layout = New-PersonalMemoLayout @layoutArguments
 
 Invoke-PersonalMemoCompose -Layout $layout -IncludePersonal -CommandArguments @('ps')
+Assert-PersonalMemoCloudflarePublicTopologyInactive -Layout $layout
 Invoke-PersonalMemoCompose -Layout $layout -IncludePersonal -CommandArguments @('stop')
 Write-Host 'The exact personal stack was stopped. Its PostgreSQL volume was preserved.'

@@ -22,13 +22,13 @@ export function PwaUpdatePrompt({
   return (
     <aside className="pwa-update" role="status" aria-live="polite" aria-atomic="true">
       <div>
-        <strong>새 버전을 사용할 수 있습니다.</strong>
+        <strong>새 화면 버전을 사용할 수 있습니다.</strong>
         <p>
           {hasUnsavedChanges
             ? '서버에 아직 반영되지 않은 편집 내용이 있습니다. 먼저 저장하거나 검토를 마친 뒤 업데이트해 주세요.'
             : operationPending
               ? '진행 중인 작업이 끝난 뒤 업데이트해 주세요.'
-            : '작성 중인 입력을 확인한 뒤 직접 업데이트해 주세요.'}
+            : '작성 중인 입력을 확인한 뒤 새 화면 버전을 직접 적용해 주세요.'}
         </p>
         {error && <p className="pwa-update__error" role="alert">업데이트하지 못했습니다. 다시 시도해 주세요.</p>}
       </div>
@@ -42,7 +42,7 @@ export function PwaUpdatePrompt({
           disabled={updating || hasUnsavedChanges || operationPending}
           onClick={onUpdate}
         >
-          {updating ? '업데이트 중…' : '지금 업데이트'}
+          {updating ? '화면 업데이트 중…' : '새 화면 적용'}
         </button>
       </div>
     </aside>

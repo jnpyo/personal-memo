@@ -6,9 +6,7 @@ import local.personalmemo.analysis.domain.CloudAnalysisResult;
 import local.personalmemo.analysis.domain.CloudGatewayBinding;
 import local.personalmemo.analysis.domain.CloudGatewayDescriptor;
 import local.personalmemo.analysis.domain.CloudTransferMode;
-import org.springframework.stereotype.Component;
 
-@Component
 public class FakeCloudAnalysisGateway implements CloudAnalysisGateway {
   private static final CloudGatewayDescriptor DESCRIPTOR =
       new CloudGatewayDescriptor(

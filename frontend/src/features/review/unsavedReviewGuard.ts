@@ -15,11 +15,13 @@ export function hasUnsavedWorkspaceChanges(input: {
   transientReviewInput: boolean;
   memoEdit: boolean;
   unpersistedCapture: boolean;
+  calendarSharingProtected?: boolean;
 }): boolean {
   return input.reviewEdited ||
     input.transientReviewInput ||
     input.memoEdit ||
-    input.unpersistedCapture;
+    input.unpersistedCapture ||
+    input.calendarSharingProtected === true;
 }
 
 export function confirmReviewDiscard(

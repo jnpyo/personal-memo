@@ -51,11 +51,40 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": { "schemaVersion": { "const": "3" } },
+        "required": ["schemaVersion"]
+      },
+      "then": {
+        "properties": {
+          "itemCandidates": {
+            "items": {
+              "required": ["eventScheduleCandidates", "suggestedEventScheduleCandidateId"]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "itemCandidates": {
+            "items": {
+              "not": {
+                "anyOf": [
+                  { "required": ["eventScheduleCandidates"] },
+                  { "required": ["suggestedEventScheduleCandidateId"] }
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "properties": {
     "schemaVersion": {
-      "enum": ["1", "2"]
+      "enum": ["1", "2", "3"]
     },
     "memoId": {
       "type": "string",
@@ -356,6 +385,18 @@
           "minLength": 1,
           "maxLength": 100
         },
+        "eventScheduleCandidates": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "$ref": "#/$defs/eventScheduleCandidate"
+          }
+        },
+        "suggestedEventScheduleCandidateId": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 100
+        },
         "kind": {
           "enum": ["TASK", "EVENT", "INFORMATION", "IDEA", "RECORD"]
         },
@@ -382,6 +423,50 @@
         },
         "confidence": {
           "$ref": "#/$defs/score"
+        }
+      }
+    },
+    "eventScheduleCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidateId", "mode", "startDateCandidateId", "end", "score"],
+      "properties": {
+        "candidateId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "mode": {
+          "enum": ["TIMED", "ALL_DAY"]
+        },
+        "startDateCandidateId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "end": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/eventScheduleEnd" }
+          ]
+        },
+        "score": {
+          "$ref": "#/$defs/score"
+        }
+      }
+    },
+    "eventScheduleEnd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dateCandidateId", "boundary"],
+      "properties": {
+        "dateCandidateId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "boundary": {
+          "enum": ["EXCLUSIVE_AT_VALUE", "INCLUSIVE_THROUGH_VALUE"]
         }
       }
     },

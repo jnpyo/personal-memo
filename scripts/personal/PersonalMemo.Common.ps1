@@ -167,6 +167,95 @@ function Invoke-PersonalMemoCompose {
     return Invoke-PersonalMemoDocker -Arguments $arguments -Capture:$Capture
 }
 
+function Assert-PersonalMemoCloudflarePublicTopologyInactive {
+    param([Parameter(Mandatory = $true)][PSCustomObject] $Layout)
+
+    Assert-PersonalMemoProjectName -ProjectName $Layout.ProjectName
+
+    $serviceNames = @(
+        'PersonalMemoCalendarCloudflareTunnel',
+        'PersonalMemoAppCloudflareTunnel'
+    )
+    $services = $null
+    try {
+        # Enumerating services makes absent exact services ordinary empty results while any
+        # service-control query failure remains fail-closed. Private stack lifecycle changes are
+        # allowed only after both independently reviewed public connectors are stopped.
+        Add-Type -AssemblyName System.ServiceProcess -ErrorAction Stop
+        $services = @([System.ServiceProcess.ServiceController]::GetServices())
+        foreach ($serviceName in $serviceNames) {
+            $matchingServices = @(
+                $services | Where-Object { $_.ServiceName -ceq $serviceName }
+            )
+            if ($matchingServices.Count -gt 1) {
+                throw "The exact Cloudflare service identity was not unique: $serviceName"
+            }
+            if ($matchingServices.Count -eq 1 -and
+                $matchingServices[0].Status -ne [System.ServiceProcess.ServiceControllerStatus]::Stopped) {
+                throw "The Cloudflare connector service is not stopped: $serviceName"
+            }
+        }
+    } catch {
+        throw (
+            'Refusing the private stack operation because every Cloudflare connector service ' +
+            'could not be proven inactive. Stop and review the public connectors first.'
+        )
+    } finally {
+        foreach ($service in @($services)) {
+            if ($null -ne $service) {
+                $service.Dispose()
+            }
+        }
+    }
+
+    $cloudflaredProcesses = $null
+    try {
+        # Only process identity is queried. Command lines, environments, and credentials are not.
+        $cloudflaredProcesses = @([Diagnostics.Process]::GetProcessesByName('cloudflared'))
+        if ($cloudflaredProcesses.Count -ne 0) {
+            throw 'A cloudflared process is running.'
+        }
+    } catch {
+        throw (
+            'Refusing the private stack operation because local cloudflared processes could ' +
+            'not be proven absent. Stop and review every local connector first.'
+        )
+    } finally {
+        foreach ($process in @($cloudflaredProcesses)) {
+            if ($null -ne $process) {
+                $process.Dispose()
+            }
+        }
+    }
+
+    try {
+        # docker ps already limits the result to running containers. Query only Docker-owned
+        # Compose labels and IDs; never inspect container configuration, environment, logs, or DB.
+        $runningEdgeIds = New-Object Collections.Generic.List[string]
+        foreach ($edgeService in @('calendar-feed-edge', 'app-public-edge')) {
+            $edgeIds = [string] (Invoke-PersonalMemoDocker -Capture -Arguments @(
+                'ps', '--quiet',
+                '--filter', "label=com.docker.compose.project=$($Layout.ProjectName)",
+                '--filter', "label=com.docker.compose.service=$edgeService"
+            ))
+            if (-not [string]::IsNullOrWhiteSpace($edgeIds)) {
+                $runningEdgeIds.Add($edgeIds)
+            }
+        }
+    } catch {
+        throw (
+            'Refusing the private stack operation because Docker could not prove the selected ' +
+            'project has no running public edge.'
+        )
+    }
+    if ($runningEdgeIds.Count -ne 0) {
+        throw (
+            'The selected personal Compose project still has a running public edge. ' +
+            'Complete connector-first public rollback before changing the private stack.'
+        )
+    }
+}
+
 function Invoke-PersonalMemoPostgresInput {
     param(
         [Parameter(Mandatory = $true)][string] $ContainerId,

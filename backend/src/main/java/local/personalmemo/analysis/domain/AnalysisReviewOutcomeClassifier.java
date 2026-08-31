@@ -83,7 +83,7 @@ public final class AnalysisReviewOutcomeClassifier {
 
   private boolean contextMatches(JsonNode proposal, ReviewContext context) {
     if (context == null
-        || !Set.of("1", "2").contains(context.runSchemaVersion())
+        || !Set.of("1", "2", "3").contains(context.runSchemaVersion())
         || context.runMemoId() == null
         || context.runMemoRevision() < 1
         || context.applicationMemoId() == null
@@ -103,7 +103,9 @@ public final class AnalysisReviewOutcomeClassifier {
 
   private Projection projection(JsonNode proposal) {
     String schemaVersion = text(proposal.path("schemaVersion"));
-    if (!Set.of("1", "2").contains(schemaVersion)) {
+    if (!Set.of("1", "2", "3").contains(schemaVersion)
+        || ("3".equals(schemaVersion)
+            && containsEventTemporalProposal(proposal.path("itemCandidates")))) {
       return Projection.invalid();
     }
     Integer memoRevision = positiveInteger(proposal.path("memoRevision"));
@@ -136,7 +138,7 @@ public final class AnalysisReviewOutcomeClassifier {
     }
 
     List<DueValue> projectedDues;
-    if ("2".equals(schemaVersion)) {
+    if (Set.of("2", "3").contains(schemaVersion)) {
       ExplicitDueProjection explicitDues = explicitDues(proposal, projectedItems);
       if (!explicitDues.valid()) {
         return Projection.invalid();
@@ -173,6 +175,20 @@ public final class AnalysisReviewOutcomeClassifier {
     return validSelection(selection)
         ? Projection.ready(selection)
         : Projection.userResolutionRequired();
+  }
+
+  private boolean containsEventTemporalProposal(JsonNode itemCandidates) {
+    if (!itemCandidates.isArray()) {
+      return true;
+    }
+    for (JsonNode item : itemCandidates) {
+      JsonNode candidates = item.path("eventScheduleCandidates");
+      JsonNode suggestion = item.path("suggestedEventScheduleCandidateId");
+      if (!candidates.isArray() || !candidates.isEmpty() || !suggestion.isNull()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private SemanticSelection selection(JsonNode selection) {
@@ -309,6 +325,12 @@ public final class AnalysisReviewOutcomeClassifier {
       String kind = text(item.path("kind"));
       String title = strippedText(item.path("title"));
       if (!ITEM_KINDS.contains(kind) || title == null) {
+        return null;
+      }
+      JsonNode eventScheduleNode = item.path("eventSchedule");
+      if (!eventScheduleNode.isMissingNode() && !eventScheduleNode.isNull()) {
+        // review-default-v3 has no adjudicated EVENT temporal-binding policy. Do not guess a
+        // quality label for a newer selection contract.
         return null;
       }
       JsonNode dueNode = item.path("due");

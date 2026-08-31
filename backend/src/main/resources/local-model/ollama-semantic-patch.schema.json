@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://personal-memo.local/internal/ollama-semantic-patch-v2.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "decision"
+  ],
+  "properties": {
+    "version": {
+      "const": "2"
+    },
+    "decision": {
+      "enum": ["KEEP", "PATCH"]
+    },
+    "itemIndex": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2
+    },
+    "kind": {
+      "enum": ["TASK", "EVENT", "INFORMATION", "IDEA", "RECORD"]
+    },
+    "actionText": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "objectText": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "timeText": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 200
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "KEEP"
+          }
+        },
+        "required": ["decision"]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["itemIndex"] },
+            { "required": ["kind"] },
+            { "required": ["actionText"] },
+            { "required": ["objectText"] },
+            { "required": ["timeText"] }
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "itemIndex",
+          "kind",
+          "actionText",
+          "objectText",
+          "timeText"
+        ]
+      }
+    }
+  ]
+}

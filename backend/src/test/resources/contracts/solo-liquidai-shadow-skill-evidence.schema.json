@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://personal-memo.local/contracts/solo-liquidai-shadow-skill-evidence.schema.json",
+  "title": "Solo LiquidAI deterministic skill evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "defaultTitle",
+    "items"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "enum": ["solo-liquidai-shadow-skill-evidence-v1"]
+    },
+    "defaultTitle": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ordinal",
+          "kind",
+          "title",
+          "objectValue"
+        ],
+        "properties": {
+          "ordinal": {
+            "type": "integer",
+            "enum": [0, 1, 2]
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["TASK", "EVENT", "INFORMATION", "IDEA", "RECORD"]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "objectValue": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      }
+    }
+  }
+}

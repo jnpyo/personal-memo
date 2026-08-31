@@ -1,0 +1,194 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "cloudflare-external-synthetic-v1",
+  "dataClass": "PUBLIC_SYNTHETIC_ONLY",
+  "localProbes": [
+    {
+      "name": "local-fixture-proof",
+      "method": "GET",
+      "target": "EXACT",
+      "tokenRole": "VALID",
+      "body": "NONE",
+      "expected": "POSITIVE_BODY"
+    },
+    {
+      "name": "local-rejected-proof",
+      "method": "GET",
+      "target": "WRONG_PATH",
+      "tokenRole": "VALID",
+      "body": "NONE",
+      "expected": "ORIGIN_EMPTY_404"
+    },
+    {
+      "name": "local-method-proof",
+      "method": "POST",
+      "target": "EXACT",
+      "tokenRole": "VALID",
+      "body": "NONE",
+      "expected": "ORIGIN_EMPTY_404"
+    },
+    {
+      "name": "local-unknown-proof",
+      "method": "GET",
+      "target": "EXACT",
+      "tokenRole": "UNKNOWN",
+      "body": "NONE",
+      "expected": "ORIGIN_EMPTY_404"
+    },
+    {
+      "name": "local-upstream-failure-proof",
+      "method": "GET",
+      "target": "EXACT",
+      "tokenRole": "FAILURE",
+      "body": "NONE",
+      "expected": "ORIGIN_EMPTY_404"
+    },
+    {
+      "name": "local-noncanonical-proof",
+      "method": "GET",
+      "target": "EXACT_NONCANONICAL",
+      "tokenRole": "NONCANONICAL",
+      "body": "NONE",
+      "expected": "ORIGIN_EMPTY_404"
+    }
+  ],
+  "externalProbes": [
+    {
+      "name": "external-valid-head",
+      "method": "HEAD",
+      "target": "EXACT",
+      "tokenRole": "VALID",
+      "body": "NONE",
+      "expected": "POSITIVE_BODYLESS"
+    },
+    {
+      "name": "external-valid-get-first",
+      "method": "GET",
+      "target": "EXACT",
+      "tokenRole": "VALID",
+      "body": "NONE",
+      "expected": "POSITIVE_BODY"
+    },
+    {
+      "name": "external-canonical-unknown",
+      "method": "GET",
+      "target": "EXACT",
+      "tokenRole": "UNKNOWN",
+      "body": "NONE",
+      "expected": "ORIGIN_EMPTY_404"
+    },
+    {
+      "name": "external-upstream-failure",
+      "method": "GET",
+      "target": "EXACT",
+      "tokenRole": "FAILURE",
+      "body": "NONE",
+      "expected": "ORIGIN_EMPTY_404"
+    },
+    {
+      "name": "external-noncanonical-token",
+      "method": "GET",
+      "target": "EXACT_NONCANONICAL",
+      "tokenRole": "NONCANONICAL",
+      "body": "NONE",
+      "expected": "ORIGIN_EMPTY_404"
+    },
+    {
+      "name": "external-valid-get-repeat",
+      "method": "GET",
+      "target": "EXACT",
+      "tokenRole": "VALID",
+      "body": "NONE",
+      "expected": "POSITIVE_BODY"
+    },
+    {
+      "name": "wrong-method",
+      "method": "POST",
+      "target": "EXACT",
+      "tokenRole": "VALID",
+      "body": "NONE",
+      "expected": "ORIGIN_EMPTY_404"
+    },
+    {
+      "name": "missing-token",
+      "method": "GET",
+      "target": "MISSING_TOKEN",
+      "tokenRole": "NONE",
+      "body": "NONE",
+      "expected": "ORIGIN_EMPTY_404"
+    },
+    {
+      "name": "extra-query",
+      "method": "GET",
+      "target": "EXTRA_QUERY",
+      "tokenRole": "VALID",
+      "body": "NONE",
+      "expected": "ORIGIN_EMPTY_404"
+    },
+    {
+      "name": "duplicate-token",
+      "method": "GET",
+      "target": "DUPLICATE_TOKEN",
+      "tokenRole": "VALID",
+      "body": "NONE",
+      "expected": "ORIGIN_EMPTY_404"
+    },
+    {
+      "name": "get-with-body",
+      "method": "GET",
+      "target": "EXACT",
+      "tokenRole": "VALID",
+      "body": "ONE_BYTE",
+      "expected": "ORIGIN_EMPTY_404"
+    },
+    {
+      "name": "wrong-path",
+      "method": "GET",
+      "target": "WRONG_PATH",
+      "tokenRole": "VALID",
+      "body": "NONE",
+      "expected": "REMOTE_BOUNDED_404"
+    },
+    {
+      "name": "suffix-path",
+      "method": "GET",
+      "target": "SUFFIX_PATH",
+      "tokenRole": "VALID",
+      "body": "NONE",
+      "expected": "REMOTE_BOUNDED_404"
+    },
+    {
+      "name": "encoded-dot",
+      "method": "GET",
+      "target": "ENCODED_DOT",
+      "tokenRole": "VALID",
+      "body": "NONE",
+      "expected": "REMOTE_BOUNDED_404"
+    },
+    {
+      "name": "encoded-slash",
+      "method": "GET",
+      "target": "ENCODED_SLASH",
+      "tokenRole": "VALID",
+      "body": "NONE",
+      "expected": "REMOTE_BOUNDED_404"
+    },
+    {
+      "name": "double-slash",
+      "method": "GET",
+      "target": "DOUBLE_SLASH",
+      "tokenRole": "VALID",
+      "body": "NONE",
+      "expected": "REMOTE_BOUNDED_404"
+    }
+  ],
+  "rateLimitProbe": {
+    "namePrefix": "rate-limit",
+    "method": "GET",
+    "target": "EXACT",
+    "tokenRole": "VALID",
+    "body": "NONE",
+    "expected": "OPTIONAL_BODYLESS_429",
+    "maximumAttempts": 30
+  }
+}
