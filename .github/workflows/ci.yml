@@ -35,6 +35,7 @@ jobs:
       PERSONAL_MEMO_TLS_CERT_FILE: /tmp/personal-memo-config-cert.pem
       PERSONAL_MEMO_TLS_KEY_FILE: /tmp/personal-memo-config-key.pem
       APP_CALENDAR_FEED_PUBLIC_ORIGIN: https://calendar.example.com
+      APP_CALENDAR_FEED_PUBLIC_CONSENT_POLICY_VERSION: calendar-feed-public-v1
       PUBLIC_APP_HOSTNAME: memo.example.com
       AI_PRODUCT_SMOKE_DATABASE_PASSWORD: synthetic-config-validation-only
       AI_PRODUCT_SMOKE_BACKEND_IMAGE: personal-memo-ai-smoke:config-validation
