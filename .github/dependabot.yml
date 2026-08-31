@@ -48,7 +48,7 @@ updates:
           - minor
           - patch
 
-  - package-ecosystem: docker
+  - package-ecosystem: docker-compose
     directory: /
     schedule:
       interval: weekly
