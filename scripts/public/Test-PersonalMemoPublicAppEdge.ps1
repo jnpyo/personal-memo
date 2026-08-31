@@ -141,7 +141,7 @@ function Invoke-Probe {
     $headerFile = Join-Path $TempDirectory ($Name + '.headers')
     $bodyFile = Join-Path $TempDirectory ($Name + '.body')
     $curlArguments = @(
-        '--silent', '--show-error', '--noproxy', '*', '--http1.1',
+        '--silent', '--show-error', '--noproxy', '127.0.0.1', '--http1.1',
         '--connect-timeout', '3', '--max-time', '15',
         '--proto', '=http', '--max-redirs', '0', '--path-as-is',
         '--dump-header', $headerFile,

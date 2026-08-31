@@ -332,6 +332,7 @@ foreach ($blocked in @('/calendar/v1/feed.ics', '/actuator', '/_internal', '/api
 }
 Assert-Contains $nginx ([regex]::Escape('location ^~ "/api/v1/auth/register;" { return 404; }')) 'Spring-style registration matrix parameters must be blocked before the generic API proxy'
 Assert-Contains $source.UpstreamFixture 'registrationHandlerReached' 'the disposable upstream must expose a registration handler sentinel'
+Assert-Contains $source.Smoke ([regex]::Escape("'--noproxy', '127.0.0.1'")) 'the disposable smoke must bypass proxies only for its exact loopback target'
 Assert-Contains $source.Smoke ([regex]::Escape("'/api/v1/auth/register;matrix=synthetic'")) 'smoke must probe a literal registration matrix parameter'
 Assert-Contains $source.Smoke ([regex]::Escape("'/api/v1/auth/register%3Bmatrix=synthetic'")) 'smoke must probe a percent-encoded registration matrix parameter'
 foreach ($allowedPath in @('/', '/index.html', '/assets/', '/icons/', '/sw.js', '/registerSW.js', '/manifest.webmanifest', '/api/v1/auth/login', '/api/v1/')) {

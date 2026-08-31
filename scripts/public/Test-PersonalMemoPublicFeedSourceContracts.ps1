@@ -287,6 +287,7 @@ foreach ($requiredSmokeFragment in @(
     "Get-Command curl.exe -ErrorAction SilentlyContinue",
     "Get-Command curl -ErrorAction SilentlyContinue",
     '[IO.Path]::DirectorySeparatorChar',
+    "'--noproxy', '127.0.0.1'",
     "'--path-as-is'",
     "'--head'",
     "Name = 'put'",
