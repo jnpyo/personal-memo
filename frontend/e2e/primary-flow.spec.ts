@@ -224,7 +224,7 @@ test('keeps the 384px portrait and landscape shell usable without horizontal ove
   const captureSubmit = page.getByRole('button', { name: '원문 저장 후 제안 분석' });
   const homeOverview = page.locator('.home-overview');
 
-  await expect(homeOverview.getByRole('heading', { name: '오늘' })).toBeVisible();
+  await expect(homeOverview.getByRole('heading', { name: '오늘', exact: true })).toBeVisible();
   await expect(homeOverview).toContainText(/오늘 일정\s*0/);
   await expect(homeOverview).toContainText(/우선 할 일\s*0/);
   await expect(homeOverview).toContainText(/검토 대기\s*0/);
