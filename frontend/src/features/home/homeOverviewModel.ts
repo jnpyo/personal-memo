@@ -2,14 +2,17 @@ import type { CalendarEvent, Task } from '../../shared/api/types';
 
 export const HOME_OVERVIEW_ITEM_LIMIT = 3;
 
-const DNS_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const OWNER_REMOTE_APP_HOSTNAME_PATTERN = /^(?!calendar\.)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z]{2,63}$/;
 
 export function normalizeOwnerRemoteAppHostname(value: string | undefined): string | null {
-  if (!value || value !== value.trim() || value.length > 253 || value.endsWith('.')) return null;
-  const normalized = value.toLocaleLowerCase('en-US');
-  const labels = normalized.split('.');
-  if (labels.length < 2 || labels.some((label) => !DNS_LABEL_PATTERN.test(label))) return null;
-  return normalized;
+  if (
+    !value ||
+    value !== value.trim() ||
+    value !== value.toLocaleLowerCase('en-US') ||
+    value.length > 253 ||
+    !OWNER_REMOTE_APP_HOSTNAME_PATTERN.test(value)
+  ) return null;
+  return value;
 }
 
 export const OWNER_REMOTE_APP_HOSTNAME = normalizeOwnerRemoteAppHostname(

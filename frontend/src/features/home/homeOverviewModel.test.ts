@@ -103,15 +103,30 @@ describe('home overview projection', () => {
 });
 
 describe('owner remote hostname disclosure', () => {
-  it('matches only a valid configured hostname without embedding a personal domain', () => {
+  it('accepts only the exact lower-case three-label non-calendar deployment shape', () => {
     expect(normalizeOwnerRemoteAppHostname('memo.example.com')).toBe('memo.example.com');
-    expect(normalizeOwnerRemoteAppHostname('MEMO.EXAMPLE.COM')).toBe('memo.example.com');
-    expect(normalizeOwnerRemoteAppHostname(' memo.example.com')).toBeNull();
-    expect(normalizeOwnerRemoteAppHostname('localhost')).toBeNull();
-    expect(normalizeOwnerRemoteAppHostname('memo.example.com.')).toBeNull();
+    for (const invalid of [
+      undefined,
+      'memo.localhost',
+      '127.0.0.1',
+      '::1',
+      'calendar.example.com',
+      'example.com',
+      'memo.dev.example.com',
+      'MEMO.EXAMPLE.COM',
+      'memo.example.com.',
+      ' memo.example.com',
+      'memo.example.com ',
+      'memo.example.com.evil.test',
+    ]) {
+      expect(normalizeOwnerRemoteAppHostname(invalid)).toBeNull();
+    }
+  });
 
+  it('allows case-insensitive comparison only for the current browser hostname', () => {
     expect(isExactOwnerRemoteAppHostname('memo.example.com', 'memo.example.com')).toBe(true);
     expect(isExactOwnerRemoteAppHostname('MEMO.EXAMPLE.COM', 'memo.example.com')).toBe(true);
+    expect(isExactOwnerRemoteAppHostname('memo.example.com', 'MEMO.EXAMPLE.COM')).toBe(false);
     expect(isExactOwnerRemoteAppHostname('calendar.example.com', 'memo.example.com')).toBe(false);
     expect(isExactOwnerRemoteAppHostname('memo.example.com.evil.test', 'memo.example.com')).toBe(false);
     expect(isExactOwnerRemoteAppHostname('memo.example.com.', 'memo.example.com')).toBe(false);

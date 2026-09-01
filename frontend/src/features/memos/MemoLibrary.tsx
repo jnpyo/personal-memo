@@ -1,10 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { MemoStatus, MemoView } from '../../shared/api/types';
-import {
-  analysisStateLabel,
-  analysisStateTone,
-  isMemoContentValid,
-} from './memoModel';
+import { isMemoContentValid } from './memoModel';
 
 type EditDraft = {
   memo: MemoView;
@@ -90,17 +86,8 @@ export function MemoLibrary({
   return (
     <section className="memo-section" aria-labelledby="memo-library-title">
       <div className="section-heading">
-        <div>
-          <span className="eyebrow">RAW MEMOS</span>
-          <h2 id="memo-library-title">최근 원본 메모</h2>
-        </div>
-        <span className="count-badge">최대 50개</span>
+        <h2 id="memo-library-title">모든 메모</h2>
       </div>
-
-      <p className="memo-preservation-note">
-        원문과 AI 제안·태그·할 일은 별도로 보존됩니다. 원문 수정은 새 revision을 만들고,
-        휴지통 이동이나 제안 거절도 기존 원문을 지우지 않습니다.
-      </p>
 
       <div className="memo-filter" role="tablist" aria-label="메모 상태">
         <button
@@ -121,7 +108,7 @@ export function MemoLibrary({
         </button>
       </div>
 
-      {loading && <p className="panel-state">원본 메모를 불러오고 있습니다…</p>}
+      {loading && <p className="panel-state">메모를 불러오고 있습니다…</p>}
       {!loading && error && (
         <div className="panel-state panel-state--error">
           <p>{error}</p>
@@ -132,7 +119,7 @@ export function MemoLibrary({
       )}
       {!loading && !error && memos.length === 0 && (
         <p className="panel-state">
-          {filter === 'ACTIVE' ? '아직 저장한 원본 메모가 없습니다.' : '휴지통이 비어 있습니다.'}
+          {filter === 'ACTIVE' ? '아직 저장한 메모가 없습니다.' : '휴지통이 비어 있습니다.'}
         </p>
       )}
 
@@ -142,23 +129,16 @@ export function MemoLibrary({
             const editing = editDraft?.memo.id === memo.id;
             const editIsStale =
               editing && editDraft !== null && editDraft.memo.currentRevision !== memo.currentRevision;
-            const tone = analysisStateTone(memo.analysisState);
             return (
               <article className="memo-card" key={memo.id}>
                 <div className="memo-card__meta">
-                  <span>revision {memo.currentRevision}</span>
-                  <span>{memo.status === 'ACTIVE' ? '활성' : '휴지통'}</span>
                   <span>{formatCreatedAt(memo.createdAt)}</span>
-                  <span className={`analysis-badge analysis-badge--${tone}`}>
-                    {analysisStateLabel(memo.analysisState)}
-                  </span>
+                  {memo.status === 'TRASHED' && <span>휴지통</span>}
                 </div>
 
                 {editing && editDraft ? (
                   <div className="memo-editor">
-                    <label htmlFor={`memo-edit-${memo.id}`}>
-                      원문 수정 · 저장하면 revision {memo.currentRevision + 1}
-                    </label>
+                    <label htmlFor={`memo-edit-${memo.id}`}>메모 수정</label>
                     <textarea
                       id={`memo-edit-${memo.id}`}
                       maxLength={20_000}
@@ -173,8 +153,8 @@ export function MemoLibrary({
                     />
                     {editIsStale && (
                       <p className="memo-editor__warning">
-                        편집을 시작한 뒤 새 revision이 확인되었습니다. 수정 내용을 복사한 뒤 취소하고
-                        최신 원문에서 다시 편집해 주세요.
+                        편집하는 동안 메모가 바뀌었습니다. 내용을 복사한 뒤 취소하고, 최신 메모에서
+                        다시 수정해 주세요.
                       </p>
                     )}
                     <div className="memo-editor__footer">
@@ -199,7 +179,7 @@ export function MemoLibrary({
                           }
                           onClick={() => void saveEdit()}
                         >
-                          {pendingScope === `update:${memo.id}` ? '저장 중…' : '새 revision 저장'}
+                          {pendingScope === `update:${memo.id}` ? '저장 중…' : '저장'}
                         </button>
                       </div>
                     </div>
@@ -217,7 +197,7 @@ export function MemoLibrary({
                       title={analysisBlocked ? '열려 있는 제안을 먼저 처리해 주세요.' : undefined}
                       onClick={() => onAnalyze(memo)}
                     >
-                      {pendingScope === `analyze:${memo.id}` ? '분석 중…' : '최신 revision 제안 분석'}
+                      {pendingScope === `analyze:${memo.id}` ? '정리 중…' : '정리하기'}
                     </button>
                     <button
                       type="button"
@@ -228,7 +208,7 @@ export function MemoLibrary({
                         onDirtyChange(false);
                       }}
                     >
-                      원문 수정
+                      수정
                     </button>
                     <button
                       type="button"
@@ -236,21 +216,20 @@ export function MemoLibrary({
                       disabled={pending || editDraft !== null}
                       onClick={() => onTrash(memo)}
                     >
-                      {pendingScope === `trash:${memo.id}` ? '이동 중…' : '휴지통으로'}
+                      {pendingScope === `trash:${memo.id}` ? '이동 중…' : '휴지통'}
                     </button>
                   </div>
                 )}
 
                 {memo.status === 'TRASHED' && (
                   <div className="memo-card__actions memo-card__actions--restore">
-                    <span>휴지통 메모는 복원 후 수정하거나 분석할 수 있습니다.</span>
                     <button
                       type="button"
                       className="secondary-button"
                       disabled={pending || editDraft !== null}
                       onClick={() => onRestore(memo)}
                     >
-                      {pendingScope === `restore:${memo.id}` ? '복원 중…' : '활성 메모로 복원'}
+                      {pendingScope === `restore:${memo.id}` ? '복원 중…' : '복원'}
                     </button>
                   </div>
                 )}

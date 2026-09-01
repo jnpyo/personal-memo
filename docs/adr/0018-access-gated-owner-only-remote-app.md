@@ -2,8 +2,12 @@
 
 ## Status
 
-Accepted for source and disposable-synthetic implementation. Live activation remains
-`SOLO_PROVISIONAL/REPORT_ONLY` and requires the owner confirmations listed below.
+Accepted for source and disposable-synthetic implementation. The bounded 2026-08-30/31 owner
+qualification remains historical `LIVE_OWNER_BETA` evidence. Current activation is
+`LIVE_OWNER_BETA_REQUALIFIED`: the Access control-path service-worker fix is deployed, the
+pre-authentication boundary passes, and the exact owner reported successful post-fix application/PWA
+acceptance. This remains user-reported evidence. Overall status is `SOLO_PROVISIONAL/REPORT_ONLY` and
+public production remains `NO_GO`.
 
 ## Context
 
@@ -59,6 +63,12 @@ be immutable, and only for final `200`, `206`, or `304` responses. Hash-shaped e
 parameters before the generic API proxy. The Cloudflare hostname uses an entire-host cache bypass
 during this provisional beta.
 
+The Cloudflare-owned `/cdn-cgi/access` control namespace is not an application navigation. The PWA
+service worker uses the same case-insensitive `^/cdn-cgi/access(?:/|\?|$)` boundary in its navigation
+fallback deny-list and `NetworkOnly` route. It must never answer an Access authorization, callback,
+login, or logout request with the cached application shell or offline fallback. This provider control
+boundary is independent of the application OAuth/login routes, which remain disabled for this beta.
+
 `app-loopback` can provide container outbound reachability and is therefore a residual risk, not an
 isolation boundary. No frontend, backend, or PostgreSQL service joins it. The edge remains
 unprivileged, read-only, `cap_drop: ALL`, `no-new-privileges`, and fixed to the frontend upstream over
@@ -92,6 +102,12 @@ Before any live route or connector start, the owner must explicitly confirm all 
 The connector starts last. Automated live smoke stops at public shell/capability and application-401
 checks and must not log in, read a memo, query the personal database, inspect canonical data, or call
 Apply. The owner performs the first actual login and PWA screen check directly.
+
+Before activation, the generated production service worker and a disposable production-browser E2E
+must prove that synthetic `/cdn-cgi/access` callback and authorization navigations go to the network
+and never resolve to the cached PWA shell. After deployment, the exact owner must repeat Access and
+application-login acceptance with the new worker controlling the page before `ACTIVATION_HOLD` is
+cleared.
 
 ## Rollback
 

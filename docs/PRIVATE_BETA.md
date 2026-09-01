@@ -1,6 +1,6 @@
 # 1차 비공개 베타 체크포인트
 
-기준일은 2026-08-31이다.
+기준일은 2026-09-01이다.
 
 - `PRIOR_V19_CODE_AND_AUTOMATED_GATES`: `PASS`
 - `CURRENT_V20_BACKEND_MECHANICAL_GATE`: `PASS_773_TESTS`
@@ -29,11 +29,15 @@
 - `PERSONAL_ANALYSIS_PATH_DIAGNOSTIC_DEPLOYMENT`: `PASS_OWNER_AUTHORIZED`
 - `V23_DEVICE_ACCEPTANCE_AUTOMATED_READINESS`: `PASS`
 - `DEVICE_INSTALL_ACCEPTANCE`: `USER_CHECK_REQUIRED`
-- `MILESTONE_6E_OWNER_REMOTE_PWA_ACCEPTANCE`: `PASS_USER_REPORTED_EXACT_OWNER_LOGIN_AND_PWA`
-- `MILESTONE_6E_QUALIFICATION_STATUS`: `LIVE_OWNER_BETA` / `SOLO_PROVISIONAL` / `REPORT_ONLY`
-- `MILESTONE_6E_CURRENT_RUNTIME`: `STOPPED_AFTER_REBOOT` / `MANUAL_RESTART_REQUIRED`
+- `MILESTONE_6E_HISTORICAL_OWNER_REMOTE_PWA_ACCEPTANCE`: `PASS_USER_REPORTED_EXACT_OWNER_LOGIN_AND_PWA`
+- `MILESTONE_6E_HISTORICAL_QUALIFICATION_STATUS`: `LIVE_OWNER_BETA` / `SOLO_PROVISIONAL` / `REPORT_ONLY`
+- `MILESTONE_6E_ACCESS_CONTROL_PATH_FIX`: `DEPLOYED_LOCAL_AND_EXTERNAL_PREAUTH_PASS`
+- `MILESTONE_6E_CURRENT_OWNER_REACCEPTANCE`: `PASS_USER_REPORTED_POST_FIX_HEALTH_AND_PWA`
+- `MILESTONE_6E_CURRENT_ACTIVATION`: `LIVE_OWNER_BETA_REQUALIFIED`
+- `MILESTONE_6E_CURRENT_RUNTIME`: `APP_CONNECTOR_RUNNING_MANUAL` / `CALENDAR_CONNECTOR_STOPPED_MANUAL` / `APP_EDGE_HEALTHY_LOOPBACK`
 - `MILESTONE_6E_UNAUTH_ME_AND_PROVIDER_LOG_SENTINELS`: `UNVERIFIED`
 - `MILESTONE_7_1_TODAY_FIRST_MOBILE_HOME`: `SOURCE_QUALIFIED_LINUX_FULL_E2E_PASS_DEPLOYMENT_PENDING`
+- `MILESTONE_7_2_GRAPH_FIRST_MOBILE_HOME`: `SOURCE_QUALIFIED_PERSONAL_DEPLOYED_VISUAL_REVIEW_IN_PROGRESS`
 - LiquidAI evidence: `SOLO_PROVISIONAL` / `REPORT_ONLY` / `NO_GO`
 - Personal AI-preferred proposal path: `SOLO_PROVISIONAL` / `REPORT_ONLY`; owner-authorized V18→V20
   deployment, V20→V22 and V22→V23 backup/restore rehearsal/migration/rebuild/private-route smoke completed;
@@ -569,6 +573,45 @@ Live activation 뒤 다음 bounded evidence를 확인했다.
 qualification은 `LIVE_OWNER_BETA`, `SOLO_PROVISIONAL/REPORT_ONLY` 상태를 유지하고 unrestricted public
 self-service와 production readiness는 계속 `NO_GO`다.
 
+## 2026-09-01 Access control-path service-worker qualification and activation hold
+
+Cloudflare Dashboard read-only review에서 exact owner-only/default-deny Access, 전체 host/path protected
+Tunnel route, catch-all 404, Protect with Access와 entire-host cache bypass가 모두 유지됨을 확인했다.
+설정 변경 없이 app connector를 시작하자 Tunnel은 `Healthy`가 됐지만, Access authorization callback에서
+기존 설치 PWA service worker가 Cloudflare network response 대신 cached app shell/offline UI를 반환했다.
+이번 acceptance는 완료되지 않았으며 connector-first rollback으로 app/calendar service를
+`Stopped`/`Manual`, local `cloudflared` process를 0으로 복구했다. `app-public-edge`는 healthy loopback으로
+유지했다.
+
+원인은 app-owned API/OAuth 경계에는 있던 service-worker network-only 규칙에 provider-owned
+`/cdn-cgi/access` namespace가 빠진 것이었다. Shared case-insensitive
+`^/cdn-cgi/access(?:/|\?|$)` 경계와 positive/query/case/near-match unit, offline fetch와 top-level
+navigation E2E를 추가했다. ESLint, TypeScript, 48 files/472 tests, public-app source contract,
+production PWA build, generated `sw.js` deny-list/`NetworkOnly` inspection과 disposable system-Edge E2E
+1/1이 통과했다. 검증용 synthetic PostgreSQL/app container, network, volume과 image는 모두 제거했다.
+
+Owner가 fresh private browser의 `/api/v1/health` OTP flow 뒤 cached shell이 아닌 Cloudflare Tunnel
+`Error 1033`을 보고해 rollback `MUTATION_HOLD`가 해제됐다. 이전 frontend/app-edge image에는 같은 UTC
+stamp의 `rollback-pre-access-sw-20260901-042111Z` tag를 붙였다. Connector가 stopped인 상태에서 current
+source를 다시 build했고 frontend lint, 48 files/472 tests, production PWA build, isolated Nginx config,
+exact/wrong-Host local edge contract가 통과했다. 새 frontend/app-edge에는
+`deployed-access-sw-20260901-042405Z` tag를 붙였다.
+
+배포된 loopback artifact는 root와 `sw.js` 200, Access `NetworkOnly` marker, health exact UP 200,
+3-boolean auth capabilities 200, unauthenticated `/auth/me` 401 `AUTHENTICATION_REQUIRED`와 모든 dynamic
+response no-store를 통과했다. App connector를 마지막에 시작한 뒤 service는 `Running`/`Manual`, calendar
+service는 `Stopped`/`Manual`, cloudflared process 1, metrics ready 200이고 모든 personal Docker service가
+healthy다. Cookie/body 없는 외부 `/`와 unique-query health는 모두 Access 302, no-store/private,
+`CF-Cache-Status` absent를 통과했다.
+
+개인 memo, owner session, PostgreSQL/canonical data, Apply, model/Ollama와 Cloudflare 설정은 읽거나
+변경하지 않았다. Old-worker client의 broad site-data clear는 owner draft/session 손실 위험 때문에
+허용하지 않는다. 이어서 exact owner는 안내한 fresh private-browser health, root, application/PWA
+재확인이 정상 작동한다고 보고했다. 이는 user-reported acceptance이며 provider/customer log나 독립
+자동화 증거로 확장하지 않는다. 2026-08-30/31 historical `LIVE_OWNER_BETA` evidence는 보존하고 current
+activation은 `LIVE_OWNER_BETA_REQUALIFIED`다. Overall status는 `SOLO_PROVISIONAL/REPORT_ONLY`,
+unrestricted public/production은 `NO_GO`다.
+
 ## Milestone 7.1 Today-first mobile home checkpoint
 
 다음 source slice는 빠른 메모 입력과 오늘의 할 일·확정 일정을 mobile home의 첫 스캔 경로로
@@ -599,3 +642,35 @@ PostgreSQL, canonical data, 실제 API, Apply, Docker는 사용하지 않았고 
 확인했다. 이는 Windows Docker Desktop defect 해결, 개인 V23 backup/rebuild/update, owner session이나
 canonical data 동작, Cloudflare runtime, 실제 S24 UI 또는 모델 품질 증거가 아니다. 앱 내 화면
 업데이트 확인 전에는 배포 acceptance를 주장하지 않으며 상태는 `SOLO_PROVISIONAL/REPORT_ONLY`다.
+
+## 2026-09-01 Milestone 7.2 graph-first personal deployment
+
+Milestone 7.2는 confirmed bounded MEMO-TAG graph를 기본 화면으로 만들고 하단 내비게이션을 연결,
+메모, 일정, 설정으로 나눴다. 메모 화면은 raw-save-first capture, 원문 목록과 검색을 유지하고 일정
+화면은 task와 confirmed event를 유지한다. AI/model/recovery/infrastructure 진단은 설정의 보조 경로로
+이동했다. API, OpenAPI, JSON Schema, Flyway, persistence, analyzer policy, canonical mutation과 배포
+topology는 바꾸지 않았다.
+
+Source gate는 ESLint, TypeScript, 51 files/481 tests, production PWA build와 public-app source contract를
+통과했다. 별도 synthetic project의 production-like Playwright 27/27은 graph-first shell, portrait/
+landscape와 horizontal overflow, raw capture, review/Apply/undo, graph neighborhood와 exact cleanup을
+통과했다. Personal memo, owner session, PostgreSQL row, canonical record와 Apply를 사용하지 않았다.
+
+별도 owner 승인으로 144,430-byte mechanical PostgreSQL backup과 checksum을 만들고 disposable
+V23-to-V23 restore rehearsal을 통과했다. 기존 canonical volume은 삭제·교체하지 않았다. App connector를
+먼저 중지하고 owner가 fresh private browser에서 Error 1033을 확인한 뒤, 기존 frontend/app-edge를
+`rollback-pre-m72-20260901-074019Z`로 보존했다. Current source에서 frontend와 app edge만 rebuild했고
+실행 이미지는 `deployed-m72-20260901-075555Z`로 고정했다.
+
+Loopback exact-Host root와 `sw.js`, health UP, exact three-boolean capabilities, cookie 없는 `/auth/me`
+401 `AUTHENTICATION_REQUIRED`, wrong-Host bodyless 404가 통과했다. 익명 401 응답은 XSRF cookie만
+발급했고 owner session cookie는 없었다. Connector-last start 뒤 app service는 `Running`/`Manual`,
+calendar service는 `Stopped`/`Manual`, cloudflared process와 metrics listener는 각각 1개이며 네 personal
+container가 모두 healthy였다. Cookie/body 없는 remote root와 health는 Cloudflare Access 302,
+no-store/private, cache non-HIT를 통과했다. Restore/E2E temporary container와 volume은 0개였다.
+
+사용자는 배포된 화면을 직접 보고 시각적 유사성과 제품 차이를 검토하기 시작했다. 이는 최종 Android
+physical-device acceptance가 아니다. Personal memo body, owner session, canonical data, Apply, Ollama와
+Cloudflare 설정은 읽거나 변경하지 않았다. 현재 판정은
+`SOURCE_QUALIFIED_PERSONAL_DEPLOYED_VISUAL_REVIEW_IN_PROGRESS`, `SOLO_PROVISIONAL/REPORT_ONLY`이며
+unrestricted public/production은 `NO_GO`다.

@@ -14,7 +14,7 @@ import { MemoTagGraph } from '../features/graph/MemoTagGraph';
 import { EventList } from '../features/events/EventList';
 import type { CalendarSharingProtection } from '../features/events/calendarSharingModel';
 import { ConnectionStatus } from '../features/health/ConnectionStatus';
-import { HomeOverview } from '../features/home/HomeOverview';
+import { OwnerRemoteAddress } from '../features/home/OwnerRemoteAddress';
 import { MemoLibrary } from '../features/memos/MemoLibrary';
 import { PwaUpdateManager } from '../features/pwa/PwaUpdateManager';
 import { PostponedReview } from '../features/review/PostponedReview';
@@ -33,6 +33,7 @@ import {
 import { TaskList } from '../features/tasks/TaskList';
 import { FeedbackBanner } from '../shared/ui/FeedbackBanner';
 import { useMemoWorkspace } from './useMemoWorkspace';
+import { WorkspaceNavigation, type WorkspaceView } from './WorkspaceNavigation';
 import { hasPendingServerOperation } from './workspaceOperationState';
 
 export function App() {
@@ -161,8 +162,16 @@ export function App() {
 
 type WorkspaceAccountProps = ComponentProps<typeof AccountPanel>;
 
+const WORKSPACE_VIEW_TITLE: Record<WorkspaceView, string> = {
+  GRAPH: '연결 지도',
+  MEMOS: '메모',
+  AGENDA: '일정',
+  SETTINGS: '설정',
+};
+
 function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
   const workspace = useMemoWorkspace(account.session.userId);
+  const [activeView, setActiveView] = useState<WorkspaceView>('GRAPH');
   const [memoEditDirty, setMemoEditDirty] = useState(false);
   const [transientReviewDirty, setTransientReviewDirty] = useState(false);
   const [calendarSharingProtection, setCalendarSharingProtection] =
@@ -204,6 +213,14 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
   useEffect(() => {
     if (account.pending === null) setNavigationApproved(false);
   }, [account.pending]);
+
+  useEffect(() => {
+    if (activeView !== 'GRAPH') return;
+    const frame = window.requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeView]);
 
   useEffect(() => {
     if (!hasUnsavedChanges || navigationApproved) return;
@@ -256,7 +273,7 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         ? '현재 제안을 먼저 승인·보류·거절해 주세요.'
         : workspace.postponedReview
           ? '보류한 제안을 먼저 검토해 주세요.'
-          : '메모 원문은 AI 결과와 별도로 먼저 저장됩니다.';
+          : '';
   const retryFeedback = workspace.retryAction
     ? () => {
         const scope = workspace.retryAction?.scope ?? '';
@@ -268,23 +285,37 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
       }
     : undefined;
 
+  function openCapture() {
+    setActiveView('MEMOS');
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      document.getElementById('memo-content')?.focus();
+    });
+  }
+
+  function selectView(view: WorkspaceView) {
+    setActiveView(view);
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    });
+  }
+
   return (
-    <main>
+    <main className="workspace-shell">
       <PwaUpdateManager
         hasUnsavedChanges={hasUnsavedChanges}
         operationPending={serverOperationPending}
         onUpdatingChange={setPwaUpdating}
       />
-      <header className="hero">
-        <div>
-          <span className="eyebrow">PERSONAL MEMO</span>
-          <h1>오늘을 먼저 보세요.</h1>
-          <p>바로 적고, 오늘 할 일과 일정을 확인하세요. 분석은 승인 전까지 제안으로만 남습니다.</p>
+      <header className="app-header">
+        <div className="app-identity">
+          <span className="app-identity__mark" aria-hidden="true" />
+          <div>
+            <span className="app-identity__name">PERSONAL MEMO</span>
+            <h1 aria-live="polite" aria-atomic="true">{WORKSPACE_VIEW_TITLE[activeView]}</h1>
+          </div>
         </div>
-        <div className="hero-actions">
-          <ConnectionStatus status={workspace.connection} onRetry={workspace.checkConnection} />
-          <AccountPanel {...guardedAccount} />
-        </div>
+        <ConnectionStatus status={workspace.connection} onRetry={workspace.checkConnection} />
       </header>
 
       <div
@@ -316,22 +347,6 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         </aside>
       )}
 
-      <HomeOverview
-        tasks={workspace.tasks}
-        events={workspace.events}
-        pendingReview={
-          workspace.review
-            ? { title: workspace.review.title, state: 'REVIEW_REQUIRED' }
-            : workspace.postponedReview
-              ? { title: workspace.postponedReview.title, state: 'POSTPONED' }
-              : null
-        }
-        tasksLoading={workspace.workspaceLoading}
-        eventsLoading={workspace.eventsLoading}
-        tasksError={workspace.workspaceError}
-        eventsError={workspace.eventsError}
-      />
-
       {workspace.postponedReview && (
         <div id="review-pending">
           <PostponedReview
@@ -341,116 +356,173 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         </div>
       )}
 
-      <TaskList
-        tasks={workspace.tasks}
-        loading={workspace.workspaceLoading}
-        error={workspace.workspaceError}
-        busy={interactionLocked}
-        pendingTaskId={workspace.pendingTaskId}
-        onRetry={workspace.refreshWorkspace}
-        onStatusChange={workspace.updateTaskStatus}
-      />
+      <section
+        className="workspace-view workspace-view--graph"
+        aria-label="연결 지도 화면"
+        hidden={activeView !== 'GRAPH'}
+      >
+        <MemoTagGraph
+          projection={workspace.graph}
+          loading={workspace.workspaceLoading}
+          error={workspace.workspaceError}
+          selectedNode={workspace.selectedGraphNode}
+          selectionProjectionVersion={workspace.selectedGraphProjectionVersion}
+          activeMemoNode={workspace.activeGraphMemoNode}
+          memoDetail={workspace.selectedGraphMemo}
+          detailLoading={workspace.graphDetailLoading}
+          detailError={workspace.graphDetailError}
+          neighborhood={workspace.graphNeighborhood}
+          neighborhoodLoading={workspace.graphNeighborhoodLoading}
+          neighborhoodLoadingMore={workspace.graphNeighborhoodLoadingMore}
+          neighborhoodError={workspace.graphNeighborhoodError}
+          neighborhoodRestartRequired={workspace.graphNeighborhoodRestartRequired}
+          pinPending={workspace.pinPending}
+          pinError={workspace.graphPinError}
+          interactionDisabled={interactionLocked}
+          onRetry={workspace.refreshWorkspace}
+          onSelectNode={workspace.selectGraphNode}
+          onCloseDetail={workspace.closeGraphNode}
+          onRetryDetail={workspace.retryGraphNodeDetail}
+          onRetryNeighborhood={workspace.retryGraphNeighborhood}
+          onLoadMoreNeighborhood={workspace.loadMoreGraphNeighborhood}
+          onOpenNeighborhoodMemo={workspace.openGraphNeighborhoodMemo}
+          onBackToNeighborhood={workspace.backToGraphNeighborhood}
+          onSetPinned={workspace.setMemoPinned}
+          onRetryPin={workspace.retryGraphPin}
+        />
+        <button
+          type="button"
+          className="capture-fab"
+          disabled={interactionLocked}
+          onClick={openCapture}
+        >
+          <span aria-hidden="true">＋</span>
+          새 메모
+        </button>
+      </section>
 
-      <EventList
-        events={workspace.events}
-        loading={workspace.eventsLoading}
-        error={workspace.eventsError}
-        interactionDisabled={interactionLocked}
-        online={workspace.connection === 'online'}
-        onCalendarSharingProtectionChange={setCalendarSharingProtection}
-        onRetry={workspace.refreshEvents}
-      />
-
-      <MemoSearch />
-
-      <MemoLibrary
-        activeMemos={workspace.activeMemos}
-        trashedMemos={workspace.trashedMemos}
-        loading={workspace.memosLoading}
-        error={workspace.memosError}
-        busy={interactionLocked}
-        pendingScope={workspace.pendingMemoScope}
-        analysisBlocked={
-          workspace.recoveryLoading ||
-          workspace.recoveryError !== null ||
-          workspace.review !== null ||
-          workspace.postponedReview !== null
-        }
-        onRetry={workspace.refreshMemos}
-        onUpdate={(memo, content) =>
-          confirmSourceChange() ? workspace.updateMemo(memo, content) : Promise.resolve(false)
-        }
-        onTrash={(memo) => {
-          if (confirmSourceChange()) workspace.trashMemo(memo);
-        }}
-        onRestore={workspace.restoreMemo}
-        onAnalyze={workspace.analyzeMemo}
-        onDirtyChange={setMemoEditDirty}
-      />
-
-      <MemoTagGraph
-        projection={workspace.graph}
-        loading={workspace.workspaceLoading}
-        error={workspace.workspaceError}
-        selectedNode={workspace.selectedGraphNode}
-        selectionProjectionVersion={workspace.selectedGraphProjectionVersion}
-        activeMemoNode={workspace.activeGraphMemoNode}
-        memoDetail={workspace.selectedGraphMemo}
-        detailLoading={workspace.graphDetailLoading}
-        detailError={workspace.graphDetailError}
-        neighborhood={workspace.graphNeighborhood}
-        neighborhoodLoading={workspace.graphNeighborhoodLoading}
-        neighborhoodLoadingMore={workspace.graphNeighborhoodLoadingMore}
-        neighborhoodError={workspace.graphNeighborhoodError}
-        neighborhoodRestartRequired={workspace.graphNeighborhoodRestartRequired}
-        pinPending={workspace.pinPending}
-        pinError={workspace.graphPinError}
-        interactionDisabled={interactionLocked}
-        onRetry={workspace.refreshWorkspace}
-        onSelectNode={workspace.selectGraphNode}
-        onCloseDetail={workspace.closeGraphNode}
-        onRetryDetail={workspace.retryGraphNodeDetail}
-        onRetryNeighborhood={workspace.retryGraphNeighborhood}
-        onLoadMoreNeighborhood={workspace.loadMoreGraphNeighborhood}
-        onOpenNeighborhoodMemo={workspace.openGraphNeighborhoodMemo}
-        onBackToNeighborhood={workspace.backToGraphNeighborhood}
-        onSetPinned={workspace.setMemoPinned}
-        onRetryPin={workspace.retryGraphPin}
-      />
-
-      <ReviewOutcomeSummary
-        summary={workspace.reviewOutcomeSummary}
-        loading={workspace.reviewOutcomeLoading}
-        error={workspace.reviewOutcomeError}
-        onRetry={workspace.refreshReviewOutcomes}
-      />
-
-      <AiProcessingDiagnostic
-        summary={workspace.analysisPathEvidenceSummary}
-        loading={workspace.analysisPathEvidenceLoading}
-        error={workspace.analysisPathEvidenceError}
-        onLoad={workspace.refreshAnalysisPathEvidence}
-        onRefresh={workspace.refreshAnalysisPathEvidence}
-      />
-
-      {workspace.applicationId && (
-        <aside className="undo-card">
-          <div>
-            <strong>마지막 적용을 되돌릴 수 있습니다.</strong>
-            <p>적용으로 생성된 태그 연결과 항목·일정만 제거하고 원문 메모는 보존합니다.</p>
+      <section
+        className="workspace-view workspace-view--memos"
+        aria-label="메모 화면"
+        hidden={activeView !== 'MEMOS'}
+      >
+        <section className="workspace-compose" aria-labelledby="workspace-compose-title">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">CAPTURE</span>
+              <h2 id="workspace-compose-title">새 메모</h2>
+            </div>
           </div>
-          <button
-            type="button"
-            className="secondary-button"
-            disabled={interactionLocked}
-            onClick={() => {
-              if (confirmSourceChange()) workspace.undoApplication();
-            }}
-          >
-            {interactionLocked ? '처리 중…' : '마지막 적용 되돌리기'}
-          </button>
-        </aside>
-      )}
+          <MemoCapture
+            content={workspace.content}
+            disabled={workspace.captureLocked || interactionLocked}
+            submissionDisabled={!canSubmitMemo(workspace.connection)}
+            submitting={workspace.captureSubmitting}
+            rawOnly={workspace.recoveryError !== null}
+            prompt={capturePrompt}
+            onContentChange={workspace.changeContent}
+            onSubmit={workspace.captureMemo}
+          />
+        </section>
+
+        <MemoSearch />
+
+        <MemoLibrary
+          activeMemos={workspace.activeMemos}
+          trashedMemos={workspace.trashedMemos}
+          loading={workspace.memosLoading}
+          error={workspace.memosError}
+          busy={interactionLocked}
+          pendingScope={workspace.pendingMemoScope}
+          analysisBlocked={
+            workspace.recoveryLoading ||
+            workspace.recoveryError !== null ||
+            workspace.review !== null ||
+            workspace.postponedReview !== null
+          }
+          onRetry={workspace.refreshMemos}
+          onUpdate={(memo, content) =>
+            confirmSourceChange() ? workspace.updateMemo(memo, content) : Promise.resolve(false)
+          }
+          onTrash={(memo) => {
+            if (confirmSourceChange()) workspace.trashMemo(memo);
+          }}
+          onRestore={workspace.restoreMemo}
+          onAnalyze={workspace.analyzeMemo}
+          onDirtyChange={setMemoEditDirty}
+        />
+      </section>
+
+      <section
+        className="workspace-view workspace-view--agenda"
+        aria-label="일정 화면"
+        hidden={activeView !== 'AGENDA'}
+      >
+        <TaskList
+          tasks={workspace.tasks}
+          loading={workspace.workspaceLoading}
+          error={workspace.workspaceError}
+          busy={interactionLocked}
+          pendingTaskId={workspace.pendingTaskId}
+          onRetry={workspace.refreshWorkspace}
+          onStatusChange={workspace.updateTaskStatus}
+        />
+
+        <EventList
+          events={workspace.events}
+          loading={workspace.eventsLoading}
+          error={workspace.eventsError}
+          interactionDisabled={interactionLocked}
+          online={workspace.connection === 'online'}
+          onCalendarSharingProtectionChange={setCalendarSharingProtection}
+          onRetry={workspace.refreshEvents}
+        />
+      </section>
+
+      <section
+        className="workspace-view workspace-view--settings"
+        aria-label="설정 화면"
+        hidden={activeView !== 'SETTINGS'}
+      >
+        <div className="settings-account-card">
+          <OwnerRemoteAddress />
+          <AccountPanel {...guardedAccount} />
+        </div>
+
+        <ReviewOutcomeSummary
+          summary={workspace.reviewOutcomeSummary}
+          loading={workspace.reviewOutcomeLoading}
+          error={workspace.reviewOutcomeError}
+          onRetry={workspace.refreshReviewOutcomes}
+        />
+
+        <AiProcessingDiagnostic
+          summary={workspace.analysisPathEvidenceSummary}
+          loading={workspace.analysisPathEvidenceLoading}
+          error={workspace.analysisPathEvidenceError}
+          onLoad={workspace.refreshAnalysisPathEvidence}
+          onRefresh={workspace.refreshAnalysisPathEvidence}
+        />
+
+        {workspace.applicationId && (
+          <aside className="undo-card">
+            <div>
+              <strong>마지막 정리 되돌리기</strong>
+              <p>메모는 남기고, 마지막으로 추가한 연결과 항목만 되돌립니다.</p>
+            </div>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={interactionLocked}
+              onClick={() => {
+                if (confirmSourceChange()) workspace.undoApplication();
+              }}
+            >
+              {interactionLocked ? '처리 중…' : '되돌리기'}
+            </button>
+          </aside>
+        )}
+      </section>
 
       {workspace.review && (
         <div id="review-pending">
@@ -486,16 +558,7 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         </div>
       )}
 
-      <MemoCapture
-        content={workspace.content}
-        disabled={workspace.captureLocked || interactionLocked}
-        submissionDisabled={!canSubmitMemo(workspace.connection)}
-        submitting={workspace.captureSubmitting}
-        rawOnly={workspace.recoveryError !== null}
-        prompt={capturePrompt}
-        onContentChange={workspace.changeContent}
-        onSubmit={workspace.captureMemo}
-      />
+      <WorkspaceNavigation activeView={activeView} onSelect={selectView} />
     </main>
   );
 }

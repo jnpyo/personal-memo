@@ -59,7 +59,7 @@ export function TaskList({
         </div>
       )}
       {!loading && !error && tasks.length === 0 && (
-        <p className="panel-state">승인해서 생성된 할 일이 없습니다.</p>
+        <p className="panel-state">할 일이 없습니다.</p>
       )}
 
       {!loading && !error && tasks.length > 0 && (

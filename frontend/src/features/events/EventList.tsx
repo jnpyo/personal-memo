@@ -67,9 +67,7 @@ export function EventList({
         </div>
       )}
       {!loading && !error && events.length === 0 && (
-        <p className="panel-state">
-          승인된 시간 정보가 있는 일정이 없습니다. 시간 미정 EVENT는 이 목록에 표시되지 않습니다.
-        </p>
+        <p className="panel-state">일정이 없습니다.</p>
       )}
 
       {!loading && !error && events.length > 0 && (
