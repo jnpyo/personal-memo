@@ -4,6 +4,8 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 export const BACKEND_NETWORK_ONLY_PATH_PATTERNS = [
   /^\/api(?:\/|$)/,
+  // Cloudflare Access owns this control-plane path; the PWA must never serve its app shell here.
+  /^\/cdn-cgi\/access(?:\/|\?|$)/i,
   /^\/calendar\/v1\/feed\.ics(?:\?.*)?$/,
   /^\/login\/oauth2(?:\/|$)/,
   /^\/oauth2(?:\/|$)/,

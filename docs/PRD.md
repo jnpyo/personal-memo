@@ -43,14 +43,17 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
   only for the explicitly selected source-item/target pairs; unavailable targets fail closed.
 - All applied analysis can be undone without deleting the original.
 
-### Today-first action and graph-backed retrieval
+### Graph-first retrieval with separate action views
 
-- The mobile entry screen prioritizes quick capture, today's unfinished tasks, and confirmed events.
-- The graph remains a secondary retrieval view for meaningful active topics and memos rather than
-  the first visual hierarchy.
-- The graph renders a curated neighborhood, not the entire corpus.
+- The mobile entry screen is a confirmed, bounded MEMO-TAG connection map that makes the owner's
+  existing knowledge structure the first visual hierarchy.
+- Bottom navigation exposes four views: the connection map; a memo view containing capture, the
+  raw-memo list, and search; an agenda view containing tasks and confirmed events; and settings.
+- The graph renders a curated neighborhood, not the entire corpus, and never treats an unapproved
+  analysis proposal as a confirmed connection.
 - System types such as TASK and INFORMATION are represented by filters and node styling, not giant hub nodes.
-- Search can reveal and expand a memo hidden inside a collapsed cluster.
+- Lists, search, tasks, and schedules remain usable without understanding graph mechanics.
+- Search can reveal and open a memo outside the bounded graph home.
 
 ### Knowledge that becomes action
 
@@ -76,17 +79,19 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 - The account panel shows usable sign-in methods and prevents removal of the final method.
 - Signing out returns to the authentication screen and makes owner data inaccessible to the browser session.
 
-### 2. Today-first mobile home
+### 2. Graph-first mobile home
 
-- Keep quick capture and a compact view of today's unfinished tasks and confirmed events in the first
-  scan path.
-- Show a read-only availability summary derived from existing in-memory connection, recovery,
-  loading, and error state. It may describe what the current page can do, but it must not claim
-  database, Ollama, Cloudflare Tunnel, Access, or provider health.
-- Keep graph access visible but secondary. When opened, show 50–100 active nodes by default and
-  prioritize recent notes, unfinished tasks, upcoming events, pinned items, and important topic tags.
+- Make the confirmed, bounded MEMO-TAG connection map the default signed-in screen.
+- Show 50–100 active nodes by default and prioritize recent notes, unfinished tasks, upcoming events,
+  pinned items, and important topic tags without inventing new canonical connections.
 - Tapping a node highlights its local neighborhood and opens a detail drawer.
 - Zooming changes detail level: clusters → tags → individual memos.
+- Keep four bottom-navigation destinations: connection map; memo capture, raw-memo list, and search;
+  tasks and confirmed events; and settings. Non-graph views must remain usable without graph knowledge.
+- Keep detailed recovery, analysis-path, model, and infrastructure diagnostics out of the primary
+  visual hierarchy. A compact same-origin reachability indicator may remain as a global utility, but
+  it must describe only what the current page can prove and never claim database, Ollama, Cloudflare
+  Tunnel, Access, or provider health.
 
 ### 2a. Search
 
@@ -103,20 +108,29 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 
 ### 3. Quick capture
 
-- A persistent input affordance is available from the Today-first mobile home and secondary views.
+- A dedicated memo view provides quick capture and the current raw-memo list from bottom navigation.
 - Saving creates a raw memo immediately.
 - Analysis happens after save and must not block further capture.
+- The background analysis result remains an untrusted proposal. Canonical tags, tasks, EVENT
+  schedules, and relations still require the existing explicit review and Apply action.
 
 ### 3a. Owner beta status and update boundary
 
-- Milestone 7.1 is a source-only UI slice with no API, OpenAPI, JSON Schema, Flyway, or canonical-data
-  contract change.
+- Milestone 7.1 remains a historical, source-qualified Today-first checkpoint. Milestone 7.2 is the
+  owner-requested graph-first follow-up and changes only the existing UI hierarchy and presentation.
+- Milestone 7.2 changes no API, OpenAPI, JSON Schema, Flyway, canonical-data contract, analysis
+  producer, or deployment topology. The source-qualified tree was separately deployed through the
+  owner-authorized backup, isolated V23-to-V23 restore, connector-first rollback, rebuild, local smoke,
+  and connector-last remote boundary sequence. Visual review is in progress; status remains
+  `SOLO_PROVISIONAL`/`REPORT_ONLY` rather than production acceptance.
 - Connection wording reflects only same-origin API reachability and current workspace state. A green
   status must not be presented as database, model, Tunnel, Access, or provider-wide health.
 - PWA refresh remains explicit and blocked by unsaved work or a pending server operation. The UI calls
   it a screen/PWA asset refresh, not a backend, Docker, connector, or operating-system update.
 - Analysis-path counts remain lazy, owner-scoped, raw-free, and secondary. They are historical
   aggregate evidence, not real-time LLM availability or model-quality status.
+- Model or AI status is not a primary home-screen signal and must not be presented as a quality or
+  availability claim.
 - The browser application never starts or stops Windows services, Docker, Cloudflare connectors,
   connector metrics, tokens, or Ollama. Those controls stay in the reviewed operator boundary.
 
@@ -134,6 +148,8 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 - Display any future EVENT temporal alternatives as `아직 미적용`; never initialize a schedule from
   candidate order, score, or model suggestion. A user action must choose an alternative before the
   ordinary Apply confirmation can persist it.
+- Keep a bare or date-less `6시` unresolved as `UNKNOWN`; never infer today, AM/PM, an EVENT schedule,
+  or an alarm from it.
 - Explain only uncertain fields, not the entire model reasoning.
 - Allow partial apply.
 
@@ -198,7 +214,8 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 
 ## Market position
 
-The intended product combines fast capture, owner-approved knowledge organization, a Today-first
-action view, secondary graph retrieval, and action extraction. The clearest initial positioning is:
+The intended product combines a graph-first view of confirmed knowledge, fast raw capture,
+owner-approved organization, separate task and schedule views, and action extraction. The clearest
+initial positioning is:
 
 > A student-focused AI second brain that turns rough class notes into connected concepts, assignments, and deadlines.

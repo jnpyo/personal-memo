@@ -16,8 +16,14 @@ $paths = [ordered]@{
     Compose = Join-Path $repositoryRoot 'compose.public-app.yaml'
     ComposeTest = Join-Path $repositoryRoot 'compose.public-app.test.yaml'
     FrontendDockerfile = Join-Path $repositoryRoot 'frontend\Dockerfile'
+    ViteConfig = Join-Path $repositoryRoot 'frontend\vite.config.ts'
+    ViteConfigTest = Join-Path $repositoryRoot 'frontend\vite.config.test.ts'
+    PrimaryFlow = Join-Path $repositoryRoot 'frontend\e2e\primary-flow.spec.ts'
+    App = Join-Path $repositoryRoot 'frontend\src\app\App.tsx'
     HomeOverviewModel = Join-Path $repositoryRoot 'frontend\src\features\home\homeOverviewModel.ts'
-    HomeOverview = Join-Path $repositoryRoot 'frontend\src\features\home\HomeOverview.tsx'
+    HomeOverviewModelTest = Join-Path $repositoryRoot 'frontend\src\features\home\homeOverviewModel.test.ts'
+    OwnerRemoteAddress = Join-Path $repositoryRoot 'frontend\src\features\home\OwnerRemoteAddress.tsx'
+    OwnerRemoteAddressTest = Join-Path $repositoryRoot 'frontend\src\features\home\OwnerRemoteAddress.test.tsx'
     Dockerfile = Join-Path $repositoryRoot 'app-edge\Dockerfile'
     Nginx = Join-Path $repositoryRoot 'app-edge\default.conf.template'
     UpstreamFixture = Join-Path $repositoryRoot 'app-edge\test\upstream-nginx.conf'
@@ -89,10 +95,31 @@ Assert-Contains $frontendCompose '\$\{PUBLIC_APP_HOSTNAME:\?Set PUBLIC_APP_HOSTN
 Assert-Contains $source.FrontendDockerfile '^ARG VITE_OWNER_REMOTE_APP_HOSTNAME=$' 'the frontend image must declare the bounded hostname build argument'
 Assert-Contains $source.FrontendDockerfile 'VITE_OWNER_REMOTE_APP_HOSTNAME=\$\{VITE_OWNER_REMOTE_APP_HOSTNAME\}' 'the Vite build must receive the reviewed hostname'
 Assert-Contains $source.HomeOverviewModel 'import\.meta\.env\.VITE_OWNER_REMOTE_APP_HOSTNAME' 'the home model must read only the build-time public hostname'
-Assert-Contains $source.HomeOverview 'ownerRemoteAppHostname' 'the home view must compare against the configured hostname'
-Assert-Contains $source.HomeOverview '<strong>\{currentHostname\}</strong>' 'the home view must render only the exact current hostname'
-foreach ($publicSource in @($source.HomeOverviewModel, $source.HomeOverview)) {
+Assert-Contains $source.HomeOverviewModel ([regex]::Escape('const OWNER_REMOTE_APP_HOSTNAME_PATTERN = /^(?!calendar\.)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z]{2,63}$/;')) 'the PWA hostname must use the exact lower-case three-label non-calendar deployment shape'
+Assert-Contains $source.HomeOverviewModel ([regex]::Escape("value !== value.toLocaleLowerCase('en-US')")) 'the configured PWA hostname must reject upper-case input instead of normalizing it'
+Assert-Contains $source.OwnerRemoteAddress 'isExactOwnerRemoteAppHostname\(currentHostname, ownerRemoteAppHostname\)' 'the active address component must compare the browser hostname against the configured hostname'
+Assert-Contains $source.OwnerRemoteAddress '<strong>\{currentHostname\}</strong>' 'the active address component must render only the exact current hostname'
+Assert-Contains $source.App "import \{ OwnerRemoteAddress \} from '../features/home/OwnerRemoteAddress';" 'the workspace must import the active owner-address component'
+Assert-Contains $source.App '<OwnerRemoteAddress />' 'the Settings view must render the active owner-address component'
+Assert-Contains $source.OwnerRemoteAddressTest '<strong>memo\.example\.com</strong>' 'the active address unit test must cover the exact synthetic hostname'
+foreach ($rejectedHostname in @('memo.localhost', '127.0.0.1', '::1', 'calendar.example.com', 'example.com', 'memo.dev.example.com', 'MEMO.EXAMPLE.COM', 'memo.example.com.', ' memo.example.com', 'memo.example.com ', 'memo.example.com.evil.test')) {
+    Assert-Contains $source.OwnerRemoteAddressTest ([regex]::Escape("'$rejectedHostname'")) "the active address unit test must reject $rejectedHostname"
+}
+Assert-Contains $source.HomeOverviewModelTest 'undefined' 'the hostname normalizer test must reject missing configuration'
+Assert-Contains $source.PrimaryFlow ([regex]::Escape("OWNER_REMOTE_ADDRESS_E2E_MARKER = '.settings-remote-address'")) 'the production E2E must carry the active owner-address marker'
+Assert-Contains $source.PrimaryFlow ([regex]::Escape('page.locator(OWNER_REMOTE_ADDRESS_E2E_MARKER)).toHaveCount(0)')) 'the production E2E must prove that an unconfigured origin does not disclose an owner hostname'
+foreach ($publicSource in @($source.HomeOverviewModel, $source.OwnerRemoteAddress, $source.App)) {
     Assert-NotContains $publicSource 'junpyo\.net' 'the public PWA source must not embed the owner domain'
+}
+Assert-Contains $source.ViteConfig '\^\\/cdn-cgi\\/access\(\?:\\/\|\\\?\|\$\)\/i' 'Cloudflare Access callbacks must bypass the app-shell fallback and remain network-only'
+foreach ($accessPath in @('/cdn-cgi/access', '/cdn-cgi/access?state=synthetic', '/cdn-cgi/access/', '/cdn-cgi/access/authorized?state=synthetic', '/cdn-cgi/access/callback', '/CDN-CGI/ACCESS/authorized')) {
+    Assert-Contains $source.ViteConfigTest ([regex]::Escape("'$accessPath'")) "the PWA boundary test must cover $accessPath"
+}
+foreach ($nearMatch in @('/cdn-cgi/access.evil', '/cdn-cgi/accessibility', '/cdn-cgi/access-token', '/cdn-cgi/trace', '/cdn-cgian/access')) {
+    Assert-Contains $source.ViteConfigTest ([regex]::Escape("'$nearMatch'")) "the PWA boundary test must reject the near-match $nearMatch"
+}
+foreach ($navigationPath in @('/cdn-cgi/access/callback?state=synthetic', '/cdn-cgi/access/authorized?state=synthetic')) {
+    Assert-Contains $source.PrimaryFlow ([regex]::Escape("'$navigationPath'")) "the production PWA E2E must keep $navigationPath network-only while offline"
 }
 
 # The app tunnel is an independent, pinned, token-file-only Windows service.

@@ -181,6 +181,50 @@ async function openProposalEditor(page: Page): Promise<void> {
   await expect(page.getByLabel('대표 제목')).toBeVisible();
 }
 
+type WorkspaceViewLabel = '연결' | '메모' | '일정' | '설정';
+const OWNER_REMOTE_ADDRESS_E2E_MARKER = '.settings-remote-address';
+
+async function openWorkspaceView(page: Page, label: WorkspaceViewLabel): Promise<void> {
+  const navigation = page.getByRole('navigation', { name: '주요 화면' });
+  const target = navigation.getByRole('button', { name: label, exact: true });
+  if (await target.getAttribute('aria-current') !== 'page') await target.click();
+  await expect(target).toHaveAttribute('aria-current', 'page');
+}
+
+async function openMemos(page: Page): Promise<void> {
+  await openWorkspaceView(page, '메모');
+}
+
+async function openAgenda(page: Page): Promise<void> {
+  await openWorkspaceView(page, '일정');
+}
+
+async function openSettings(page: Page): Promise<void> {
+  await openWorkspaceView(page, '설정');
+}
+
+async function captureMemo(page: Page, content: string): Promise<void> {
+  await openMemos(page);
+  await page.getByRole('textbox', { name: '메모 내용' }).fill(content);
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+}
+
+async function undoLastApplication(page: Page): Promise<void> {
+  await openSettings(page);
+  const undoResponse = page.waitForResponse((response) =>
+    response.request().method() === 'POST'
+    && /\/api\/v1\/analysis-applications\/[^/]+\/undo$/.test(new URL(response.url()).pathname),
+  );
+  await page.locator('.undo-card').getByRole('button', { name: '되돌리기', exact: true }).click();
+  expect((await undoResponse).status()).toBe(200);
+
+  const restoredReview = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
+  await expect(restoredReview).toBeVisible();
+  await restoredReview.getByRole('button', { name: '검토 팝업 닫기' }).click();
+  await expect(restoredReview).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '검토 팝업 열기' })).toBeVisible();
+}
+
 test.afterEach(async ({ context }) => {
   await context.setOffline(false).catch(() => undefined);
 });
@@ -188,6 +232,7 @@ test.afterEach(async ({ context }) => {
 test('creates a local account, logs out, and logs back in', async ({ page }, testInfo) => {
   const credentials = await registerIsolatedUser(page, testInfo);
 
+  await openSettings(page);
   await page.getByLabel('계정 메뉴 열기').click();
   await expect(page.getByRole('heading', { name: '계정 설정' })).toBeVisible();
   await expect(page.getByText(credentials.email)).toBeVisible();
@@ -219,31 +264,34 @@ test('keeps the 384px portrait and landscape shell usable without horizontal ove
   await expectNoHorizontalOverflow(page);
 
   await registerIsolatedUser(page, testInfo);
-  const accountTrigger = page.getByLabel('계정 메뉴 열기');
-  const capture = page.locator('.capture-bar');
-  const captureSubmit = page.getByRole('button', { name: '원문 저장 후 제안 분석' });
-  const homeOverview = page.locator('.home-overview');
+  const navigation = page.getByRole('navigation', { name: '주요 화면' });
+  const captureFab = page.getByRole('button', { name: '새 메모', exact: true });
 
-  await expect(homeOverview.getByRole('heading', { name: '오늘', exact: true })).toBeVisible();
-  await expect(homeOverview).toContainText(/오늘 일정\s*0/);
-  await expect(homeOverview).toContainText(/우선 할 일\s*0/);
-  await expect(homeOverview).toContainText(/검토 대기\s*0/);
+  await expect(page.getByRole('heading', { level: 1, name: '연결 지도' })).toBeVisible();
+  await expect(navigation.getByRole('button')).toHaveCount(4);
   await expect(page.getByText('서버 연결됨')).toBeVisible();
-  await expectMinimumTouchHeight(accountTrigger, 44);
-  await expectMinimumTouchHeight(captureSubmit, 48);
-  await expectInsideViewport(page, capture);
+  await expectMinimumTouchHeight(captureFab, 44);
   await expectNoHorizontalOverflow(page);
 
+  await openMemos(page);
+  const capture = page.locator('.capture-bar');
+  const captureSubmit = page.getByRole('button', { name: '저장', exact: true });
+  await expectMinimumTouchHeight(captureSubmit, 44);
+  await expectInsideViewport(page, capture);
+
+  await openSettings(page);
+  await expect(page.locator(OWNER_REMOTE_ADDRESS_E2E_MARKER)).toHaveCount(0);
+  const accountTrigger = page.getByLabel('계정 메뉴 열기');
+  await expectMinimumTouchHeight(accountTrigger, 44);
   await accountTrigger.click();
   await expectInsideViewport(page, page.locator('.account-panel__body'));
   await accountTrigger.click();
 
   await page.setViewportSize({ width: 854, height: 384 });
-  await page.locator('header.hero').scrollIntoViewIfNeeded();
-  await expect(homeOverview).toBeVisible();
-  await expectInsideViewport(page, accountTrigger);
+  await openMemos(page);
+  await capture.scrollIntoViewIfNeeded();
   await expectInsideViewport(page, capture);
-  await expectMinimumTouchHeight(captureSubmit, 48);
+  await expectMinimumTouchHeight(captureSubmit, 44);
   await expectNoHorizontalOverflow(page);
 });
 
@@ -317,6 +365,7 @@ test('loads analysis-path evidence only on first expansion and explicit refresh'
   });
 
   await registerIsolatedUser(page, testInfo);
+  await openSettings(page);
   const toggle = page.locator('.ai-diagnostic-toggle');
   await expect(toggle).toBeVisible();
   expect(summaryRequests).toBe(0);
@@ -348,9 +397,7 @@ test('keeps the proposal popup usable on S24 portrait and landscape sizes', asyn
   });
   await page.setViewportSize({ width: 384, height: 854 });
   await registerIsolatedUser(page, testInfo);
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
-    .fill(`11.25 OS과제 제출 popup-${Date.now()}-${testInfo.retry}`);
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, `11.25 OS과제 제출 popup-${Date.now()}-${testInfo.retry}`);
 
   const dialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
   const yes = page.getByRole('button', { name: '예, 이대로 적용' });
@@ -389,6 +436,7 @@ test('keeps the workspace locked across reload until a failed logout is confirme
     });
   });
 
+  await openSettings(page);
   await page.getByLabel('계정 메뉴 열기').click();
   await page.getByRole('button', { name: '로그아웃' }).click();
   await expect(
@@ -418,12 +466,14 @@ test('synchronizes an account change across tabs without retaining the previous 
   page,
 }, testInfo) => {
   const first = await registerIsolatedUser(page, testInfo);
-  const capture = page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.');
+  await openMemos(page);
+  const capture = page.getByRole('textbox', { name: '메모 내용' });
   await capture.fill(`discard this ${first.email}`);
 
   const otherTab = await context.newPage();
   await otherTab.goto('/');
   await expect(otherTab.getByText('서버 연결됨')).toBeVisible();
+  await openSettings(otherTab);
   await otherTab.getByLabel('계정 메뉴 열기').click();
   await otherTab.getByRole('button', { name: '로그아웃' }).click();
   await expect(otherTab.getByRole('heading', { name: '로그인' })).toBeVisible();
@@ -431,10 +481,12 @@ test('synchronizes an account change across tabs without retaining the previous 
 
   const second = await registerIsolatedUser(otherTab, testInfo);
   await expect(page.getByText('서버 연결됨')).toBeVisible();
+  await openSettings(page);
   await page.getByLabel('계정 메뉴 열기').click();
   await expect(page.getByText(second.email)).toBeVisible();
-  await expect(capture).toHaveValue('');
   await expect(page.getByText(first.email)).toHaveCount(0);
+  await openMemos(page);
+  await expect(capture).toHaveValue('');
   await otherTab.close();
 });
 
@@ -446,9 +498,7 @@ test('keeps unsaved proposal edits when another tab discovers the same owner', a
   const editedTitle = `${marker} 사용자가 수정한 제목`;
   await registerIsolatedUser(page, testInfo);
 
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
-    .fill(`11.25 운영체제 과제 ${marker} 제출`);
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, `11.25 운영체제 과제 ${marker} 제출`);
   await expect(page.getByRole('heading', { name: 'AI 제안을 확인해 주세요' })).toBeVisible();
   await openProposalEditor(page);
   await page.getByLabel('대표 제목').fill(editedTitle);
@@ -469,9 +519,7 @@ test('keeps receiver edits mounted while another tab logout remains unconfirmed'
   const marker = `remote-logout-failure-${Date.now()}-${testInfo.retry}`;
   const editedTitle = `${marker} 보존할 수정 제목`;
   await registerIsolatedUser(page, testInfo);
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
-    .fill(`11.25 운영체제 과제 ${marker} 제출`);
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, `11.25 운영체제 과제 ${marker} 제출`);
   await openProposalEditor(page);
   await page.getByLabel('대표 제목').fill(editedTitle);
 
@@ -487,6 +535,7 @@ test('keeps receiver edits mounted while another tab logout remains unconfirmed'
       body: JSON.stringify({ code: 'INTERNAL_ERROR', message: 'simulated logout failure' }),
     });
   });
+  await openSettings(otherTab);
   await otherTab.getByLabel('계정 메뉴 열기').click();
   await otherTab.getByRole('button', { name: '로그아웃' }).click();
 
@@ -503,8 +552,7 @@ test('returns to the login shell when the server session expires before a mutati
   await registerIsolatedUser(page, testInfo);
   await invalidateServerSessionWithoutUpdatingTheApp(page);
 
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill('만료 뒤 저장되지 않을 원문');
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, '만료 뒤 저장되지 않을 원문');
 
   await expect(page.getByRole('heading', { name: '로그인' })).toBeVisible();
   await expect(page.getByText('로그인 세션이 만료되었습니다. 다시 로그인해 주세요.')).toBeVisible();
@@ -526,6 +574,7 @@ test('uses unmarked Google login state and marked explicit-link state without co
   );
 
   await registerIsolatedUser(page, testInfo);
+  await openSettings(page);
   await page.getByLabel('계정 메뉴 열기').click();
   await expect(page.getByRole('button', { name: 'Google 계정 연결' })).toBeVisible();
   await createGoogleLinkIntent(page);
@@ -540,8 +589,7 @@ test('applies the complete AI recommendation only after an explicit yes', async 
   const proposedTitle = `OS과제 E2E ${marker} 제출`;
 
   await registerIsolatedUser(page, testInfo);
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(rawMemo);
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, rawMemo);
 
   const dialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
   await expect(dialog).toBeVisible();
@@ -563,7 +611,10 @@ test('applies the complete AI recommendation only after an explicit yes', async 
     await page.getByRole('button', { name: '예, 이대로 적용' }).click();
 
     await expect.poll(() => outcomeRefreshStarted).toBe(true);
-    await expect(page.getByRole('button', { name: '마지막 적용 되돌리기' })).toBeEnabled({
+    await openSettings(page);
+    await expect(
+      page.locator('.undo-card').getByRole('button', { name: '되돌리기', exact: true }),
+    ).toBeEnabled({
       timeout: 5_000,
     });
   } finally {
@@ -571,8 +622,11 @@ test('applies the complete AI recommendation only after an explicit yes', async 
   }
 
   await expect(dialog).toHaveCount(0);
+  await openAgenda(page);
   await expect(page.locator('.task-row').filter({ hasText: proposedTitle })).toBeVisible();
+  await openMemos(page);
   await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
+  await openSettings(page);
   const reviewOutcomes = page.locator('.review-outcome-section');
   await expect(reviewOutcomes).toContainText('AI의 정답률이나 정확도를 뜻하지');
   await expect(
@@ -590,8 +644,7 @@ test('applies two explicitly bound task dates and undoes both together', async (
   const rawMemo = `보고서 E2E ${marker} 초안은 11월 20일, 최종 제출은 11월 25일`;
 
   await registerIsolatedUser(page, testInfo);
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(rawMemo);
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, rawMemo);
 
   const dialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
   await expect(dialog).toBeVisible();
@@ -603,6 +656,7 @@ test('applies two explicitly bound task dates and undoes both together', async (
   await page.getByRole('button', { name: '예, 이대로 적용' }).click();
 
   await expect(dialog).toHaveCount(0);
+  await openAgenda(page);
   await expect(page.locator('.task-row')).toHaveCount(2);
   await expect(
     page.locator('.task-row').filter({ hasText: '2026. 11. 20.' }),
@@ -610,11 +664,14 @@ test('applies two explicitly bound task dates and undoes both together', async (
   await expect(
     page.locator('.task-row').filter({ hasText: '2026. 11. 25.' }),
   ).toBeVisible();
+  await openMemos(page);
   await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
 
-  await page.getByRole('button', { name: '마지막 적용 되돌리기' }).click();
+  await undoLastApplication(page);
 
+  await openAgenda(page);
   await expect(page.locator('.task-row')).toHaveCount(0);
+  await openMemos(page);
   await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
 });
 
@@ -625,8 +682,7 @@ test('explicitly corrects, shares, exports, and then undoes only one event', asy
   const eventTitle = '디스코드 접속하기';
 
   await registerIsolatedUser(page, testInfo);
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(rawMemo);
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, rawMemo);
 
   const dialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
   await expect(dialog).toBeVisible();
@@ -692,11 +748,13 @@ test('explicitly corrects, shares, exports, and then undoes only one event', asy
   expect(applyBody.items?.[0]?.eventSchedule?.start).toMatch(/T18:00:00\+09:00$/);
 
   await expect(dialog).toHaveCount(0);
+  await openAgenda(page);
   const event = page.locator('.event-row').filter({ hasText: eventTitle });
   await expect(event).toBeVisible();
   await expect(event).toContainText(/(오후 6:00|18:00)/);
   await expect(event).toContainText('Asia/Seoul');
   await expect(page.locator('.task-row').filter({ hasText: eventTitle })).toHaveCount(0);
+  await openMemos(page);
   await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
 
   const eventsResponse = await page.request.get('/api/v1/events?limit=100');
@@ -705,6 +763,7 @@ test('explicitly corrects, shares, exports, and then undoes only one event', asy
   const exportedEvent = canonicalEvents.find((candidate) => candidate.title === eventTitle);
   expect(exportedEvent).toBeDefined();
 
+  await openAgenda(page);
   await page.getByRole('button', { name: '일정 공유 관리' }).click();
   const sharingDialog = page.locator('dialog.calendar-sharing-dialog');
   await expect(page.getByRole('dialog', { name: '일정 공유 관리' })).toBeVisible();
@@ -833,9 +892,11 @@ test('explicitly corrects, shares, exports, and then undoes only one event', asy
   await calendarDialog.getByRole('button', { name: '캘린더 파일 창 닫기' }).click();
   await expect(calendarDialog).toHaveCount(0);
 
-  await page.getByRole('button', { name: '마지막 적용 되돌리기' }).click();
+  await undoLastApplication(page);
 
+  await openAgenda(page);
   await expect(page.locator('.event-row').filter({ hasText: eventTitle })).toHaveCount(0);
+  await openMemos(page);
   await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
 });
 
@@ -856,9 +917,7 @@ test('keeps an apply failure and its retry action inside the proposal popup', as
   });
 
   await registerIsolatedUser(page, testInfo);
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
-    .fill(`11.25 ${proposedTitle}`);
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, `11.25 ${proposedTitle}`);
 
   await page.route('**/api/v1/analysis-proposals/*/apply', async (route) => {
     await route.fulfill({
@@ -885,6 +944,7 @@ test('keeps an apply failure and its retry action inside the proposal popup', as
   await page.unroute('**/api/v1/analysis-proposals/*/apply');
   await retry.click();
   await expect(dialog).toHaveCount(0);
+  await openAgenda(page);
   await expect(page.locator('.task-row').filter({ hasText: proposedTitle })).toBeVisible();
   expect(applyAttempts).toHaveLength(2);
   expect(applyAttempts[0].idempotencyKey).toBeTruthy();
@@ -998,8 +1058,7 @@ test('reviews owner-visible relations manually and recovers an unavailable targe
     });
   });
 
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(rawMemo);
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, rawMemo);
   const dialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole('heading', { name: '선택한 내용을 확인해 주세요.' }))
@@ -1086,9 +1145,7 @@ test('keeps a generic apply conflict draft and exact retry identity with explici
     });
   });
 
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
-    .fill(`11.25 OS과제 E2E ${marker} 제출`);
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, `11.25 OS과제 E2E ${marker} 제출`);
   await openProposalEditor(page);
   await page.getByLabel('대표 제목').fill(editedTitle);
   await page.getByRole('button', { name: '수정한 내용 승인·적용' }).click();
@@ -1180,9 +1237,7 @@ test('ignores an aborted late relation-label response after a new proposal opens
   });
 
   try {
-    await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
-      .fill(`11.25 첫 연결 E2E ${marker} 제출`);
-    await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+    await captureMemo(page, `11.25 첫 연결 E2E ${marker} 제출`);
     const firstDialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
     await expect(firstDialog.getByText('내 메모와 태그에서 연결 대상 이름을 확인하고 있습니다…'))
       .toBeVisible();
@@ -1190,9 +1245,10 @@ test('ignores an aborted late relation-label response after a new proposal opens
     await firstDialog.getByRole('button', { name: '예, 제안만 버리기' }).click();
     await expect(firstDialog).toHaveCount(0);
 
-    await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
+    await openMemos(page);
+    await page.getByRole('textbox', { name: '메모 내용' })
       .fill(`11.25 둘째 연결 E2E ${marker} 제출`);
-    const analyze = page.getByRole('button', { name: '원문 저장 후 제안 분석' });
+    const analyze = page.getByRole('button', { name: '저장', exact: true });
     await expect(analyze).toBeEnabled();
     await analyze.click();
 
@@ -1219,9 +1275,7 @@ test('discards a failed apply retry when the proposal is postponed', async ({ pa
   let applyRequests = 0;
 
   await registerIsolatedUser(page, testInfo);
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.')
-    .fill(`11.25 ${proposedTitle}`);
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, `11.25 ${proposedTitle}`);
 
   await page.route('**/api/v1/analysis-proposals/*/apply', async (route) => {
     applyRequests += 1;
@@ -1253,8 +1307,7 @@ test('recovers from a stale proposal without offering the same apply retry', asy
   const revised = `${original} revision 2`;
 
   await registerIsolatedUser(page, testInfo);
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(original);
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, original);
   await expect(page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' })).toBeVisible();
 
   await advanceMemoRevisionOutOfBand(page, revised);
@@ -1263,6 +1316,7 @@ test('recovers from a stale proposal without offering the same apply retry', asy
   await expect(page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '승인 다시 시도' })).toHaveCount(0);
   await expect(page.getByText('메모 상태가 다른 곳에서 변경되었습니다.')).toBeVisible();
+  await openMemos(page);
   await expect(page.locator('.memo-card').filter({ hasText: revised })).toContainText('revision 2');
   await expect(page.locator('.task-row')).toHaveCount(0);
 });
@@ -1285,14 +1339,12 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
 
   await registerIsolatedUser(page, testInfo);
 
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(oldRawMemo);
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, oldRawMemo);
   await expect(page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' })).toBeVisible();
   await page.getByRole('button', { name: '예, 이대로 적용' }).click();
   await expect(page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' })).toHaveCount(0);
 
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(rawMemo);
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, rawMemo);
 
   const reviewHeading = page.getByRole('heading', { name: 'AI 제안을 확인해 주세요' });
   await expect(reviewHeading).toBeVisible();
@@ -1329,12 +1381,15 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
   await expect(applyEditedProposal).toBeEnabled();
   await applyEditedProposal.click();
 
+  await openAgenda(page);
   const task = page.locator('.task-row').filter({ hasText: approvedTitle });
   await expect(task).toBeVisible();
   await expect(task).toContainText('2026. 11. 26.');
+  await openSettings(page);
   await expect(
     page.locator('.review-outcome-metric').filter({ hasText: '수정 후 적용' }).locator('dd'),
   ).toHaveText('1');
+  await openWorkspaceView(page, '연결');
   const graphNode = page.locator('.graph-node--memo .graph-node__content')
     .filter({ hasText: approvedTitle });
   await graphNode.scrollIntoViewIfNeeded();
@@ -1362,7 +1417,8 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
   await expectMinimumTouchHeight(pinMemo, 48);
   await pinMemo.click();
   await expect(graphDetail.getByRole('button', { name: '홈 그래프 고정 해제' })).toBeVisible();
-  await expect(graphNode).toContainText('고정됨');
+  await expect(graphNode).toContainText('고정 · 할 일');
+  await expect(graphNode).toHaveAccessibleName(/고정됨/);
 
   await page.setViewportSize({ width: 854, height: 384 });
   await expectInsideViewport(page, graphDetailDrawer);
@@ -1413,11 +1469,17 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
   expect(rewrittenHomeRequests).toBeGreaterThan(0);
 
   await page.reload();
-  await expect(page.getByRole('button', { name: '마지막 적용 되돌리기' })).toBeVisible();
-  await page.getByRole('button', { name: '마지막 적용 되돌리기' }).click();
+  await openSettings(page);
+  await expect(
+    page.locator('.undo-card').getByRole('button', { name: '되돌리기', exact: true }),
+  ).toBeVisible();
+  await undoLastApplication(page);
 
+  await openAgenda(page);
   await expect(task).toHaveCount(0);
+  await openMemos(page);
   await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
+  await openSettings(page);
   await expect(
     page.locator('.review-outcome-metric').filter({ hasText: '되돌림' }).locator('dd'),
   ).toHaveText('1');
@@ -1441,6 +1503,7 @@ test('private lexical search opens an off-home current raw memo without graph in
 
   const offHomeNode = page.locator('.graph-node--memo').filter({ hasText: targetRaw });
   await expect(offHomeNode).toHaveCount(0);
+  await openMemos(page);
   const query = page.getByLabel('메모 검색어');
   await query.fill(targetRaw);
   const searchRequestPromise = page.waitForRequest((request) =>
@@ -1483,6 +1546,7 @@ test('latest search wins and an invalid continuation requires an explicit first-
   page,
 }, testInfo) => {
   await registerIsolatedUser(page, testInfo);
+  await openMemos(page);
   let releaseDelayed!: () => void;
   let markDelayedStarted!: () => void;
   const delayed = new Promise<void>((resolve) => { releaseDelayed = resolve; });
@@ -1598,6 +1662,7 @@ test('latest search wins and an invalid continuation requires an explicit first-
 
 test('search filters send an explicit half-open private body', async ({ page }, testInfo) => {
   await registerIsolatedUser(page, testInfo);
+  await openMemos(page);
   let capturedBody: Record<string, unknown> | null = null;
   let capturedUrl = '';
   await page.route('**/api/v1/search/memos', async (route) => {
@@ -1641,8 +1706,7 @@ test('UNKNOWN analysis requires an explicit type and manually confirmed item', a
 
   await registerIsolatedUser(page, testInfo);
 
-  await page.getByLabel('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.').fill(rawMemo);
-  await page.getByRole('button', { name: '원문 저장 후 제안 분석' }).click();
+  await captureMemo(page, rawMemo);
 
   const reviewHeading = page.getByRole('heading', { name: 'AI 제안을 확인해 주세요' });
   await expect(reviewHeading).toBeVisible();
@@ -1670,7 +1734,9 @@ test('UNKNOWN analysis requires an explicit type and manually confirmed item', a
   await expect(page.getByRole('button', { name: '수정한 내용 승인·적용' })).toBeEnabled();
   await page.getByRole('button', { name: '수정한 내용 승인·적용' }).click();
 
+  await openAgenda(page);
   await expect(page.locator('.task-row').filter({ hasText: title })).toBeVisible();
+  await openMemos(page);
   await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
 });
 
@@ -1756,7 +1822,13 @@ test('production build registers an installable offline app shell', async ({
     const cdp = await context.newCDPSession(page);
     try {
       const result = await cdp.send('Page.getInstallabilityErrors');
-      expect(result.installabilityErrors, JSON.stringify(result.installabilityErrors)).toEqual([]);
+      const relevantInstallabilityErrors = process.env.E2E_BROWSER_EXECUTABLE
+        ? result.installabilityErrors.filter((error) => error.errorId !== 'in-incognito')
+        : result.installabilityErrors;
+      expect(
+        relevantInstallabilityErrors,
+        JSON.stringify(result.installabilityErrors),
+      ).toEqual([]);
     } finally {
       await cdp.detach();
     }
@@ -1770,6 +1842,7 @@ test('production build registers an installable offline app shell', async ({
   const networkOnlyPaths = [
     '/api/v1/auth/me',
     '/api/v1/search/memos',
+    '/cdn-cgi/access/callback?state=synthetic',
     `/calendar/v1/feed.ics?token=${'a'.repeat(42)}A`,
     '/oauth2/authorization/google',
     '/login/oauth2/code/google',
@@ -1792,20 +1865,22 @@ test('production build registers an installable offline app shell', async ({
     status: null,
   })));
 
-  const feedNavigationProbe = await context.newPage();
-  try {
-    let feedNavigationResolved = true;
+  const networkOnlyNavigationPaths = [
+    '/cdn-cgi/access/callback?state=synthetic',
+    '/cdn-cgi/access/authorized?state=synthetic',
+    `/calendar/v1/feed.ics?token=${'a'.repeat(42)}A`,
+  ];
+  for (const path of networkOnlyNavigationPaths) {
+    const navigationProbe = await context.newPage();
+    let navigationResolved = true;
     try {
-      await feedNavigationProbe.goto(
-        `/calendar/v1/feed.ics?token=${'a'.repeat(42)}A`,
-        { waitUntil: 'domcontentloaded' },
-      );
+      await navigationProbe.goto(path, { waitUntil: 'domcontentloaded' });
     } catch {
-      feedNavigationResolved = false;
+      navigationResolved = false;
+    } finally {
+      await navigationProbe.close();
     }
-    expect(feedNavigationResolved).toBe(false);
-  } finally {
-    await feedNavigationProbe.close();
+    expect(navigationResolved, `${path} must not fall back to the offline app shell`).toBe(false);
   }
 
   await context.setOffline(false);

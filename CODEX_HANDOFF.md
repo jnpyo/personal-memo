@@ -546,7 +546,7 @@ public activation, real-feed qualification과 Google·Apple smoke는 final gate 
   않았다. 상세 증거는 `docs/PRIVATE_BETA.md`에 있다. 상태는 `SOLO_PROVISIONAL`/`REPORT_ONLY`,
   activation은 `NO_GO`다.
 - 각 local/Google 로그인 수단은 internal UUID에 매핑되고, 명시적으로 연결한 두 수단은 같은 UUID와 PostgreSQL-backed server session을 사용한다. Google email만으로 자동 연결하지 않고 기존 로그인 뒤 명시적 link intent를 요구하며, 마지막 login method는 해제할 수 없다. domain owner는 client 값이나 개발 상수가 아니라 Spring Security context에서 가져온다.
-- React 인증 shell은 capability·CSRF·현재 session을 먼저 확인하고, 로그인 전에는 owner domain API를 호출하지 않는다. service worker는 API와 OAuth/login 경로를 cache하지 않는다.
+- React 인증 shell은 capability·CSRF·현재 session을 먼저 확인하고, 로그인 전에는 owner domain API를 호출하지 않는다. service worker는 API와 application OAuth/login 경로뿐 아니라 Cloudflare-owned case-insensitive `/cdn-cgi/access(?:/|\?|$)` namespace도 navigation fallback/cache에서 제외하고 `NetworkOnly`로 처리한다. Access control request에 cached app shell/offline UI를 반환해서는 안 된다.
 - owner별 원문 capture draft는 browser localStorage에 동기식으로 보존하고 저장소 실패를 사용자에게 알린다. 제안 수정·새 태그 입력·원문 revision 편집은 통합 dirty 상태로 추적하며, OAuth·로그아웃·브라우저 이탈을 확인하고 service-worker 업데이트는 사용자가 선택하되 미저장 편집 중에는 적용하지 않는다.
 - 인증 통합 테스트는 local 가입·로그인, CSRF, session rotation, owner 격리와 mocked OIDC 연결/해제를 검증한다. 실제 Google credential과 provider network round trip은 사용하거나 검증했다고 간주하지 않는다.
 - 12개 regression + 12개 `VISIBLE_CHALLENGE` 한국어 fixture, version-2 fixture JSON Schema, raw content를 포함하지 않는 결정론적 평가 report, revision 기준 날짜 파서, `field-policy-v2` ambiguity gate, Draft 2020-12 runtime contract와 strict domain validation이 구현되어 있다. version 2는 route/type/signal뿐 아니라 date mention/item/item-source-span 지표도 report에 노출한다. `fake-v9` / `korean-rules-v7`는 기존 날짜·행동·참조·multi-intent 규칙과 원문 기반 순차 item/source-span 추출을 유지하면서 proposal schema v2를 생성하고, default fallback과 미해석 시간·행동 cue를 보수적으로 model-assisted review로 보낸다. guarded affirmative `접속하기`는 TASK action으로 인정하지만 부정·설명형은 명령으로 승격하지 않는다. 명시적인 `오늘|내일|모레 + 오전|오후 + 1–12시`(optional minutes)는 revision instant/source zone에서 `RELATIVE_EXACT`지만, `6시 디스코드 접속하기`의 item은 action `접속하기`, object `디스코드`인 TASK이고 날짜 없는 `6시`는 `UNKNOWN`으로 남아 today/PM이나 정밀 due를 만들지 않는다. v2의 각 date candidate에는 proposal-local `candidateId`, 각 item에는 nullable `dueDateCandidateId`가 필수이며, TASK item만 존재하는 정밀 date candidate를 참조할 수 있다. schema v1 proposal은 recovery와 outcome 재구성을 위해 계속 지원한다. `providerMetadata`의 다섯 version은 각각 1–64자, 필수 `toolCalls`는 0–100이며 proposal은 64 KiB, metadata는 8 KiB로 제한된다. 이 변경은 기존 `analysis_runs.schema_version`과 `analysis_proposals.proposal_json`을 사용하므로 Flyway migration이나 과거 JSON rewrite가 필요하지 않다.
@@ -824,6 +824,22 @@ public activation, real-feed qualification과 Google·Apple smoke는 final gate 
   stopped이므로 외부 route는 다시 시작하기 전까지 사용 불가능하다. Qualification은
   `LIVE_OWNER_BETA`, `SOLO_PROVISIONAL/REPORT_ONLY`를 유지하며 public self-service/production은
   `NO_GO`다.
+- 2026-09-01 Cloudflare Dashboard read-only recheck는 exact-owner/default-deny Access, all-path protected
+  route, catch-all 404, Protect with Access와 entire-host cache bypass를 통과했다. App Tunnel은 reviewed
+  connector start 뒤 `Healthy`가 됐지만 기존 installed PWA worker가 Access authorization callback에
+  cached offline shell을 반환해 current acceptance는 실패했다. Connector-first rollback 뒤 app/calendar
+  services는 `Stopped`/`Manual`, cloudflared process는 0, app edge는 healthy loopback이다. Shared
+  case-insensitive `/cdn-cgi/access(?:/|\?|$)` `NetworkOnly`/navigation-deny fix는 lint, TypeScript,
+  48 files/472 tests, source contract, production PWA build, generated-worker inspection과 disposable Edge
+  E2E 1/1을 통과했다. Fresh private browser의 Error 1033 proof로 mutation hold를 해제한 뒤 이전
+  frontend/app-edge를 rollback-tag하고 current source를 rebuild/deploy했다. Deployed worker marker,
+  loopback root/health/capabilities/unauthenticated 401 no-store, connector-last startup과 body/cookie 없는
+  external Access 302/no-store/cache-absent가 통과했다. App connector는 `Running`/`Manual`, calendar는
+  `Stopped`/`Manual`, app edge는 healthy다. 이어서 exact owner는 안내한 post-fix health/root/application-
+  PWA check가 정상 작동한다고 보고했다. 이는 user-reported acceptance다. Historical `LIVE_OWNER_BETA`
+  evidence는 보존하고 current activation은 `LIVE_OWNER_BETA_REQUALIFIED`, overall status는
+  `SOLO_PROVISIONAL/REPORT_ONLY`, public/production은 `NO_GO`다. 개인 memo/session/PostgreSQL/canonical/
+  Apply/model과 Cloudflare 설정은 읽거나 변경하지 않았다.
 - 2026-08-31 Milestone 7.1은 Today-first mobile home을 active next slice로 두고 빠른 capture와
   오늘의 미완료 task/확정 event를 첫 스캔 경로로, graph를 secondary retrieval로 재배치한다.
   요약 상태는 기존 in-memory connection/recovery/loading/error를 read-only로 파생하고 database,
@@ -845,6 +861,19 @@ public activation, real-feed qualification과 Google·Apple smoke는 final gate 
   통과했다. 631.21 kB chunk warning만 남았다. 개인 memo/DB/API/Apply/Docker는 접근하지
   않았고 preview는 종료했다. 핵심 code/test 8 files는 private local source checkpoint로 보존했고
   archive SHA-256은 `DEB5C332820417BDEC22C9BD76EF1BEE52C8AF82E65EC557A11579D87C13F563`이다.
+- 2026-09-01 M7.2는 confirmed bounded graph를 default signed-in view로 바꾸고 연결/메모/일정/설정
+  bottom navigation과 concise raw-save-first capture를 구현했다. Access control-path fix와 exact owner
+  address surface가 같은 production bundle/E2E/source contract에 포함된다. ESLint, TypeScript,
+  51 files/481 tests, PWA build, public-app source contract와 disposable production-like Playwright
+  27/27이 통과했다. Owner-authorized 144,430-byte mechanical backup/checksum과 disposable V23-to-V23
+  restore, connector-first Error 1033 proof, rollback tags, frontend/app-edge-only rebuild, local boundary
+  smoke, connector-last start와 remote Access 302/non-HIT가 통과했다. App connector는
+  `Running`/`Manual`, calendar는 `Stopped`/`Manual`, 네 personal container는 healthy이고 temporary
+  restore/E2E container와 volume은 0개다. Personal memo/session/canonical/Apply/Ollama/Cloudflare 설정은
+  읽거나 변경하지 않았다. 실행 image는 `deployed-m72-20260901-075555Z`, 이전 image는
+  `rollback-pre-m72-20260901-074019Z` tags로 보존했다. Owner는 배포 화면의 시각 검토를 시작했지만
+  final physical-device acceptance는 열려 있다. 상태는
+  `SOURCE_QUALIFIED_PERSONAL_DEPLOYED_VISUAL_REVIEW_IN_PROGRESS`, `SOLO_PROVISIONAL/REPORT_ONLY`다.
 - Docker Desktop 4.88.1 업데이트 후 `dockerInference`, secrets engine, `sailor-ingest.sock`순으로
   Windows host AF_UNIX stale-endpoint 실패가 재현됐다. 승인된 runtime-only 격리 외에 factory
   reset, clean/purge, volume/VHDX 삭제는 하지 않았고 Docker는 stopped로 두었다. 로컬 진단 묶음은

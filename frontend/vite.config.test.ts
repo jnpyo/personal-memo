@@ -9,8 +9,8 @@ import {
 
 const applicationStyles = readFileSync(new URL('./src/app/styles.css', import.meta.url), 'utf8');
 
-function navigationFallbackIsDenied(pathname: string): boolean {
-  return BACKEND_NETWORK_ONLY_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
+function navigationFallbackIsDenied(pathnameAndSearch: string): boolean {
+  return BACKEND_NETWORK_ONLY_PATH_PATTERNS.some((pattern) => pattern.test(pathnameAndSearch));
 }
 
 function networkOnlyPatternDiagnostics(pathname: string): string {
@@ -30,11 +30,18 @@ describe('PWA backend routing boundary', () => {
     expect(isBackendNetworkOnlyPath('/login')).toBe(false);
   });
 
-  it('keeps backend API and OAuth endpoints network-only', () => {
+  it('keeps backend API, Cloudflare Access, and OAuth endpoints network-only', () => {
     for (const pathname of [
       '/api/v1/auth/me',
       '/api/v1/events/calendar.ics',
       '/api/v1/search/memos',
+      '/cdn-cgi/access',
+      '/cdn-cgi/access?state=synthetic',
+      '/cdn-cgi/access/',
+      '/cdn-cgi/access/authorized?state=synthetic',
+      '/cdn-cgi/access/callback',
+      '/cdn-cgi/access/login/memo.example.com',
+      '/CDN-CGI/ACCESS/authorized',
       '/calendar/v1/feed.ics',
       '/oauth2/authorization/google',
       '/login/oauth2',
@@ -44,7 +51,10 @@ describe('PWA backend routing boundary', () => {
         navigationFallbackIsDenied(pathname),
         `${pathname}: ${networkOnlyPatternDiagnostics(pathname)}`,
       ).toBe(true);
-      expect(isBackendNetworkOnlyPath(pathname), pathname).toBe(true);
+      expect(
+        isBackendNetworkOnlyPath(new URL(pathname, 'https://memo.invalid').pathname),
+        pathname,
+      ).toBe(true);
     }
   });
 
@@ -71,6 +81,11 @@ describe('PWA backend routing boundary', () => {
     expect(isBackendNetworkOnlyPath('/apian')).toBe(false);
     expect(isBackendNetworkOnlyPath('/calendar/v1/feed.ics/extra')).toBe(false);
     expect(isBackendNetworkOnlyPath('/calendar/v1/another.ics')).toBe(false);
+    expect(isBackendNetworkOnlyPath('/cdn-cgi/access.evil')).toBe(false);
+    expect(isBackendNetworkOnlyPath('/cdn-cgi/accessibility')).toBe(false);
+    expect(isBackendNetworkOnlyPath('/cdn-cgi/access-token')).toBe(false);
+    expect(isBackendNetworkOnlyPath('/cdn-cgi/trace')).toBe(false);
+    expect(isBackendNetworkOnlyPath('/cdn-cgian/access')).toBe(false);
     expect(isBackendNetworkOnlyPath('/oauth2callback')).toBe(false);
     expect(isBackendNetworkOnlyPath('/login/oauth2callback')).toBe(false);
   });

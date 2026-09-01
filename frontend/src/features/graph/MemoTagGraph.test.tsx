@@ -98,7 +98,8 @@ describe('graph node controls and full-corpus detail drawer', () => {
     const data: MemoGraphNodeData = {
       label: memoNode.label,
       kind: memoNode.kind,
-      detail: 'TASK · TODO',
+      detail: '할 일 · 기한 지남',
+      tone: 'task',
       overdue: true,
       pinned: false,
       emphasis: 'SELECTED',
@@ -426,8 +427,8 @@ describe('graph drawer focus restoration', () => {
     expect(heading.focus).not.toHaveBeenCalled();
   });
 
-  it('falls back to the graph heading when no graph nodes remain', () => {
-    const heading = { focus: vi.fn() };
+  it('falls back to the visible graph canvas when no graph nodes remain', () => {
+    const graphCanvas = { focus: vi.fn() };
     vi.stubGlobal('window', {
       requestAnimationFrame: (callback: FrameRequestCallback) => {
         callback(0);
@@ -436,12 +437,12 @@ describe('graph drawer focus restoration', () => {
     });
     vi.stubGlobal('document', {
       querySelectorAll: () => [],
-      getElementById: () => heading,
+      getElementById: () => graphCanvas,
     });
 
     focusGraphNode('memo:removed', null);
 
-    expect(heading.focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(graphCanvas.focus).toHaveBeenCalledWith({ preventScroll: true });
   });
 
   it('restores focus to a remounted off-home memo button after Back', () => {

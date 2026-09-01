@@ -65,11 +65,17 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
   2026-08-31 the exact owner reported a successful external email-OTP sign-in, application sign-in,
   and PWA screen load at the configured owner app hostname. This is user-reported acceptance, not provider-log or
   independent automation evidence. An unauthenticated application-session `/auth/me` 401/no-store
-  probe and provider/customer log sentinel remain unverified. After the subsequent PC reboot, the
-  Manual connector and `app-public-edge` are currently stopped, so the remote route is not presently
-  available until the reviewed edge-first, connector-last start sequence is run again. The
-  qualification remains `LIVE_OWNER_BETA`, `SOLO_PROVISIONAL/REPORT_ONLY`; unrestricted public and
-  production readiness remain `NO_GO`.
+  probe and provider/customer log sentinel remain unverified. A 2026-09-01 reactivation found that the
+  old installed PWA service worker intercepted Cloudflare's Access authorization callback with its
+  cached offline shell. Connector-first rollback stopped both Manual connectors while the loopback app
+  edge remained healthy. The corrected `/cdn-cgi/access` network-only source, generated worker and
+  disposable production-browser E2E pass. After the owner supplied fresh Error 1033 rollback proof,
+  the corrected frontend was rollback-tagged, rebuilt and deployed; loopback health/capabilities/401,
+  connector-last startup and no-cookie external Access 302/cache-non-HIT all pass. Historical
+  exact owner then reported that the instructed post-fix health/root/application-PWA check works.
+  Historical qualification remains `LIVE_OWNER_BETA`; current activation is
+  `LIVE_OWNER_BETA_REQUALIFIED` based on user-reported acceptance, overall status is
+  `SOLO_PROVISIONAL/REPORT_ONLY`, and unrestricted public/production readiness remains `NO_GO`.
 - **Milestone 7.1 Today-first mobile home** is source-implemented. It reorders existing UI
   information around quick capture and today's tasks/events, keeps the graph secondary, and adds only
   a read-only summary derived from existing browser/workspace state. It adds no API or JSON Schema
@@ -930,6 +936,9 @@ test, and a fail-closed server-owned public-origin capability.
 - keep local registration and Google authentication disabled. Cloudflare Access is a perimeter gate;
   the existing application session, CSRF, owner derivation, JSON Schema/domain validation, proposal
   review, and explicit Apply remain authoritative
+- reserve case-insensitive `/cdn-cgi/access(?:/|\?|$)` as a Cloudflare-owned network-only service-worker
+  boundary. Access control requests must be excluded from application precache/navigation fallback and
+  can never resolve to the PWA shell or offline fallback
 - require exact Host and same-origin unsafe requests, a request-header allowlist, fixed-class logs,
   bounded body/header/rate/connection/timeouts, bodyless deny responses, security headers, and
   no-store except for fingerprinted static assets
@@ -948,10 +957,19 @@ test, and a fail-closed server-owned public-origin capability.
   Cloudflare Tunnel `Error 1033`, then restart restored `Healthy` and capability response. Actual owner
   application sign-in and PWA screen load were then reported successful by the exact owner on
   2026-08-31. The application-session `/auth/me` unauthenticated 401/no-store probe and
-  provider/customer log sentinel remain unverified. After a later PC reboot the Manual connector and
-  `app-public-edge` are currently stopped, so the remote route is not currently available; this
-  operational state does not erase the qualification evidence. Status remains `LIVE_OWNER_BETA`,
-  `SOLO_PROVISIONAL/REPORT_ONLY`, while public/production remains `NO_GO`
+  provider/customer log sentinel remain unverified. The 2026-09-01 read-only Dashboard/restart check
+  found that the old installed PWA worker served the cached shell at the Access authorization callback.
+  Connector-first rollback left app/calendar services `Stopped`/`Manual`, cloudflared process count 0,
+  and `app-public-edge` healthy on loopback. The source fix, 48 files/472 unit tests, lint, TypeScript,
+  public source contract, production PWA build, generated-worker inspection and disposable Edge E2E 1/1
+  pass without personal data. Fresh Error 1033 proof then cleared the mutation hold. Rollback-tagged
+  frontend/app-edge rebuild, deployed-worker inspection, loopback health/capabilities/401, connector-last
+  startup and no-cookie external Access 302/no-store/cache-absent all pass. App connector is now
+  `Running`/`Manual`, calendar connector is `Stopped`/`Manual`, app edge is healthy. Historical
+  exact owner then reported that the instructed post-fix health/root/application-PWA check works.
+  Historical qualification remains `LIVE_OWNER_BETA`; current activation is
+  `LIVE_OWNER_BETA_REQUALIFIED` based on user-reported acceptance, overall status is
+  `SOLO_PROVISIONAL/REPORT_ONLY`, and public/production remains `NO_GO`
 
 ## Milestone 7 — Owner beta usability and operations
 
@@ -983,6 +1001,29 @@ test, and a fail-closed server-owned public-origin capability.
   does not prove the Windows Docker Desktop defect fixed, a personal V23 rebuild/update, deployed PWA
   acceptance, Cloudflare runtime state, owner data behavior, physical-device behavior, or model
   quality. M7.1 remains `SOLO_PROVISIONAL/REPORT_ONLY`
+
+### 7.2 Graph-first mobile home and concise capture
+
+- preserve Milestone 7.1 as a historical checkpoint while making the confirmed, bounded MEMO-TAG
+  connection map the default signed-in view
+- provide four bottom-navigation destinations for the connection map, memo capture/list/search,
+  tasks and confirmed schedules, and settings; every non-graph workflow remains independently usable
+- keep capture raw-save-first and concise. Background analysis remains proposal-only, and the existing
+  explicit review and Apply boundary remains authoritative for tags, tasks, schedules, and relations
+- keep AI, model, recovery, and infrastructure diagnostics secondary and bounded to evidence that the
+  current browser can prove; add no API, OpenAPI, JSON Schema, Flyway, persistence, analyzer policy,
+  canonical mutation, or deployment-topology change
+- source qualification passes ESLint, TypeScript, 51 files/481 tests, the production PWA build, the
+  public-app source contract, and 27 disposable production-like Playwright flows, including portrait,
+  landscape, explicit review/undo, graph selection, and exact temporary-resource cleanup
+- a separately owner-authorized personal update passed a 144,430-byte checksummed mechanical backup,
+  isolated V23-to-V23 restore, exact rollback tagging, connector-first external 1033 proof, frontend/
+  edge-only rebuild, local non-authenticated boundary smoke, connector-last start, and remote Access
+  302/non-cache-hit checks. PostgreSQL canonical data, owner session, memo bodies, Apply, Ollama, and
+  Cloudflare settings were not inspected or changed
+- the exact owner has viewed the deployed interface and begun visual review. Final physical-device
+  acceptance remains open. Status is `SOURCE_QUALIFIED_PERSONAL_DEPLOYED_VISUAL_REVIEW_IN_PROGRESS`,
+  `SOLO_PROVISIONAL/REPORT_ONLY`; unrestricted public/production remains `NO_GO`
 
 ## Initial issue order
 

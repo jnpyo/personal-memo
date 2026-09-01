@@ -78,12 +78,12 @@ const TASK_STATE_LABEL = {
   NONE: '할 일 없음',
 } as const;
 
-function systemIcon(detail: string): string {
-  if (detail.startsWith('TASK')) return '✓';
-  if (detail.startsWith('EVENT')) return '◷';
-  if (detail.startsWith('IDEA')) return '◇';
-  if (detail.startsWith('INFORMATION')) return 'i';
-  if (detail === '태그') return '#';
+function systemIcon(tone: MemoGraphNodeData['tone']): string {
+  if (tone === 'task') return '✓';
+  if (tone === 'event') return '◷';
+  if (tone === 'idea') return '◇';
+  if (tone === 'information') return 'i';
+  if (tone === 'tag') return '#';
   return '•';
 }
 
@@ -127,15 +127,16 @@ export function GraphNodeButton({
       onClick={(event) => onActivate(event.currentTarget)}
     >
       <span className="graph-node__icon" aria-hidden="true">
-        {systemIcon(data.detail)}
+        {systemIcon(data.tone)}
       </span>
       <span>
         <strong>{data.label}</strong>
-        <small>
-          {data.pinned ? '고정됨 · ' : ''}
-          {data.overdue ? '기한 초과 · ' : ''}
-          {data.detail}
-        </small>
+        {(data.pinned || data.tone === 'task' || data.tone === 'event') && (
+          <small>
+            {data.pinned ? '고정 · ' : ''}
+            {data.detail}
+          </small>
+        )}
       </span>
     </button>
   );
@@ -185,11 +186,11 @@ export function focusGraphNode(
       (candidate) => candidate.dataset.graphNodeId === nodeId,
     );
     const firstEnabledNode = graphButtons.find((candidate) => !candidate.disabled);
-    const graphHeading = document.getElementById('graph-title');
+    const graphFallback = document.getElementById('graph-canvas');
     const preferredTarget = originalOpener?.isConnected
       ? originalOpener
       : sameNode;
-    const fallbackTarget = firstEnabledNode ?? graphHeading;
+    const fallbackTarget = firstEnabledNode ?? graphFallback;
     const activeElement = document.activeElement;
 
     if (preferredTarget && !preferredTarget.disabled) {
@@ -201,7 +202,7 @@ export function focusGraphNode(
           attempt > 0 &&
           activeElement &&
           activeElement !== document.body &&
-          activeElement !== graphHeading &&
+          activeElement !== graphFallback &&
           activeElement !== fallbackTarget
         ) return;
         preferredTarget.focus({ preventScroll: true });
@@ -214,7 +215,7 @@ export function focusGraphNode(
         attempt > 0 &&
         activeElement &&
         activeElement !== document.body &&
-        activeElement !== graphHeading &&
+        activeElement !== graphFallback &&
         activeElement !== fallbackTarget
       ) return;
     }
@@ -234,9 +235,9 @@ export function focusGraphNode(
 export function shouldResumeGraphFocus(
   activeElement: Element | null,
   body: HTMLElement,
-  graphHeading: HTMLElement | null,
+  graphFallback: HTMLElement | null,
 ): boolean {
-  return activeElement === null || activeElement === body || activeElement === graphHeading;
+  return activeElement === null || activeElement === body || activeElement === graphFallback;
 }
 
 export function focusNeighborhoodNode(
@@ -753,7 +754,7 @@ export function MemoTagGraph({
       !shouldResumeGraphFocus(
         document.activeElement,
         document.body,
-        document.getElementById('graph-title'),
+        document.getElementById('graph-canvas'),
       )
     ) {
       focusRestoreCancelRef.current?.();
@@ -793,17 +794,14 @@ export function MemoTagGraph({
 
   return (
     <section className="graph-section" aria-labelledby="graph-title">
-      <div className="section-heading">
-        <div>
-          <span className="eyebrow">DERIVED VIEW</span>
-          <h2 id="graph-title" tabIndex={-1}>메모와 태그</h2>
-        </div>
-        {projection.truncated && <span className="limit-badge">우선순위 기준 최대 100개</span>}
-      </div>
+      <h2 id="graph-title" className="visually-hidden">연결 지도</h2>
+      {projection.truncated && !loading && !error && (
+        <span className="limit-badge graph-limit-badge">일부 연결만 표시</span>
+      )}
 
-      <div className="graph-canvas" aria-busy={loading}>
+      <div id="graph-canvas" className="graph-canvas" tabIndex={-1} aria-busy={loading}>
         {loading && nodes.length === 0 && (
-          <div className="panel-state">그래프를 불러오는 중…</div>
+          <div className="panel-state">연결을 불러오는 중…</div>
         )}
         {!loading && error && nodes.length === 0 && (
           <div className="panel-state panel-state--error" role="alert">
@@ -814,7 +812,7 @@ export function MemoTagGraph({
           </div>
         )}
         {!loading && !error && nodes.length === 0 && (
-          <div className="panel-state">승인한 메모와 태그의 관계가 여기에 표시됩니다.</div>
+          <div className="panel-state">연결이 아직 없습니다.</div>
         )}
         {nodes.length > 0 && (
           <>
@@ -838,8 +836,8 @@ export function MemoTagGraph({
                 edges={edges}
                 nodeTypes={nodeTypes}
                 fitView
-                fitViewOptions={{ padding: 0.24, minZoom: 0.9, maxZoom: 1.1 }}
-                minZoom={0.9}
+                fitViewOptions={{ padding: 0.08, minZoom: 0.7, maxZoom: 1.1 }}
+                minZoom={0.7}
                 maxZoom={1.6}
                 nodesConnectable={false}
                 nodesDraggable={false}
@@ -849,8 +847,14 @@ export function MemoTagGraph({
                 zoomOnDoubleClick={false}
                 aria-label={`메모 ${nodes.filter((node) => node.data.kind === 'MEMO').length}개와 태그 ${nodes.filter((node) => node.data.kind === 'TAG').length}개의 관계 그래프`}
               >
-                <Background color="#c9c5b9" gap={24} size={1} />
-                <Controls showInteractive={false} position="bottom-right" />
+                <Background color="#cbd4d1" gap={24} size={1} />
+                {!loading && !error && (
+                  <Controls
+                    showInteractive={false}
+                    position="top-left"
+                    orientation="horizontal"
+                  />
+                )}
               </ReactFlow>
             </GraphInteractionContext.Provider>
           </>

@@ -1089,3 +1089,75 @@ redirect가 모두 복구됐다. 최종 connector 상태는 `Running`/`Manual`�
 Provider/customer request-log export도 unavailable/unverified라 log sentinel을 주장하지 않는다. 판정은
 `LIVE_OWNER_BETA`, `SOLO_PROVISIONAL/REPORT_ONLY`; unrestricted public self-service와 production은
 `NO_GO`다.
+
+### 2026-09-01 Access control-path service-worker hold
+
+Cloudflare Dashboard를 읽기 전용으로 다시 확인한 결과 exact owner-email `Allow` 한 개와 default deny,
+연결된 Bypass/Service Auth 0개, exact host/all-path protected Tunnel route, catch-all `http_status:404`,
+Protect with Access JWT validation, exact-host entire-cache bypass가 유지되고 있었다. 설정은 변경하지
+않았다. App connector를 reviewed gate로 시작했을 때 Tunnel은 `Healthy`/connected가 됐고 cookie 없는
+외부 요청도 Access redirect/no-store를 유지했다.
+
+그러나 현재 in-app browser의 Access flow가 `/cdn-cgi/access/authorized?...`에 도달했을 때 기존 설치
+PWA service worker가 Cloudflare network callback 대신 cached Personal Memo shell/offline UI를 반환했다.
+따라서 이번 owner/auth acceptance는 실패로 판정하고 connector-first rollback을 실행했다. App과
+calendar connector service는 모두 `Stopped`/`Manual`, local `cloudflared` process는 0이며
+`app-public-edge`는 `127.0.0.1:8788` loopback에서 healthy 상태로 보존됐다. 개인 memo, owner session,
+PostgreSQL, canonical data와 Apply는 읽거나 변경하지 않았다.
+
+Source fix는 shared navigation-fallback deny-list와 `NetworkOnly` route에 case-insensitive
+`^/cdn-cgi/access(?:/|\?|$)` 경계를 추가한다. ESLint, TypeScript, frontend 48 files/472 tests, public-app
+source contract, production Vite/PWA build와 generated `sw.js` inspection이 통과했고, 별도 disposable
+PostgreSQL/앱 stack의 system-Edge focused production PWA E2E 1/1도 callback/authorized navigation이
+offline shell로 resolve되지 않음을 확인했다. 첫 두 local 시도는 각각 잘못된 test selector와 system
+Edge의 `in-incognito` installability diagnostic에서 본 assertion 전에 멈춘 harness-only 실패였고,
+그 exact disposable container/network/volume/image도 모두 제거했다.
+
+Fresh private browser의 `/api/v1/health` OTP flow 뒤 cached shell이 아닌 Cloudflare Tunnel `Error 1033`이
+사용자 화면으로 확인돼 rollback `MUTATION_HOLD`를 해제했다. 이전 frontend와 app-edge image에는
+`rollback-pre-access-sw-20260901-042111Z` tag를 붙였다. Connector가 stopped인 상태에서 edge stop/start
+script로 current source를 다시 build했고 lint, 48 files/472 tests, production PWA build, isolated Nginx
+config, exact/wrong-Host local edge contract가 통과했다. 새 image에는
+`deployed-access-sw-20260901-042405Z` tag를 붙였다.
+
+배포 뒤 loopback root/`sw.js`는 200이고 generated worker의 Access boundary marker가 존재했다. Health는
+exact UP 200/no-store, auth capabilities는 exact 3 boolean 200/no-store, cookie 없는 `/auth/me`는 401
+`AUTHENTICATION_REQUIRED`/no-store였다. App connector를 마지막에 시작한 뒤 service는
+`Running`/`Manual`, calendar service는 `Stopped`/`Manual`, cloudflared process 1, metrics ready 200이고
+모든 personal container가 healthy였다. Body/cookie 없는 외부 `/`와 unique-query health는 Access 302,
+no-store/private, `CF-Cache-Status` absent였다.
+
+기존 PWA에서 broad `Clear site data`를 사용하면 owner draft/session이 손실될 수 있으므로 금지한다.
+미저장/pending-operation guard를 존중하고 명시적 “새 화면 적용” 절차로 새 worker가 controller가 된 것을
+확인한다. 이어서 exact owner는 안내한 fresh private-browser health, root, application/PWA 재확인이
+정상 작동한다고 보고했다. 이는 user-reported acceptance이며 provider/customer log나 독립 자동화
+증거로 확장하지 않는다. 과거 `LIVE_OWNER_BETA` evidence는 보존하고 current activation은
+`LIVE_OWNER_BETA_REQUALIFIED`다. Overall status는 `SOLO_PROVISIONAL/REPORT_ONLY`, public production은
+`NO_GO`다.
+
+### 2026-09-01 Milestone 7.2 graph-first frontend update
+
+Milestone 7.2 source는 confirmed bounded graph를 default signed-in view로 바꾸고 연결/메모/일정/설정
+bottom navigation과 concise raw-save-first capture를 추가한다. 이 변경은 frontend hierarchy와
+presentation에 한정되며 API, JSON Schema, Flyway, canonical contract, analyzer policy, backend image,
+PostgreSQL schema와 public edge topology를 바꾸지 않는다.
+
+Source qualification은 ESLint, TypeScript, 51 files/481 tests, production PWA build, public-app source
+contract와 disposable production-like Playwright 27/27을 통과했다. Owner-authorized deployment 전에
+144,430-byte mechanical PostgreSQL backup/checksum과 disposable V23-to-V23 restore rehearsal을
+완료했고 existing canonical volume은 유지했다. App connector를 먼저 중지한 뒤 fresh private-browser
+Error 1033을 rollback 증거로 확인했고 기존 실행 이미지는 같은 UTC stamp의
+`rollback-pre-m72-20260901-074019Z` tags로 보존했다.
+
+Reviewed edge stop/start script는 current source에서 frontend와 app-public-edge만 rebuild/recreate했다.
+Backend와 PostgreSQL은 재생성하지 않았다. Exact-Host root/`sw.js`, health, finite capabilities,
+unauthenticated 401과 wrong-Host empty 404가 local no-store 경계를 통과했다. 실행 이미지는
+`deployed-m72-20260901-075555Z` tags로 고정했다. App connector를 마지막에 시작한 뒤 app service는
+`Running`/`Manual`, calendar service는 `Stopped`/`Manual`, 모든 personal container는 healthy였다.
+Cookie/body 없는 external root와 health는 Access 302, no-store/private와 cache non-HIT를 통과했다.
+
+최종 audit은 backup checksum match, canonical PostgreSQL volume mount 1, temporary restore/E2E
+container와 volume 0, deployment/rollback tag 4를 확인했다. Personal memo, owner session, canonical
+record, Apply, Ollama와 Cloudflare 설정을 읽거나 변경하지 않았다. Owner visual review는 진행 중이며
+physical-device acceptance는 열려 있다. 판정은 `SOLO_PROVISIONAL/REPORT_ONLY`; unrestricted
+public/production은 `NO_GO`다.

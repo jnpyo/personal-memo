@@ -66,6 +66,6 @@ describe('event list', () => {
       />,
     );
 
-    expect(markup).toContain('시간 미정 EVENT는 이 목록에 표시되지 않습니다.');
+    expect(markup).toContain('일정이 없습니다.');
   });
 });

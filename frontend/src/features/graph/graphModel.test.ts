@@ -34,16 +34,18 @@ describe('buildFlowElements', () => {
     const memo = result.nodes.find((node) => node.id === 'memo:1');
 
     expect(memo?.data.kind).toBe('MEMO');
-    expect(memo?.data.detail).toBe('TASK · TODO');
+    expect(memo?.data.detail).toBe('할 일');
+    expect(memo?.data.tone).toBe('task');
     expect(memo?.data.pinned).toBe(true);
     expect(memo).toMatchObject({
-      initialWidth: 210,
-      initialHeight: 56,
+      initialWidth: 208,
+      initialHeight: 64,
       style: { pointerEvents: 'all' },
     });
     expect(result.nodes.find((node) => node.id === 'tag:1')).toMatchObject({
-      initialWidth: 176,
-      initialHeight: 56,
+      initialWidth: 172,
+      initialHeight: 64,
+      data: { tone: 'tag' },
     });
     expect(result.nodes.some((node) => node.id === 'TASK')).toBe(false);
   });
