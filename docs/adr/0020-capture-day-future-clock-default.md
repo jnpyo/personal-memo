@@ -4,10 +4,12 @@
 
 Accepted and implemented in source on 2026-09-02. Focused parser/analyzer/validator tests, the
 complete non-PostgreSQL backend unit suite, frontend lint/unit/type/PWA build, and the v2
-product-smoke source-contract gate pass. PostgreSQL integration, isolated Playwright, and actual
-Docker/Ollama product smoke remain pending. The result is `SOLO_PROVISIONAL` / `REPORT_ONLY` and does
-not authorize a personal-stack deployment, personal-data inspection, canonical Apply, or production
-acceptance.
+product-smoke source-contract gate pass. Exact source SHA `2117cb2` also passed GitHub-hosted Linux
+OpenAPI/Compose/PowerShell gates, disposable PostgreSQL 17.6/Flyway V1-V23 backend `mvn verify`
+924/924, and production-like isolated Playwright 28/28 in runs `33594337649` and `33594340097`.
+Actual Docker/Ollama v2 product smoke remains pending. The result is `SOLO_PROVISIONAL` /
+`REPORT_ONLY` and does not authorize a personal-stack deployment, personal-data inspection,
+canonical Apply, or production acceptance.
 
 ## Context
 

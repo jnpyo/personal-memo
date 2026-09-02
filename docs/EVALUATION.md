@@ -545,6 +545,12 @@ proposal-only/manual Apply behavior and does not create or deliver an alarm/remi
 tests do not constitute a new full public synthetic or blind measurement. The v8 aggregate above
 must not be relabeled as a v9 or v10 result.
 
+Exact source SHA `2117cb2` passed GitHub-hosted Linux OpenAPI/Compose/PowerShell gates, disposable
+PostgreSQL 17.6/Flyway V1-V23 backend `mvn verify` 924/924, frontend 52 files/529 tests plus lint/build,
+and production-like isolated Playwright 28/28 in runs `33594337649` and `33594340097`. These are
+contract, persistence, and product-flow safety results, not a new LiquidAI accuracy, latency,
+GPU/VRAM, or model-contribution measurement. The v2 Docker/Ollama product smoke remains unrun.
+
 The immutable AI-preferred product-smoke v1 fixture/schema/receipt remains historical. A separate v2
 public-synthetic fixture and source contract pins `2026-08-28T09:00:00+09:00` in `Asia/Seoul` and
 requires `6시 디스코드 접속하기` to produce one grounded TASK bound to a

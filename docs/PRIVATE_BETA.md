@@ -738,10 +738,15 @@ receipt에 남긴다. 이 v2 contract를 사용하는 Docker/Ollama product smok
 `fake-v8` 또는 `fake-v9` 평가·shadow·배포 기록은 당시 사실로 유지하며 `fake-v10` 측정으로 다시
 이름 붙이지 않는다. 새 값도 untrusted proposal이고 owner의 기존 manual Apply 전에는 canonical
 TASK due나 EVENT schedule을 만들지 않는다. Automatic Apply, 다음 날 이월, alarm/reminder 생성·전달,
-Web Push, RAG, fine-tuning, LoRA는 이 정책에 포함되지 않는다. Focused
-parser/analyzer/validator 106/106과 전체 non-PostgreSQL backend unit suite 663 executed/252
-environment-gated skipped/0 failed가 통과했다. Frontend ESLint, 52 files/529 Vitest tests,
-TypeScript/PWA build와 v2 product-smoke source-contract gate도 통과했다. PostgreSQL integration,
-isolated Playwright, actual Docker/Ollama product smoke는 실행하지 않았다. 상태는
-`SOURCE_IMPLEMENTED_UNIT_AND_FRONTEND_GATES_PASS_POSTGRES_E2E_RUNTIME_PENDING`,
-`SOLO_PROVISIONAL/REPORT_ONLY`다.
+  Web Push, RAG, fine-tuning, LoRA는 이 정책에 포함되지 않는다. Focused
+  parser/analyzer/validator 106/106과 전체 non-PostgreSQL backend unit suite 663 executed/252
+  environment-gated skipped/0 failed가 통과했다. Frontend ESLint, 52 files/529 Vitest tests,
+  TypeScript/PWA build와 v2 product-smoke source-contract gate도 통과했다. Exact source SHA
+  `2117cb2`의 GitHub-hosted Linux runs `33594337649`/`33594340097`은 OpenAPI, Compose/source 및 Windows
+  PowerShell contracts, disposable PostgreSQL 17.6/Flyway V1-V23 backend `mvn verify` 924 tests와
+  production-like isolated Playwright 28/28을 모두 통과했다. Local Docker Desktop 4.88.1은 container
+  시작 전 `sailor-ingest.sock` stale-endpoint 오류를 재현해 새 quarantine/reset 없이 다시 stopped로
+  복구했다. Actual Docker/Ollama product smoke는 실행하지 않았으므로 latency, GPU/VRAM, Fake/LiquidAI
+  비교 수치는 계속 주장하지 않는다. 상태는
+  `SOURCE_QUALIFIED_LINUX_FULL_E2E_PASS_RUNTIME_AND_DEPLOYMENT_PENDING`,
+  `SOLO_PROVISIONAL/REPORT_ONLY`다.

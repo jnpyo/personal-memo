@@ -909,13 +909,20 @@ public activation, real-feed qualification과 Google·Apple smoke는 final gate 
   이 결정은 proposal-only/manual Apply, no automatic alarm/reminder 경계를 유지한다. Focused
   parser/analyzer/validator 106/106과 전체 non-PostgreSQL backend unit suite 663 executed/252
   environment-gated skipped/0 failed가 통과했다. Frontend ESLint, 52 files/529 Vitest tests,
-  TypeScript/PWA build와 v2 product-smoke source-contract gate도 통과했다. PostgreSQL integration,
-  isolated Playwright, actual Docker/Ollama product smoke는 실행하지 않았다. 상태는
-  `SOURCE_IMPLEMENTED_UNIT_AND_FRONTEND_GATES_PASS_POSTGRES_E2E_RUNTIME_PENDING`,
+  TypeScript/PWA build와 v2 product-smoke source-contract gate도 통과했다. Exact source SHA
+  `2117cb2`의 GitHub-hosted Linux CI runs `33594337649`/`33594340097`은 OpenAPI, production/personal/
+  public Compose/source contracts, Windows PowerShell contracts, frontend gates, disposable
+  PostgreSQL 17.6/Flyway V1-V23 backend `mvn verify` 924 tests/0 failure/0 error/0 skip, 그리고
+  production-like isolated Playwright 28/28을 모두 통과했다. Actual Docker/Ollama v2 product
+  smoke는 실행하지 않아 runtime latency, GPU/VRAM, Fake/LiquidAI 비교 evidence는 계속 없다. 상태는
+  `SOURCE_QUALIFIED_LINUX_FULL_E2E_PASS_RUNTIME_AND_DEPLOYMENT_PENDING`,
   `SOLO_PROVISIONAL/REPORT_ONLY`다.
 - Docker Desktop 4.88.1 업데이트 후 `dockerInference`, secrets engine, `sailor-ingest.sock`순으로
   Windows host AF_UNIX stale-endpoint 실패가 재현됐다. 승인된 runtime-only 격리 외에 factory
-  reset, clean/purge, volume/VHDX 삭제는 하지 않았고 Docker는 stopped로 두었다. 로컬 진단 묶음은
+  reset, clean/purge, volume/VHDX 삭제는 하지 않았고 Docker는 stopped로 두었다. 2026-09-02 M7.4
+  local isolated qualification 시도에서도 backend가 `sailor-ingest.sock` 제거 실패로 container 시작
+  전에 중단됐다. 새 quarantine/reset은 하지 않고 이번에 시작된 Docker process만 종료해 원래 stopped
+  상태로 복구했으며 개인 container/volume은 열거나 변경하지 않았다. 로컬 진단 묶음은
   private ACL로 생성했지만 열어보거나 외부로 업로드하지 않았다. 2026-08-31 기준 동일
   Docker tracker issue는 open이고, Windows build 26200.9168에 pending update/reboot은 없으며,
   WSL 2.7.12 release note에도 해당 수정은 없어 설치하지 않았다. GitHub-hosted Linux의 disposable

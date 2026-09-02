@@ -1082,9 +1082,14 @@ test, and a fail-closed server-owned public-origin capability.
 - ADR 0020 records the superseding policy. Focused parser/analyzer/validator tests passed 106/106;
   the complete non-PostgreSQL backend unit suite passed 663 executed with 252 environment-gated
   skips and zero failures; frontend ESLint, 52 files/529 Vitest tests, TypeScript/PWA build, and the
-  v2 product-smoke source-contract gate passed. PostgreSQL integration, isolated Playwright, and the
-  actual Docker/Ollama product smoke remain unrun. Current status is
-  `SOURCE_IMPLEMENTED_UNIT_AND_FRONTEND_GATES_PASS_POSTGRES_E2E_RUNTIME_PENDING`,
+  v2 product-smoke source-contract gate passed. Exact source SHA `2117cb2` then passed duplicate
+  GitHub-hosted Linux runs `33594337649`/`33594340097`: OpenAPI and Compose/source/PowerShell contracts,
+  disposable PostgreSQL 17.6/Flyway V1-V23 backend `mvn verify` 924/924, and production-like isolated
+  Playwright 28/28. Local Docker Desktop 4.88.1 reproduced its pre-container `sailor-ingest.sock`
+  stale-endpoint failure and was restored to stopped without a new quarantine/reset or personal
+  container/volume access. The actual Docker/Ollama v2 product smoke remains unrun, so latency,
+  GPU/VRAM, and Fake/LiquidAI runtime comparison remain pending. Current status is
+  `SOURCE_QUALIFIED_LINUX_FULL_E2E_PASS_RUNTIME_AND_DEPLOYMENT_PENDING`,
   `SOLO_PROVISIONAL/REPORT_ONLY`
 
 ## Initial issue order
