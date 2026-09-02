@@ -232,6 +232,15 @@ function Get-Utf8Sha256 {
     }
 }
 
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string] $Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        Stop-ContractValidation "required contract artifact is missing: $Path."
+    }
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
 function Assert-SchemaConst {
     param(
         [Parameter(Mandatory = $true)][object] $Properties,
@@ -304,8 +313,8 @@ function Assert-FixtureSchemaContract {
     $rootNames = @('$schema', '$id', 'title', 'type', 'additionalProperties', 'required', 'properties', '$defs')
     Assert-ExactProperties -Object $Schema -Expected $rootNames -Path 'fixtureSchema'
     Assert-Equal -Actual (Get-JsonProperty -Object $Schema -Name '$schema' -Path 'fixtureSchema') -Expected 'https://json-schema.org/draft/2020-12/schema' -Path 'fixtureSchema.$schema'
-    Assert-Equal -Actual (Get-JsonProperty -Object $Schema -Name '$id' -Path 'fixtureSchema') -Expected 'https://personal-memo.local/schemas/ai-preferred-product-smoke-fixture-v1.json' -Path 'fixtureSchema.$id'
-    Assert-Equal -Actual (Get-JsonProperty -Object $Schema -Name 'title' -Path 'fixtureSchema') -Expected 'AiPreferredProductSmokeFixtureV1' -Path 'fixtureSchema.title'
+    Assert-Equal -Actual (Get-JsonProperty -Object $Schema -Name '$id' -Path 'fixtureSchema') -Expected 'https://personal-memo.local/schemas/ai-preferred-product-smoke-fixture-v2.json' -Path 'fixtureSchema.$id'
+    Assert-Equal -Actual (Get-JsonProperty -Object $Schema -Name 'title' -Path 'fixtureSchema') -Expected 'AiPreferredProductSmokeFixtureV2' -Path 'fixtureSchema.title'
     Assert-Equal -Actual (Get-JsonProperty -Object $Schema -Name 'type' -Path 'fixtureSchema') -Expected 'object' -Path 'fixtureSchema.type'
     Assert-Boolean -Actual (Get-JsonProperty -Object $Schema -Name 'additionalProperties' -Path 'fixtureSchema') -Expected $false -Path 'fixtureSchema.additionalProperties'
 
@@ -313,11 +322,11 @@ function Assert-FixtureSchemaContract {
     Assert-ExactSet -Actual @((Get-JsonProperty -Object $Schema -Name 'required' -Path 'fixtureSchema')) -Expected $fixturePropertyNames -Path 'fixtureSchema.required'
     $properties = Get-JsonProperty -Object $Schema -Name 'properties' -Path 'fixtureSchema'
     Assert-ExactProperties -Object $properties -Expected $fixturePropertyNames -Path 'fixtureSchema.properties'
-    Assert-SchemaConst -Properties $properties -Name 'schemaVersion' -Expected 1 -Path 'fixtureSchema.properties'
-    Assert-SchemaConst -Properties $properties -Name 'fixtureId' -Expected 'ai-preferred-product-smoke-v1' -Path 'fixtureSchema.properties'
+    Assert-SchemaConst -Properties $properties -Name 'schemaVersion' -Expected 2 -Path 'fixtureSchema.properties'
+    Assert-SchemaConst -Properties $properties -Name 'fixtureId' -Expected 'ai-preferred-product-smoke-v2' -Path 'fixtureSchema.properties'
     Assert-SchemaConst -Properties $properties -Name 'dataClass' -Expected 'PUBLIC_SYNTHETIC_ONLY' -Path 'fixtureSchema.properties'
+    Assert-SchemaConst -Properties $properties -Name 'clientRecordedAt' -Expected '2026-08-28T09:00:00+09:00' -Path 'fixtureSchema.properties'
     Assert-SchemaConst -Properties $properties -Name 'timeZone' -Expected 'Asia/Seoul' -Path 'fixtureSchema.properties'
-    Assert-ScalarSchema -Definition (Get-JsonProperty -Object $properties -Name 'clientRecordedAt' -Path 'fixtureSchema.properties') -Expected @{ type = 'string'; format = 'date-time' } -Path 'fixtureSchema.properties.clientRecordedAt'
 
     $cases = Get-JsonProperty -Object $properties -Name 'cases' -Path 'fixtureSchema.properties'
     Assert-ExactProperties -Object $cases -Expected @('type', 'minItems', 'maxItems', 'uniqueItems', 'items', 'allOf') -Path 'fixtureSchema.properties.cases'
@@ -327,7 +336,7 @@ function Assert-FixtureSchemaContract {
     Assert-Boolean -Actual (Get-JsonProperty -Object $cases -Name 'uniqueItems' -Path 'fixtureSchema.properties.cases') -Expected $true -Path 'fixtureSchema.properties.cases.uniqueItems'
     Assert-ScalarSchema -Definition (Get-JsonProperty -Object $cases -Name 'items' -Path 'fixtureSchema.properties.cases') -Expected @{ '$ref' = '#/$defs/case' } -Path 'fixtureSchema.properties.cases.items'
 
-    $expectedExpectations = @('AFFIRMATIVE_TASK_UNKNOWN_TIME', 'NEGATED_NON_TASK', 'DESCRIPTIVE_NON_TASK')
+    $expectedExpectations = @('AFFIRMATIVE_TASK_SAME_DAY_TIME', 'NEGATED_NON_TASK', 'DESCRIPTIVE_NON_TASK')
     $containsExpectations = @()
     $allOf = @((Get-JsonProperty -Object $cases -Name 'allOf' -Path 'fixtureSchema.properties.cases'))
     if ($allOf.Count -ne 3) {
@@ -365,10 +374,10 @@ function Assert-FixtureContract {
 
     $fixturePropertyNames = @('schemaVersion', 'fixtureId', 'dataClass', 'clientRecordedAt', 'timeZone', 'cases')
     Assert-ExactProperties -Object $Fixture -Expected $fixturePropertyNames -Path 'fixture'
-    Assert-Equal -Actual (Get-JsonProperty -Object $Fixture -Name 'schemaVersion' -Path 'fixture') -Expected 1 -Path 'fixture.schemaVersion'
-    Assert-Equal -Actual (Get-JsonProperty -Object $Fixture -Name 'fixtureId' -Path 'fixture') -Expected 'ai-preferred-product-smoke-v1' -Path 'fixture.fixtureId'
+    Assert-Equal -Actual (Get-JsonProperty -Object $Fixture -Name 'schemaVersion' -Path 'fixture') -Expected 2 -Path 'fixture.schemaVersion'
+    Assert-Equal -Actual (Get-JsonProperty -Object $Fixture -Name 'fixtureId' -Path 'fixture') -Expected 'ai-preferred-product-smoke-v2' -Path 'fixture.fixtureId'
     Assert-Equal -Actual (Get-JsonProperty -Object $Fixture -Name 'dataClass' -Path 'fixture') -Expected 'PUBLIC_SYNTHETIC_ONLY' -Path 'fixture.dataClass'
-    Assert-DateTimeValue -Actual (Get-JsonProperty -Object $Fixture -Name 'clientRecordedAt' -Path 'fixture') -Path 'fixture.clientRecordedAt'
+    Assert-Equal -Actual (Get-JsonProperty -Object $Fixture -Name 'clientRecordedAt' -Path 'fixture') -Expected '2026-08-28T09:00:00+09:00' -Path 'fixture.clientRecordedAt'
     Assert-Equal -Actual (Get-JsonProperty -Object $Fixture -Name 'timeZone' -Path 'fixture') -Expected 'Asia/Seoul' -Path 'fixture.timeZone'
 
     $cases = @((Get-JsonProperty -Object $Fixture -Name 'cases' -Path 'fixture'))
@@ -377,7 +386,7 @@ function Assert-FixtureContract {
     }
 
     $expectedCases = @{
-        'affirmative-task-unknown-time' = @('363602fd00efcd9e502dc78d8ecfafde68f1f9888b76f0893aeb30794d5535cb', 'AFFIRMATIVE_TASK_UNKNOWN_TIME')
+        'affirmative-task-same-day-time' = @('363602fd00efcd9e502dc78d8ecfafde68f1f9888b76f0893aeb30794d5535cb', 'AFFIRMATIVE_TASK_SAME_DAY_TIME')
         'negated-non-task' = @('fa13d80a87d35737c1c7ae7dfcaa15ac11e15132be86483f16db4d5df7d9f46b', 'NEGATED_NON_TASK')
         'descriptive-non-task' = @('6d230b78ac3d5d0ecdbe52372efc6936bfc780cd4c23d4c39c66db318dd0908e', 'DESCRIPTIVE_NON_TASK')
     }
@@ -397,7 +406,7 @@ function Assert-FixtureContract {
         $seenExpectations += $expectation
     }
     Assert-ExactSet -Actual $seenIds -Expected @($expectedCases.Keys) -Path 'fixture case ids'
-    Assert-ExactSet -Actual $seenExpectations -Expected @('AFFIRMATIVE_TASK_UNKNOWN_TIME', 'NEGATED_NON_TASK', 'DESCRIPTIVE_NON_TASK') -Path 'fixture expectations'
+    Assert-ExactSet -Actual $seenExpectations -Expected @('AFFIRMATIVE_TASK_SAME_DAY_TIME', 'NEGATED_NON_TASK', 'DESCRIPTIVE_NON_TASK') -Path 'fixture expectations'
 }
 
 function Assert-ReceiptSchemaContract {
@@ -405,8 +414,8 @@ function Assert-ReceiptSchemaContract {
 
     Assert-ExactProperties -Object $Schema -Expected @('$schema', '$id', 'title', 'type', 'additionalProperties', 'required', 'properties', '$defs') -Path 'receiptSchema'
     Assert-Equal -Actual (Get-JsonProperty -Object $Schema -Name '$schema' -Path 'receiptSchema') -Expected 'https://json-schema.org/draft/2020-12/schema' -Path 'receiptSchema.$schema'
-    Assert-Equal -Actual (Get-JsonProperty -Object $Schema -Name '$id' -Path 'receiptSchema') -Expected 'https://personal-memo.local/schemas/ai-preferred-product-smoke-receipt-v1.json' -Path 'receiptSchema.$id'
-    Assert-Equal -Actual (Get-JsonProperty -Object $Schema -Name 'title' -Path 'receiptSchema') -Expected 'AiPreferredProductSmokeReceiptV1' -Path 'receiptSchema.title'
+    Assert-Equal -Actual (Get-JsonProperty -Object $Schema -Name '$id' -Path 'receiptSchema') -Expected 'https://personal-memo.local/schemas/ai-preferred-product-smoke-receipt-v2.json' -Path 'receiptSchema.$id'
+    Assert-Equal -Actual (Get-JsonProperty -Object $Schema -Name 'title' -Path 'receiptSchema') -Expected 'AiPreferredProductSmokeReceiptV2' -Path 'receiptSchema.title'
     Assert-Equal -Actual (Get-JsonProperty -Object $Schema -Name 'type' -Path 'receiptSchema') -Expected 'object' -Path 'receiptSchema.type'
     Assert-Boolean -Actual (Get-JsonProperty -Object $Schema -Name 'additionalProperties' -Path 'receiptSchema') -Expected $false -Path 'receiptSchema.additionalProperties'
 
@@ -415,8 +424,8 @@ function Assert-ReceiptSchemaContract {
     $properties = Get-JsonProperty -Object $Schema -Name 'properties' -Path 'receiptSchema'
     Assert-ExactProperties -Object $properties -Expected $rootNames -Path 'receiptSchema.properties'
     $rootConstants = @{
-        schemaVersion = 1
-        fixtureId = 'ai-preferred-product-smoke-v1'
+        schemaVersion = 2
+        fixtureId = 'ai-preferred-product-smoke-v2'
         status = 'PASS_NARROW_PRODUCT_PATH'
         classification = 'SOLO_PROVISIONAL/REPORT_ONLY'
         decision = 'NO_GO'
@@ -490,8 +499,10 @@ function Assert-ReceiptSchemaContract {
         Assert-SchemaConst -Properties $modelProperties -Name ([string]$name) -Expected $modelConstants[$name] -Path 'receiptSchema.$defs.model.properties'
     }
 
-    $armNames = @('invocationMode', 'transferMode', 'caseCount', 'reviewRequiredCount', 'schemaDomainAcceptedCount', 'cloudSuccessCount', 'acceptedChangedCount', 'acceptedUnchangedCount', 'localFallbackCount', 'toolCallCount', 'mutationCallCount', 'automaticApplyRequestCount', 'wallLatencyMilliseconds', 'attemptLatencyMilliseconds', 'safety', 'canonicalWriteDelta', 'modelTokenEvidence')
+    $armNames = @('invocationMode', 'transferMode', 'analyzerVersion', 'deterministicRulesVersion', 'caseCount', 'reviewRequiredCount', 'schemaDomainAcceptedCount', 'cloudSuccessCount', 'acceptedChangedCount', 'acceptedUnchangedCount', 'localFallbackCount', 'toolCallCount', 'mutationCallCount', 'automaticApplyRequestCount', 'wallLatencyMilliseconds', 'attemptLatencyMilliseconds', 'safety', 'canonicalWriteDelta', 'modelTokenEvidence')
     $armProperties = Assert-SchemaObjectDefinition -Definition (Get-JsonProperty -Object $defs -Name 'arm' -Path 'receiptSchema.$defs') -PropertyNames $armNames -Path 'receiptSchema.$defs.arm'
+    Assert-SchemaConst -Properties $armProperties -Name 'analyzerVersion' -Expected 'fake-v10' -Path 'receiptSchema.$defs.arm.properties'
+    Assert-SchemaConst -Properties $armProperties -Name 'deterministicRulesVersion' -Expected 'korean-rules-v8' -Path 'receiptSchema.$defs.arm.properties'
     foreach ($name in @('caseCount', 'reviewRequiredCount', 'schemaDomainAcceptedCount')) {
         Assert-SchemaConst -Properties $armProperties -Name $name -Expected 3 -Path 'receiptSchema.$defs.arm.properties'
     }
@@ -522,10 +533,11 @@ function Assert-ReceiptSchemaContract {
         Assert-ScalarSchema -Definition (Get-JsonProperty -Object $latencyProperties -Name $name -Path 'receiptSchema.$defs.latency.properties') -Expected @{ type = 'integer'; minimum = 0; maximum = 60000 } -Path (('receiptSchema.$defs.latency.properties.{0}' -f $name))
     }
 
-    $safetyNames = @('affirmativeTaskPassCount', 'negativeTaskPromotionCount', 'inventedPreciseDateCount', 'unresolvedHallucinationCount')
+    $safetyNames = @('affirmativeTaskPassCount', 'sameDayPreciseDatePassCount', 'negativeTaskPromotionCount', 'inventedPreciseDateCount', 'unresolvedHallucinationCount')
     $safetyProperties = Assert-SchemaObjectDefinition -Definition (Get-JsonProperty -Object $defs -Name 'safety' -Path 'receiptSchema.$defs') -PropertyNames $safetyNames -Path 'receiptSchema.$defs.safety'
     Assert-SchemaConst -Properties $safetyProperties -Name 'affirmativeTaskPassCount' -Expected 1 -Path 'receiptSchema.$defs.safety.properties'
-    foreach ($name in $safetyNames | Where-Object { $_ -ne 'affirmativeTaskPassCount' }) {
+    Assert-SchemaConst -Properties $safetyProperties -Name 'sameDayPreciseDatePassCount' -Expected 1 -Path 'receiptSchema.$defs.safety.properties'
+    foreach ($name in $safetyNames | Where-Object { $_ -notin @('affirmativeTaskPassCount', 'sameDayPreciseDatePassCount') }) {
         Assert-SchemaConst -Properties $safetyProperties -Name $name -Expected 0 -Path 'receiptSchema.$defs.safety.properties'
     }
 
@@ -688,6 +700,18 @@ function Assert-PowerShellSources {
             @{ Pattern = '(?i)Stop-Process'; Message = 'orchestrator must stop its owned Ollama process.' },
             @{ Pattern = '(?i)Remove-Item'; Message = 'orchestrator must remove its exact temporary artifacts.' },
             @{ Pattern = 'externalProductServiceAccessed\s*=\s*\$false'; Message = 'orchestrator receipt scope must deny external product-service access.' },
+            @{ Pattern = 'AFFIRMATIVE_TASK_SAME_DAY_TIME'; Message = 'orchestrator must bind the v2 affirmative same-day-time expectation.' },
+            @{ Pattern = 'ExpectedAnalyzerVersion\s*=\s*[''\"]fake-v10[''\"]'; Message = 'orchestrator must pin the fake-v10 analyzer provenance.' },
+            @{ Pattern = 'ExpectedDeterministicRulesVersion\s*=\s*[''\"]korean-rules-v8[''\"]'; Message = 'orchestrator must pin the korean-rules-v8 provenance.' },
+            @{ Pattern = 'metadata\.analyzerVersion\s*-cne\s*\$script:ExpectedAnalyzerVersion'; Message = 'orchestrator must verify the analyzer version returned by every proposal.' },
+            @{ Pattern = 'metadata\.deterministicRulesVersion\s*-cne\s*\$script:ExpectedDeterministicRulesVersion'; Message = 'orchestrator must verify the deterministic-rules version returned by every proposal.' },
+            @{ Pattern = 'analyzerVersion\s*=\s*\$observedAnalyzerVersion'; Message = 'receipt arm provenance must come from observed proposal metadata.' },
+            @{ Pattern = 'deterministicRulesVersion\s*=\s*\$observedDeterministicRulesVersion'; Message = 'receipt arm rules provenance must come from observed proposal metadata.' },
+            @{ Pattern = '\$items\.Count\s*-ne\s*1'; Message = 'affirmative gate must reject every extra item candidate.' },
+            @{ Pattern = '\bsourceSpan\b'; Message = 'affirmative gate must bind the single task to its source span.' },
+            @{ Pattern = '2026-08-28T18:00:00\+09:00'; Message = 'orchestrator must assert the fixture-locked same-day due instant.' },
+            @{ Pattern = '\bdueDateCandidateId\b'; Message = 'affirmative gate must bind the task to its date candidate.' },
+            @{ Pattern = '\bRELATIVE_EXACT\b'; Message = 'affirmative gate must require exact relative-time precision.' },
             @{ Pattern = 'NON_TASK_EXPECTATION_FAILED'; Message = 'orchestrator must retain a bounded negative-case failure gate.' },
             @{ Pattern = '\bactionableItems\b'; Message = 'negative-case gate must reject actionable TASK or EVENT items.' },
             @{ Pattern = '\bpopulatedNonTaskFields\b'; Message = 'negative-case gate must reject populated action, object, or due-date fields.' }
@@ -769,10 +793,12 @@ function Assert-ArmReceipt {
         [Parameter(Mandatory = $true)][string] $ModelTokenEvidence
     )
 
-    $names = @('invocationMode', 'transferMode', 'caseCount', 'reviewRequiredCount', 'schemaDomainAcceptedCount', 'cloudSuccessCount', 'acceptedChangedCount', 'acceptedUnchangedCount', 'localFallbackCount', 'toolCallCount', 'mutationCallCount', 'automaticApplyRequestCount', 'wallLatencyMilliseconds', 'attemptLatencyMilliseconds', 'safety', 'canonicalWriteDelta', 'modelTokenEvidence')
+    $names = @('invocationMode', 'transferMode', 'analyzerVersion', 'deterministicRulesVersion', 'caseCount', 'reviewRequiredCount', 'schemaDomainAcceptedCount', 'cloudSuccessCount', 'acceptedChangedCount', 'acceptedUnchangedCount', 'localFallbackCount', 'toolCallCount', 'mutationCallCount', 'automaticApplyRequestCount', 'wallLatencyMilliseconds', 'attemptLatencyMilliseconds', 'safety', 'canonicalWriteDelta', 'modelTokenEvidence')
     Assert-ExactProperties -Object $Arm -Expected $names -Path $Path
     Assert-Equal -Actual (Get-JsonProperty -Object $Arm -Name 'invocationMode' -Path $Path) -Expected $InvocationMode -Path "$Path.invocationMode"
     Assert-Equal -Actual (Get-JsonProperty -Object $Arm -Name 'transferMode' -Path $Path) -Expected $TransferMode -Path "$Path.transferMode"
+    Assert-Equal -Actual (Get-JsonProperty -Object $Arm -Name 'analyzerVersion' -Path $Path) -Expected 'fake-v10' -Path "$Path.analyzerVersion"
+    Assert-Equal -Actual (Get-JsonProperty -Object $Arm -Name 'deterministicRulesVersion' -Path $Path) -Expected 'korean-rules-v8' -Path "$Path.deterministicRulesVersion"
     Assert-Equal -Actual (Get-JsonProperty -Object $Arm -Name 'modelTokenEvidence' -Path $Path) -Expected $ModelTokenEvidence -Path "$Path.modelTokenEvidence"
     foreach ($name in @('caseCount', 'reviewRequiredCount', 'schemaDomainAcceptedCount')) {
         Assert-Equal -Actual (Get-JsonProperty -Object $Arm -Name $name -Path $Path) -Expected 3 -Path "$Path.$name"
@@ -787,8 +813,9 @@ function Assert-ArmReceipt {
     Assert-LatencyReceipt -Latency (Get-JsonProperty -Object $Arm -Name 'attemptLatencyMilliseconds' -Path $Path) -Path "$Path.attemptLatencyMilliseconds"
 
     $safety = Get-JsonProperty -Object $Arm -Name 'safety' -Path $Path
-    Assert-ExactProperties -Object $safety -Expected @('affirmativeTaskPassCount', 'negativeTaskPromotionCount', 'inventedPreciseDateCount', 'unresolvedHallucinationCount') -Path "$Path.safety"
+    Assert-ExactProperties -Object $safety -Expected @('affirmativeTaskPassCount', 'sameDayPreciseDatePassCount', 'negativeTaskPromotionCount', 'inventedPreciseDateCount', 'unresolvedHallucinationCount') -Path "$Path.safety"
     Assert-Equal -Actual (Get-JsonProperty -Object $safety -Name 'affirmativeTaskPassCount' -Path "$Path.safety") -Expected 1 -Path "$Path.safety.affirmativeTaskPassCount"
+    Assert-Equal -Actual (Get-JsonProperty -Object $safety -Name 'sameDayPreciseDatePassCount' -Path "$Path.safety") -Expected 1 -Path "$Path.safety.sameDayPreciseDatePassCount"
     foreach ($name in @('negativeTaskPromotionCount', 'inventedPreciseDateCount', 'unresolvedHallucinationCount')) {
         Assert-Equal -Actual (Get-JsonProperty -Object $safety -Name $name -Path "$Path.safety") -Expected 0 -Path "$Path.safety.$name"
     }
@@ -835,14 +862,15 @@ function Assert-ReceiptContract {
     param(
         [Parameter(Mandatory = $true)][object] $Receipt,
         [Parameter(Mandatory = $true)][string] $RawReceipt,
-        [Parameter(Mandatory = $true)][object] $Fixture
+        [Parameter(Mandatory = $true)][object] $Fixture,
+        [Parameter(Mandatory = $true)][hashtable] $ExpectedSourceHashes
     )
 
     $rootNames = @('schemaVersion', 'fixtureId', 'status', 'classification', 'decision', 'trainingDecision', 'loraDecision', 'ragStatus', 'automaticApply', 'recordedAt', 'scope', 'source', 'model', 'fake', 'liquidAi', 'comparison', 'gpu', 'cleanup')
     Assert-ExactProperties -Object $Receipt -Expected $rootNames -Path 'receipt'
     $constants = @{
-        schemaVersion = 1
-        fixtureId = 'ai-preferred-product-smoke-v1'
+        schemaVersion = 2
+        fixtureId = 'ai-preferred-product-smoke-v2'
         status = 'PASS_NARROW_PRODUCT_PATH'
         classification = 'SOLO_PROVISIONAL/REPORT_ONLY'
         decision = 'NO_GO'
@@ -872,6 +900,7 @@ function Assert-ReceiptContract {
     Assert-RegexValue -Actual (Get-JsonProperty -Object $source -Name 'backendImageId' -Path 'receipt.source') -Pattern '^sha256:[0-9a-f]{64}$' -Path 'receipt.source.backendImageId'
     foreach ($name in @('composeSha256', 'fixtureSha256', 'fixtureSchemaSha256', 'receiptSchemaSha256', 'orchestratorSha256', 'samplerSha256')) {
         Assert-RegexValue -Actual (Get-JsonProperty -Object $source -Name $name -Path 'receipt.source') -Pattern '^[0-9a-f]{64}$' -Path "receipt.source.$name"
+        Assert-Equal -Actual (Get-JsonProperty -Object $source -Name $name -Path 'receipt.source') -Expected $ExpectedSourceHashes[$name] -Path "receipt.source.$name"
     }
 
     $model = Get-JsonProperty -Object $Receipt -Name 'model' -Path 'receipt'
@@ -943,15 +972,22 @@ function Assert-ReceiptContract {
 }
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
-$fixtureSchemaPath = Join-Path $repositoryRoot 'contracts/ai-preferred-product-smoke-fixture.schema.json'
-$receiptSchemaPath = Join-Path $repositoryRoot 'contracts/ai-preferred-product-smoke-receipt.schema.json'
-$fixturePath = Join-Path $repositoryRoot 'fixtures/ai-preferred-product-smoke-cases.json'
+$fixtureSchemaPath = Join-Path $repositoryRoot 'contracts/ai-preferred-product-smoke-fixture-v2.schema.json'
+$receiptSchemaPath = Join-Path $repositoryRoot 'contracts/ai-preferred-product-smoke-receipt-v2.schema.json'
+$fixturePath = Join-Path $repositoryRoot 'fixtures/ai-preferred-product-smoke-cases-v2.json'
+$legacyFixtureSchemaPath = Join-Path $repositoryRoot 'contracts/ai-preferred-product-smoke-fixture.schema.json'
+$legacyReceiptSchemaPath = Join-Path $repositoryRoot 'contracts/ai-preferred-product-smoke-receipt.schema.json'
+$legacyFixturePath = Join-Path $repositoryRoot 'fixtures/ai-preferred-product-smoke-cases.json'
 $composePath = Join-Path $repositoryRoot 'compose.ai-product-smoke.yaml'
 $analysisDirectory = Join-Path $repositoryRoot 'scripts/analysis'
 
 $fixtureSchemaJson = Read-StrictJsonDocument -Path $fixtureSchemaPath -Label 'fixture schema'
 $receiptSchemaJson = Read-StrictJsonDocument -Path $receiptSchemaPath -Label 'receipt schema'
 $fixtureJson = Read-StrictJsonDocument -Path $fixturePath -Label 'fixture'
+
+Assert-Equal -Actual (Get-FileSha256 -Path $legacyFixturePath) -Expected 'd203878046ea6dd4dcdb07418535bc3981699a7f0c88a158f197a0e22aa7476a' -Path 'legacyV1.fixtureSha256'
+Assert-Equal -Actual (Get-FileSha256 -Path $legacyFixtureSchemaPath) -Expected 'afec3a8c875e0ac127b682b2b36a96460c07db45fc7cd575b8a8d8345090745d' -Path 'legacyV1.fixtureSchemaSha256'
+Assert-Equal -Actual (Get-FileSha256 -Path $legacyReceiptSchemaPath) -Expected '865ab3eb073f3019439c9c39f41693b644dfd31a72ece0c5bea4172adc409536' -Path 'legacyV1.receiptSchemaSha256'
 
 Assert-FixtureSchemaContract -Schema $fixtureSchemaJson.Document
 Assert-ReceiptSchemaContract -Schema $receiptSchemaJson.Document
@@ -962,7 +998,15 @@ Assert-PowerShellSources -AnalysisDirectory $analysisDirectory
 if ($PSBoundParameters.ContainsKey('ReceiptPath')) {
     $resolvedReceiptPath = (Resolve-Path -LiteralPath $ReceiptPath -ErrorAction Stop).Path
     $receiptJson = Read-StrictJsonDocument -Path $resolvedReceiptPath -Label 'receipt'
-    Assert-ReceiptContract -Receipt $receiptJson.Document -RawReceipt $receiptJson.Raw -Fixture $fixtureJson.Document
+    $expectedSourceHashes = @{
+        composeSha256 = Get-FileSha256 -Path $composePath
+        fixtureSha256 = Get-FileSha256 -Path $fixturePath
+        fixtureSchemaSha256 = Get-FileSha256 -Path $fixtureSchemaPath
+        receiptSchemaSha256 = Get-FileSha256 -Path $receiptSchemaPath
+        orchestratorSha256 = Get-FileSha256 -Path (Join-Path $analysisDirectory 'Invoke-PersonalMemoAiPreferredSyntheticSmoke.ps1')
+        samplerSha256 = Get-FileSha256 -Path (Join-Path $analysisDirectory 'Measure-PersonalMemoAiProductSmokeGpu.ps1')
+    }
+    Assert-ReceiptContract -Receipt $receiptJson.Document -RawReceipt $receiptJson.Raw -Fixture $fixtureJson.Document -ExpectedSourceHashes $expectedSourceHashes
 }
 
 Write-Output 'AI product smoke source contracts: PASS'

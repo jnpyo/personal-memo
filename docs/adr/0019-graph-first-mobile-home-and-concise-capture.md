@@ -7,6 +7,10 @@ deployed the graph-first frontend while preserving V23 and the existing canonica
 review is in progress. The result remains `SOLO_PROVISIONAL`/`REPORT_ONLY` and is not production
 acceptance.
 
+ADR 0020 later supersedes only this ADR's date-less-clock rule in Decision lines 47–48. The
+graph-first hierarchy, concise capture, proposal-only/manual Apply, and deployment record remain
+historical and authoritative for their original scope.
+
 ## Context
 
 Milestone 7.1 source-qualified a Today-first mobile hierarchy with quick capture, today's unfinished

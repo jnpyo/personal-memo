@@ -530,6 +530,7 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
             key={workspace.review.proposalId}
             review={workspace.review}
             sourceTimeZone={workspace.reviewSourceTimeZone}
+            clientRecordedAt={workspace.reviewClientRecordedAt}
             sourceTimeZoneError={workspace.reviewSourceTimeZoneError}
             relationReviewCandidates={workspace.relationReviewCandidates}
             relationReviewLoading={workspace.relationReviewLoading}

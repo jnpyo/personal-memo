@@ -171,11 +171,18 @@ owner-scoped, idempotent application transaction succeeds. The existing run sche
 and proposal JSONB carry this evolution, so no relational migration or historical JSON rewrite is
 introduced for the proposal contract.
 
-Current `fake-v9` / `korean-rules-v7` adds one grounded parser rule without changing that schema:
-an explicit `오늘|내일|모레 + 오전|오후 + 1–12시` phrase (optional minutes) is resolved against the
-immutable revision instant/source zone as `RELATIVE_EXACT`. A date-less `6시` stays `UNKNOWN`; the
-server does not infer today or PM. The relative local time must map to one unambiguous source-zone
-offset or it remains unresolved.
+Current `fake-v10` / `korean-rules-v8` keeps proposal schema v2 and resolves an explicit
+`오늘|내일|모레 + 오전|오후 + 1–12시` phrase (optional minutes) against the immutable revision
+capture instant/source zone as `RELATIVE_EXACT`. It also resolves the date-less explicit clock family
+with no particle or `에`: bare 1–12시 with optional minutes, explicit 오전/오후, Korean 24-hour clock,
+and `HH:mm`. It derives local occurrences on the revision's capture date, retains only instants
+strictly after capture, and proposes the earliest safe occurrence. Equality is not future. A DST-gap
+occurrence is discarded and a later unique same-day occurrence may be used; any future overlap
+occurrence fails the whole expression closed as `UNKNOWN`. No safe remaining occurrence or a
+missing/invalid source zone also remains `UNKNOWN`; the rule never rolls forward to tomorrow.
+
+This deterministic value is still untrusted proposal data. The existing owner-scoped manual Apply
+is the only canonical mutation boundary, and the rule does not create or deliver an alarm/reminder.
 
 Proposal reads negotiate only the response representation. A missing
 `X-Analysis-Proposal-Schema-Version` header, or value `1`, projects any higher stored version to
@@ -364,7 +371,7 @@ day. Missing ends remain missing; inclusive conversion is never inferred from pr
 Schema and domain validation reject dangling/imprecise/mode-incompatible references, duplicate IDs
 or semantic alternatives, non-later normalized ranges, overflow, candidates on non-EVENT items, and
 multiple alternatives without `CONFLICTING_DATES`. The current domain gate also rejects every
-non-null suggestion. Current `fake-v9` and the localhost semantic-patch adapter keep emitting v2.
+non-null suggestion. Current `fake-v10` and the localhost semantic-patch adapter keep emitting v2.
 
 The PWA can decode and display v3 alternatives but initializes every EVENT schedule to null. A user
 must explicitly choose a displayed alternative before it becomes editable, then use the existing

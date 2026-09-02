@@ -58,6 +58,7 @@ export type ReviewDraft = {
   selectedType: ItemKind | null;
   tags: TagCandidate[];
   items: ReviewItemDraft[];
+  dismissedDateCandidateIds: string[];
   selectedRelationIndexes: number[];
 };
 
@@ -245,6 +246,7 @@ export function createReviewDraft(proposalId: string, proposal: Proposal): Revie
         eventScheduleProposalCandidateId: null,
       };
     }),
+    dismissedDateCandidateIds: [],
     selectedRelationIndexes: [],
   };
   const projectedDraft = selectedType ? changeSelectedType(baseDraft, selectedType) : baseDraft;

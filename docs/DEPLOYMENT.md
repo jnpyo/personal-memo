@@ -179,11 +179,16 @@ qualification으로 사용하지 않는다. `externalProductServiceAccessed=fals
 있다. V21은 기존 title-only EVENT를 backfill하지 않고 scheduled Apply에만 `event_details`를 만든다.
 이 기능 상태는 `SOLO_PROVISIONAL`/`REPORT_ONLY`다. 개인 stack의 deployed schema는 2026-08-27
 owner-authorized backup/restore rehearsal과 forward-only migration 뒤 V22다.
-Source analyzer는 `fake-v9`/`korean-rules-v7`로 명시적
+Source analyzer는 `fake-v10`/`korean-rules-v8`로 명시적
 `오늘|내일|모레 + 오전|오후 + 1–12시`(optional minutes)를 revision source zone의
-`RELATIVE_EXACT` candidate로 만들지만 일정은 여전히 수동 선택이다. 날짜 없는 `6시`는
-`UNKNOWN`이다. TIMED Apply는 immutable revision zone과 start/end offset 일치를 검사하고 DST gap을
-거절하며 overlap의 explicit valid offset을 보존한다. 6B RFC 5545 호환성을 위해 fractional-second
+`RELATIVE_EXACT` candidate로 만든다. 날짜가 없고 무입자 또는 `에`인 explicit clock family—bare
+1–12시 optional minutes, 오전/오후, Korean 24-hour clock, `HH:mm`—도 immutable revision capture
+instant/source zone에서 작성 당일의 엄격히 미래인 가장 이른 safe occurrence만 제안한다. DST-gap
+occurrence는 제외하고 더 늦은 unique same-day 후보를 허용하지만 미래 overlap occurrence가 있으면
+전체 expression은 `UNKNOWN`이다. 남은 safe 후보나 valid source zone이 없어도 `UNKNOWN`이며 다음
+날로 이월하지 않는다. 일정 선택과 final Apply는 계속 수동이고 automatic alarm/reminder는 없다.
+TIMED Apply는 immutable revision zone과 start/end offset 일치를 검사하고 DST gap을 거절하며
+overlap의 explicit valid offset을 보존한다. 6B RFC 5545 호환성을 위해 fractional-second
 TIMED input도 canonical write 전에 거절한다.
 
 Milestone 6A.2a의 proposal-v3 지원은 JSON contract/read projection/PWA display/evaluation-integrity

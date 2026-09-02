@@ -24,6 +24,10 @@ $script:ExpectedModelTag = 'hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q8_0'
 $script:ExpectedModelDigest = '677b7229e7816d6bbdf3f7b777a5321f9719ecd3ab6e2658a2ff3798d3185822'
 $script:ExpectedGateway = 'ollama-local-gateway-v2+local-semantic-patch-v2'
 $script:ExpectedContextLength = 4096
+$script:ExpectedAnalyzerVersion = 'fake-v10'
+$script:ExpectedDeterministicRulesVersion = 'korean-rules-v8'
+$script:ExpectedFixtureClientRecordedAt = '2026-08-28T09:00:00+09:00'
+$script:ExpectedSameDayDue = '2026-08-28T18:00:00+09:00'
 $script:PersonalComposeProject = 'personal-memo-private-win'
 $script:FailurePrefix = 'AI_PRODUCT_SMOKE_SAFE_CODE_'
 
@@ -472,27 +476,38 @@ function Assert-ProposalSafety {
         if (-not (Test-ExactMemoSubstring -Content ([string] $Case.content) -Value $date.surfaceText)) {
             Stop-WithSafeCode 'UNRESOLVED_HALLUCINATION_DETECTED'
         }
-        if ($null -ne $date.value -or @('EXACT_TIME', 'DATE_ONLY', 'RELATIVE_EXACT') -contains [string] $date.precision) {
-            Stop-WithSafeCode 'INVENTED_PRECISE_DATE_DETECTED'
-        }
     }
 
-    if ([string] $Case.expectation -eq 'AFFIRMATIVE_TASK_UNKNOWN_TIME') {
+    if ([string] $Case.expectation -eq 'AFFIRMATIVE_TASK_SAME_DAY_TIME') {
         $parts = @(([string] $Case.content) -split ' ')
         if ($parts.Count -ne 3) {
             Stop-WithSafeCode 'FIXTURE_CASE_SHAPE_INVALID'
         }
         $taskItems = @($items | Where-Object { [string] $_.kind -eq 'TASK' })
         $timeDates = @($dates | Where-Object { [string] $_.surfaceText -ceq $parts[0] })
-        if ([string] $types[0].value -ne 'TASK' -or $taskItems.Count -ne 1 -or $timeDates.Count -ne 1) {
+        if ([string] $types[0].value -ne 'TASK' -or $items.Count -ne 1 -or
+            $taskItems.Count -ne 1 -or
+            $dates.Count -ne 1 -or $timeDates.Count -ne 1) {
             Stop-WithSafeCode 'AFFIRMATIVE_TASK_EXPECTATION_FAILED'
         }
-        $task = $taskItems[0]
+        $task = $items[0]
+        $timeDate = $timeDates[0]
         $expectedTitle = $parts[1] + ' ' + $parts[2]
+        $expectedSourceStart = $parts[0].Length + 1
+        if ($null -eq $task.sourceSpan) {
+            Stop-WithSafeCode 'AFFIRMATIVE_TASK_EXPECTATION_FAILED'
+        }
+        Assert-RequiredProperties -Value $task.sourceSpan -Names @('start', 'end') -FailureCode 'AFFIRMATIVE_TASK_EXPECTATION_FAILED'
         if ([string] $task.title -cne $expectedTitle -or [string] $task.action -cne $parts[2] -or
-            [string] $task.object -cne $parts[1] -or $null -ne $task.dueDateCandidateId -or
-            $null -ne $timeDates[0].value -or [string] $timeDates[0].precision -ne 'UNKNOWN' -or
-            [bool] $timeDates[0].timeSpecified) {
+            [string] $task.object -cne $parts[1] -or
+            [int] $task.sourceSpan.start -ne $expectedSourceStart -or
+            [int] $task.sourceSpan.end -ne ([string] $Case.content).Length -or
+            [string]::IsNullOrWhiteSpace([string] $task.candidateId) -or
+            [string]::IsNullOrWhiteSpace([string] $timeDate.candidateId) -or
+            [string] $task.dueDateCandidateId -cne [string] $timeDate.candidateId -or
+            [string] $timeDate.value -cne $script:ExpectedSameDayDue -or
+            [string] $timeDate.precision -cne 'RELATIVE_EXACT' -or
+            -not [bool] $timeDate.timeSpecified -or @($timeDate.ambiguityReasons).Count -ne 0) {
             Stop-WithSafeCode 'AFFIRMATIVE_TASK_EXPECTATION_FAILED'
         }
     }
@@ -509,9 +524,14 @@ function Assert-ProposalSafety {
 
     $metadata = $Proposal.providerMetadata
     Assert-RequiredProperties -Value $metadata -Names @(
-        'toolCalls', 'cloudTransferMode', 'cloudGatewayVersion', 'cloudProviderId', 'cloudModelVersion',
+        'analyzerVersion', 'deterministicRulesVersion', 'toolCalls', 'cloudTransferMode',
+        'cloudGatewayVersion', 'cloudProviderId', 'cloudModelVersion',
         'cloudOutcome', 'cloudToolCalls', 'cloudMutationCalls'
     ) -FailureCode 'PROVIDER_METADATA_INVALID'
+    if ([string] $metadata.analyzerVersion -cne $script:ExpectedAnalyzerVersion -or
+        [string] $metadata.deterministicRulesVersion -cne $script:ExpectedDeterministicRulesVersion) {
+        Stop-WithSafeCode 'DETERMINISTIC_PROVENANCE_INVALID'
+    }
     if ([int] $metadata.toolCalls -ne 0 -or [int] $metadata.cloudToolCalls -ne 0 -or [int] $metadata.cloudMutationCalls -ne 0) {
         Stop-WithSafeCode 'SIDE_EFFECT_COUNTER_NONZERO'
     }
@@ -531,9 +551,13 @@ function Assert-ProposalSafety {
             [string] $metadata.cloudModelVersion -ne $script:ExpectedModelDigest) {
             Stop-WithSafeCode 'LIQUID_PROVIDER_EVIDENCE_INVALID'
         }
-        if ([string] $Case.expectation -eq 'AFFIRMATIVE_TASK_UNKNOWN_TIME' -and [string] $metadata.cloudOutcome -ne 'SUCCESS') {
+        if ([string] $Case.expectation -eq 'AFFIRMATIVE_TASK_SAME_DAY_TIME' -and [string] $metadata.cloudOutcome -ne 'SUCCESS') {
             Stop-WithSafeCode 'LIQUID_AFFIRMATIVE_MODEL_CALL_FAILED'
         }
+    }
+    return [ordered]@{
+        analyzerVersion = [string] $metadata.analyzerVersion
+        deterministicRulesVersion = [string] $metadata.deterministicRulesVersion
     }
 }
 
@@ -694,6 +718,8 @@ function Invoke-ArmProductFlow {
     $reviewRequired = 0
     $schemaDomainAccepted = 0
     $caseNumber = 0
+    $observedAnalyzerVersion = $null
+    $observedDeterministicRulesVersion = $null
     foreach ($case in @($Fixture.cases)) {
         $caseNumber++
         $memoId = [Guid]::NewGuid().ToString('D')
@@ -729,14 +755,24 @@ function Invoke-ArmProductFlow {
             Stop-WithSafeCode 'PRODUCT_WALL_LATENCY_OUT_OF_RANGE'
         }
         $wallValues.Add([long] $stopwatch.ElapsedMilliseconds)
-        Assert-ProposalSafety -Case $case -Proposal $proposal -Arm $Arm
+        $provenance = Assert-ProposalSafety -Case $case -Proposal $proposal -Arm $Arm
+        if ($null -eq $observedAnalyzerVersion) {
+            $observedAnalyzerVersion = [string] $provenance.analyzerVersion
+            $observedDeterministicRulesVersion = [string] $provenance.deterministicRulesVersion
+        }
+        elseif ([string] $provenance.analyzerVersion -cne $observedAnalyzerVersion -or
+            [string] $provenance.deterministicRulesVersion -cne $observedDeterministicRulesVersion) {
+            Stop-WithSafeCode 'DETERMINISTIC_PROVENANCE_CHANGED_WITHIN_ARM'
+        }
         if ([string] $proposal.memoId -ne $memoId) {
             Stop-WithSafeCode 'PROPOSAL_MEMO_BINDING_INVALID'
         }
         $reviewRequired++
         $schemaDomainAccepted++
     }
-    if ($caseNumber -ne 3 -or $reviewRequired -ne 3 -or $schemaDomainAccepted -ne 3) {
+    if ($caseNumber -ne 3 -or $reviewRequired -ne 3 -or $schemaDomainAccepted -ne 3 -or
+        [string]::IsNullOrWhiteSpace($observedAnalyzerVersion) -or
+        [string]::IsNullOrWhiteSpace($observedDeterministicRulesVersion)) {
         Stop-WithSafeCode 'PRODUCT_CASE_COUNT_INVALID'
     }
     $databaseEvidence = Get-ArmDatabaseEvidence -DockerPath $DockerPath -ComposePath $ComposePath -ProjectName $ProjectName -EnvFile $EnvFile -OwnerId $ownerId -Arm $Arm
@@ -745,6 +781,8 @@ function Invoke-ArmProductFlow {
     return [ordered]@{
         invocationMode = $(if ($Arm -eq 'Fake') { 'UNCERTAINTY_ONLY' } else { 'AI_PREFERRED' })
         transferMode = $(if ($Arm -eq 'Fake') { 'NO_NETWORK' } else { 'LOCAL_MACHINE_MEMO_CONTENT' })
+        analyzerVersion = $observedAnalyzerVersion
+        deterministicRulesVersion = $observedDeterministicRulesVersion
         caseCount = 3
         reviewRequiredCount = 3
         schemaDomainAcceptedCount = 3
@@ -759,6 +797,7 @@ function Invoke-ArmProductFlow {
         attemptLatencyMilliseconds = $databaseEvidence.AttemptLatency
         safety = [ordered]@{
             affirmativeTaskPassCount = 1
+            sameDayPreciseDatePassCount = 1
             negativeTaskPromotionCount = 0
             inventedPreciseDateCount = 0
             unresolvedHallucinationCount = 0
@@ -988,9 +1027,9 @@ function Remove-ExactTempDirectory {
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $composePath = Join-Path $repoRoot 'compose.ai-product-smoke.yaml'
 $backendDockerfilePath = Join-Path $repoRoot 'backend\Dockerfile'
-$fixturePath = Join-Path $repoRoot 'fixtures\ai-preferred-product-smoke-cases.json'
-$fixtureSchemaPath = Join-Path $repoRoot 'contracts\ai-preferred-product-smoke-fixture.schema.json'
-$receiptSchemaPath = Join-Path $repoRoot 'contracts\ai-preferred-product-smoke-receipt.schema.json'
+$fixturePath = Join-Path $repoRoot 'fixtures\ai-preferred-product-smoke-cases-v2.json'
+$fixtureSchemaPath = Join-Path $repoRoot 'contracts\ai-preferred-product-smoke-fixture-v2.schema.json'
+$receiptSchemaPath = Join-Path $repoRoot 'contracts\ai-preferred-product-smoke-receipt-v2.schema.json'
 $samplerPath = Join-Path $repoRoot 'scripts\analysis\Measure-PersonalMemoAiProductSmokeGpu.ps1'
 $sourceContractPath = Join-Path $repoRoot 'scripts\analysis\Test-PersonalMemoAiProductSmokeSourceContracts.ps1'
 $orchestratorPath = $MyInvocation.MyCommand.Path
@@ -1039,8 +1078,10 @@ catch {
     Stop-WithSafeCode 'FIXTURE_PARSE_FAILED'
 }
 Assert-RequiredProperties -Value $fixture -Names @('schemaVersion', 'fixtureId', 'dataClass', 'clientRecordedAt', 'timeZone', 'cases') -FailureCode 'FIXTURE_CONTRACT_INVALID'
-if ([int] $fixture.schemaVersion -ne 1 -or [string] $fixture.fixtureId -ne 'ai-preferred-product-smoke-v1' -or
-    [string] $fixture.dataClass -ne 'PUBLIC_SYNTHETIC_ONLY' -or @($fixture.cases).Count -ne 3) {
+if ([int] $fixture.schemaVersion -ne 2 -or [string] $fixture.fixtureId -ne 'ai-preferred-product-smoke-v2' -or
+    [string] $fixture.dataClass -ne 'PUBLIC_SYNTHETIC_ONLY' -or
+    [string] $fixture.clientRecordedAt -cne $script:ExpectedFixtureClientRecordedAt -or
+    [string] $fixture.timeZone -cne 'Asia/Seoul' -or @($fixture.cases).Count -ne 3) {
     Stop-WithSafeCode 'FIXTURE_CONTRACT_INVALID'
 }
 
@@ -1287,8 +1328,8 @@ if ($fakeMedian -gt 0) {
     $ratio = [Math]::Round(([double] $liquidMedian / [double] $fakeMedian), 4, [MidpointRounding]::AwayFromZero)
 }
 $receipt = [ordered]@{
-    schemaVersion = 1
-    fixtureId = 'ai-preferred-product-smoke-v1'
+    schemaVersion = 2
+    fixtureId = 'ai-preferred-product-smoke-v2'
     status = 'PASS_NARROW_PRODUCT_PATH'
     classification = 'SOLO_PROVISIONAL/REPORT_ONLY'
     decision = 'NO_GO'
@@ -1343,7 +1384,7 @@ if (-not (Test-Path -LiteralPath $ReceiptDirectory)) {
     $null = New-Item -ItemType Directory -Path $ReceiptDirectory
 }
 $timestamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
-$finalReceiptPath = Join-Path $ReceiptDirectory ('ai-preferred-product-smoke-' + $timestamp + '.json')
+$finalReceiptPath = Join-Path $ReceiptDirectory ('ai-preferred-product-smoke-v2-' + $timestamp + '.json')
 $temporaryReceiptPath = $finalReceiptPath + '.tmp-' + $runToken
 try {
     Write-Utf8NoBom -Path $temporaryReceiptPath -Value ((ConvertTo-CompactJson -Value $receipt) + "`n")

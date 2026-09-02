@@ -361,11 +361,16 @@ recipient-scoped UID/sequence/cancellation과 fixed stateless GET/HEAD를 추가
 edge operator/rate bound와 external client smoke는 6D로 보류한다. 이 상태는
 `SOLO_PROVISIONAL`/`REPORT_ONLY`이며 당시 source qualification은 personal deployment나
 personal-data smoke 권한을 확장하지 않았다. 이후 별도 owner 승인의 V22 전환은 아래에 기록한다.
-현재 `fake-v9`/`korean-rules-v7`는 명시적 `오늘|내일|모레 + 오전|오후 + 1–12시`(optional minutes)를
-revision capture instant/source zone의 `RELATIVE_EXACT` candidate로 만들지만 review가 자동 선택하지
-않는다. 날짜 없는 `6시`는 계속 `UNKNOWN`이고 today/PM을 추론하지 않는다. TIMED Apply의 start/end
-offset은 immutable revision zone에서 유효해야 하며 DST gap은 거절하고 overlap의 두 explicit valid
-offset 중 하나는 허용한다.
+현재 `fake-v10`/`korean-rules-v8`는 명시적 `오늘|내일|모레 + 오전|오후 + 1–12시`뿐 아니라 날짜가
+없고 무입자 또는 `에`인 explicit clock family—bare 1–12시 optional minutes, 오전/오후, Korean
+24-hour clock, `HH:mm`—도 immutable revision capture instant/source zone을 기준으로 해석한다. 작성
+당일 후보 중 capture instant보다 엄격히 미래인 가장 이른 safe occurrence를 `RELATIVE_EXACT`
+proposal candidate로 만들며 같은 시각이나 이미 지난 후보는 선택하지 않는다. DST-gap occurrence는
+제외하고 더 늦은 unique same-day 후보를 허용하지만 미래 overlap occurrence가 하나라도 있으면 전체
+expression은 `UNKNOWN`이다. 남은 safe 후보나 valid source zone이 없어도 `UNKNOWN`으로 남긴다. 이
+정책은 proposal-only/manual Apply이며 다음 날 이월,
+자동 Apply, alarm/reminder 생성이나 전달을 허용하지 않는다. TIMED Apply의 start/end offset은 immutable
+revision zone에서 유효해야 하며 DST gap은 거절하고 overlap의 두 explicit valid offset 중 하나는 허용한다.
 
 6A.2a current source-only 격리 qualification은 Flyway V1–V21, backend 813 tests / 0 failures /
 0 errors / 1 skipped, Spotless clean, SpotBugs 0 bugs/errors, frontend lint와 40 files / 324 tests,
@@ -549,7 +554,7 @@ public activation, real-feed qualification과 Google·Apple smoke는 final gate 
 - React 인증 shell은 capability·CSRF·현재 session을 먼저 확인하고, 로그인 전에는 owner domain API를 호출하지 않는다. service worker는 API와 application OAuth/login 경로뿐 아니라 Cloudflare-owned case-insensitive `/cdn-cgi/access(?:/|\?|$)` namespace도 navigation fallback/cache에서 제외하고 `NetworkOnly`로 처리한다. Access control request에 cached app shell/offline UI를 반환해서는 안 된다.
 - owner별 원문 capture draft는 browser localStorage에 동기식으로 보존하고 저장소 실패를 사용자에게 알린다. 제안 수정·새 태그 입력·원문 revision 편집은 통합 dirty 상태로 추적하며, OAuth·로그아웃·브라우저 이탈을 확인하고 service-worker 업데이트는 사용자가 선택하되 미저장 편집 중에는 적용하지 않는다.
 - 인증 통합 테스트는 local 가입·로그인, CSRF, session rotation, owner 격리와 mocked OIDC 연결/해제를 검증한다. 실제 Google credential과 provider network round trip은 사용하거나 검증했다고 간주하지 않는다.
-- 12개 regression + 12개 `VISIBLE_CHALLENGE` 한국어 fixture, version-2 fixture JSON Schema, raw content를 포함하지 않는 결정론적 평가 report, revision 기준 날짜 파서, `field-policy-v2` ambiguity gate, Draft 2020-12 runtime contract와 strict domain validation이 구현되어 있다. version 2는 route/type/signal뿐 아니라 date mention/item/item-source-span 지표도 report에 노출한다. `fake-v9` / `korean-rules-v7`는 기존 날짜·행동·참조·multi-intent 규칙과 원문 기반 순차 item/source-span 추출을 유지하면서 proposal schema v2를 생성하고, default fallback과 미해석 시간·행동 cue를 보수적으로 model-assisted review로 보낸다. guarded affirmative `접속하기`는 TASK action으로 인정하지만 부정·설명형은 명령으로 승격하지 않는다. 명시적인 `오늘|내일|모레 + 오전|오후 + 1–12시`(optional minutes)는 revision instant/source zone에서 `RELATIVE_EXACT`지만, `6시 디스코드 접속하기`의 item은 action `접속하기`, object `디스코드`인 TASK이고 날짜 없는 `6시`는 `UNKNOWN`으로 남아 today/PM이나 정밀 due를 만들지 않는다. v2의 각 date candidate에는 proposal-local `candidateId`, 각 item에는 nullable `dueDateCandidateId`가 필수이며, TASK item만 존재하는 정밀 date candidate를 참조할 수 있다. schema v1 proposal은 recovery와 outcome 재구성을 위해 계속 지원한다. `providerMetadata`의 다섯 version은 각각 1–64자, 필수 `toolCalls`는 0–100이며 proposal은 64 KiB, metadata는 8 KiB로 제한된다. 이 변경은 기존 `analysis_runs.schema_version`과 `analysis_proposals.proposal_json`을 사용하므로 Flyway migration이나 과거 JSON rewrite가 필요하지 않다.
+- 12개 regression + 12개 `VISIBLE_CHALLENGE` 한국어 fixture, version-2 fixture JSON Schema, raw content를 포함하지 않는 결정론적 평가 report, revision 기준 날짜 파서, `field-policy-v2` ambiguity gate, Draft 2020-12 runtime contract와 strict domain validation이 구현되어 있다. version 2는 route/type/signal뿐 아니라 date mention/item/item-source-span 지표도 report에 노출한다. `fake-v10` / `korean-rules-v8`는 기존 날짜·행동·참조·multi-intent 규칙과 원문 기반 순차 item/source-span 추출을 유지하면서 proposal schema v2를 생성하고, default fallback과 미해석 시간·행동 cue를 보수적으로 model-assisted review로 보낸다. guarded affirmative `접속하기`는 TASK action으로 인정하지만 부정·설명형은 명령으로 승격하지 않는다. 명시적인 `오늘|내일|모레 + 오전|오후 + 1–12시`(optional minutes)는 revision instant/source zone에서 `RELATIVE_EXACT`다. 날짜가 없고 무입자 또는 `에`인 explicit clock family—bare 1–12시 optional minutes, 오전/오후, Korean 24-hour clock, `HH:mm`—도 같은 immutable capture context에서 작성 당일의 엄격히 미래인 가장 이른 safe occurrence만 `RELATIVE_EXACT`로 만든다. DST-gap occurrence는 제외하고 더 늦은 unique same-day 후보를 허용하지만 미래 overlap occurrence가 있으면 전체 expression은 `UNKNOWN`이다. 남은 safe 후보나 valid source zone이 없어도 `UNKNOWN`이다. 이 정밀화도 untrusted proposal일 뿐 final Apply 전에는 canonical due, schedule, alarm/reminder를 만들지 않는다. v2의 각 date candidate에는 proposal-local `candidateId`, 각 item에는 nullable `dueDateCandidateId`가 필수이며, TASK item만 존재하는 정밀 date candidate를 참조할 수 있다. schema v1 proposal은 recovery와 outcome 재구성을 위해 계속 지원한다. `providerMetadata`의 다섯 version은 각각 1–64자, 필수 `toolCalls`는 0–100이며 proposal은 64 KiB, metadata는 8 KiB로 제한된다. 이 변경은 기존 `analysis_runs.schema_version`과 `analysis_proposals.proposal_json`을 사용하므로 Flyway migration이나 과거 JSON rewrite가 필요하지 않다.
 - proposal 단건 GET과 recovery list는 `X-Analysis-Proposal-Schema-Version`을 maximum-understood
   version으로 협상한다. Invalid/combined 값은 `422 UNSUPPORTED_PROPOSAL_SCHEMA_VERSION`이고 성공
   응답은 `Cache-Control: no-store`와 schema-header `Vary`를 포함한다.
@@ -580,7 +585,7 @@ public activation, real-feed qualification과 Google·Apple smoke는 final gate 
 - `GET /events`는 기본 50·최대 100의 owner-scoped no-store read다. current active memo revision의
   unarchived, scheduled, current `APPLIED` EVENT만 title/schedule/source zone으로 반환하고 raw memo,
   proposal/selection/application provenance와 title-only EVENT는 제외한다.
-- 공개된 합성 `VISIBLE_CHALLENGE`는 blind/general accuracy가 아니며 계속 report-only다. regression hard gate는 proposal schema/domain validity, 기존 route/type/signal wrong-local 0, invented precise date 0, local overflow 0, missing overflow signal 0, unresolved action/object hallucination 0으로 제한한다. 마지막으로 기록된 `fake-v8` 공개 합성 실행은 schema/domain 24/24, wrong-local·invented precise date·local overflow·missing overflow signal·unresolved action/object hallucination 모두 0이며, 이전 `fake-v7` 기록과 같은 aggregate를 재현했다. item cardinality는 regression 11/12, visible challenge 12/12 case이고 필수 gold source span recall은 regression 15/15·visible challenge 14/14개다. regression에는 default fallback scaffold로 인한 추가 span 1개가 있다. 현재 source `fake-v9`/`korean-rules-v7`의 새 relative-day-time 규칙은 focused tests로만 보강됐고 이 과거 v8 aggregate를 v9 측정으로 다시 이름 붙이지 않는다. date mention/item/item-source-span quality rate와 semantic false-confident-local은 독립적인 2인 gold adjudication과 외부 blind 실행 전까지 진단 지표다. evaluation dataset v2에는 date-to-item binding gold가 없으므로 report는 `SUPPORTED_NOT_SCORED_DATASET_V2`만 선언하고 binding 품질을 hard metric으로 승격하지 않는다. strict v2 2인 review schema/verifier와 immutable v2 release를 참조하는 ID-only v3 binding overlay integrity validator는 준비됐지만, 실제 human review manifest·adjudication·v3 dataset·binding score·`PASS`는 없다. `docs/EVALUATION_LABEL_POLICY.md`도 human approval 전 draft다. 저장소 밖의 독립적 human-curated version-2 envelope만 받는 external blind harness와 aggregate-only privacy 경계는 구현되어 있지만 실제 blind 데이터와 사전 등록된 metric `PASS` 정책은 저장소에 없으며 실행했다고 주장하지 않는다. 자세한 진입 조건은 `docs/EVALUATION.md`를 따른다.
+- 공개된 합성 `VISIBLE_CHALLENGE`는 blind/general accuracy가 아니며 계속 report-only다. regression hard gate는 proposal schema/domain validity, 기존 route/type/signal wrong-local 0, invented precise date 0, local overflow 0, missing overflow signal 0, unresolved action/object hallucination 0으로 제한한다. 마지막으로 기록된 `fake-v8` 공개 합성 실행은 schema/domain 24/24, wrong-local·invented precise date·local overflow·missing overflow signal·unresolved action/object hallucination 모두 0이며, 이전 `fake-v7` 기록과 같은 aggregate를 재현했다. item cardinality는 regression 11/12, visible challenge 12/12 case이고 필수 gold source span recall은 regression 15/15·visible challenge 14/14개다. regression에는 default fallback scaffold로 인한 추가 span 1개가 있다. `fake-v9`/`korean-rules-v7`의 relative-day-time 규칙과 현재 source `fake-v10`/`korean-rules-v8`의 date-less future-occurrence 규칙은 focused source tests로만 보강됐고 이 과거 v8 aggregate를 v9 또는 v10 측정으로 다시 이름 붙이지 않는다. date mention/item/item-source-span quality rate와 semantic false-confident-local은 독립적인 2인 gold adjudication과 외부 blind 실행 전까지 진단 지표다. evaluation dataset v2에는 date-to-item binding gold가 없으므로 report는 `SUPPORTED_NOT_SCORED_DATASET_V2`만 선언하고 binding 품질을 hard metric으로 승격하지 않는다. strict v2 2인 review schema/verifier와 immutable v2 release를 참조하는 ID-only v3 binding overlay integrity validator는 준비됐지만, 실제 human review manifest·adjudication·v3 dataset·binding score·`PASS`는 없다. `docs/EVALUATION_LABEL_POLICY.md`도 human approval 전 draft다. 저장소 밖의 독립적 human-curated version-2 envelope만 받는 external blind harness와 aggregate-only privacy 경계는 구현되어 있지만 실제 blind 데이터와 사전 등록된 metric `PASS` 정책은 저장소에 없으며 실행했다고 주장하지 않는다. 자세한 진입 조건은 `docs/EVALUATION.md`를 따른다.
 - 공개 v2 human review 실행을 위한 두 도구도 명시 실행 전용으로 준비한다. `PublicGoldReviewPacketRunner`는 같은 clean candidate commit을 읽기 전과 원자 게시 직전에 확인하고 strict public release를 검증한 뒤 case ID/split, 공개 source/base instant/time zone과 date/item gold만 수동 허용 목록으로 렌더링하며 fixture notes, route/type/tag/signal, analyzer/Fake/report/peer-review data, verdict form과 manifest 생성을 배제한다. 모든 source span은 반개구간 UTF-16 숫자와 강조 조각으로 표시한다. 실제 두 사람이 저장소 밖에 만든 완전한 manifest 두 개가 있을 때만 `ExternalPublicGoldReviewRunner`가 absolute/non-link/distinct input, strict UTF-8/JSON/schema, exact release, distinct reviewer token, attestation, clean pinned commit을 확인하고 aggregate-only summary를 원자적으로 쓴다. summary의 `CONSENSUS_ACCEPTED`도 human identity·independence·policy approval·adjudication·v3 binding·blind `PASS`·provider readiness를 증명하지 않는다. 일반 Maven/CI는 두 Runner를 실행하지 않는다.
 - 기본 Fake + `UNCERTAINTY_ONLY`에서 명확한 결과는 gateway 호출 없이
   `LOCAL`/`REVIEW_REQUIRED`로 저장되고 모호한 결과만 `NO_NETWORK` Fake를 거친다. personal overlay는
@@ -874,6 +879,40 @@ public activation, real-feed qualification과 Google·Apple smoke는 final gate 
   `rollback-pre-m72-20260901-074019Z` tags로 보존했다. Owner는 배포 화면의 시각 검토를 시작했지만
   final physical-device acceptance는 열려 있다. 상태는
   `SOURCE_QUALIFIED_PERSONAL_DEPLOYED_VISUAL_REVIEW_IN_PROGRESS`, `SOLO_PROVISIONAL/REPORT_ONLY`다.
+- 2026-09-02 M7.3는 공개 synthetic `6시 디스코드 접속하기`처럼 날짜와 오전/오후가 없는
+  1–12시 UNKNOWN 후보를 proposal review 안의 compact 명시 선택으로 처리한다. 날짜와 AM/PM은
+  초기 선택하지 않고 `오늘`도 사용자 action일 때만 채운다. TASK `까지`/EVENT `부터` 방향만
+  좁게 연결하며, `시간 없이 두기`도 explicit draft-only 선택이다. Confirm 뒤에도 기존 final Apply가
+  필요하고 raw memo/proposal/canonical data는 그 전까지 바뀌지 않는다. Source-zone wall-clock
+  resolution은 DST gap을 거절하고 overlap offset을 사용자에게 고르게 한다. Exact TASK due도 server
+  canonical write 전에 immutable revision zone과 offset을 대조하며 mismatch는
+  `DUE_ZONE_OFFSET_MISMATCH`다. Frontend ESLint, 52 files/505 Vitest tests, TypeScript 5.9.3, Vite
+  7.3.6 PWA build와 OpenAPI YAML parse는 통과했다. Backend validator/unit/PostgreSQL no-write test와
+  focused Playwright flow는 source에 추가됐지만 Maven/PostgreSQL/isolated E2E는 실행하지 않았다.
+  Personal data/runtime/deployment는 건드리지 않았다. 상태는
+  `SOURCE_IMPLEMENTED_FRONTEND_GATES_PASS_BACKEND_AND_E2E_PENDING`,
+  `SOLO_PROVISIONAL/REPORT_ONLY`다.
+- 2026-09-02 M7.4는 owner가 지정한 date-less-clock 기본을 ADR 0020으로 확정했다. 현재
+  `fake-v10`/`korean-rules-v8` 계약은 무입자/`에` bare 1–12시 optional minutes, 오전/오후, Korean
+  24-hour clock, `HH:mm`을 immutable revision `client_recorded_at`/`source_time_zone`에서 해석한다.
+  작성 당일 capture instant보다 엄격히 미래인 가장 이른 safe occurrence만 `RELATIVE_EXACT`
+  proposal로 제안한다. Equality는 미래가 아니다. DST-gap occurrence는 제외하고 더 늦은 unique
+  same-day 후보를 허용하지만 미래 overlap occurrence가 있으면 전체 expression은 `UNKNOWN`이다.
+  남은 safe 후보나 valid source zone이 없어도 `UNKNOWN`이고 다음 날로 넘기지 않는다. 과거
+  fake-v8/fake-v9 평가·shadow·배포 기록은 당시 사실로 보존하며 fake-v10 결과로 relabel하지 않는다.
+  Immutable product-smoke v1 fixture/schema/receipt는 보존하고 별도 public-synthetic v2 source
+  contract를 추가했다. V2는 `2026-08-28T09:00:00+09:00`/`Asia/Seoul`에서 `6시 디스코드
+  접속하기`를 grounded TASK와 `2026-08-28T18:00:00+09:00` `RELATIVE_EXACT` due candidate로
+  고정하고 TASK due reference를 요구한다. Receipt v2는 Apply/alarm/personal/canonical access와
+  canonical write delta 0을 유지한다. 이 v2 Docker/Ollama product smoke와 receipt는 실행하지 않아
+  runtime PASS, latency, GPU/VRAM, Fake/LiquidAI comparison evidence는 없다.
+  이 결정은 proposal-only/manual Apply, no automatic alarm/reminder 경계를 유지한다. Focused
+  parser/analyzer/validator 106/106과 전체 non-PostgreSQL backend unit suite 663 executed/252
+  environment-gated skipped/0 failed가 통과했다. Frontend ESLint, 52 files/529 Vitest tests,
+  TypeScript/PWA build와 v2 product-smoke source-contract gate도 통과했다. PostgreSQL integration,
+  isolated Playwright, actual Docker/Ollama product smoke는 실행하지 않았다. 상태는
+  `SOURCE_IMPLEMENTED_UNIT_AND_FRONTEND_GATES_PASS_POSTGRES_E2E_RUNTIME_PENDING`,
+  `SOLO_PROVISIONAL/REPORT_ONLY`다.
 - Docker Desktop 4.88.1 업데이트 후 `dockerInference`, secrets engine, `sailor-ingest.sock`순으로
   Windows host AF_UNIX stale-endpoint 실패가 재현됐다. 승인된 runtime-only 격리 외에 factory
   reset, clean/purge, volume/VHDX 삭제는 하지 않았고 Docker는 stopped로 두었다. 로컬 진단 묶음은

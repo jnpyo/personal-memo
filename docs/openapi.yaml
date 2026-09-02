@@ -986,7 +986,7 @@ paths:
                         due: 0
                     byAnalysisVersion:
                       - route: LOCAL
-                        analyzerVersion: fake-v9
+                        analyzerVersion: fake-v10
                         promptVersion: none
                         localModelVersion: none
                         embeddingModelVersion: none
@@ -2562,6 +2562,12 @@ components:
           format: date-time
         pinned:
           type: boolean
+        clientRecordedAt:
+          type: [string, "null"]
+          format: date-time
+          description: >
+            Immutable client capture instant for the current memo revision. Current reads include it;
+            old idempotency replays serialized before this additive field may omit it.
         sourceTimeZone:
           type: string
           minLength: 1
@@ -2660,7 +2666,11 @@ components:
         RELATIVE_EXACT use an offset timestamp with timeSpecified=true.
         APPROXIMATE and UNKNOWN require a null value and are never coerced to an instant. The
         timeZone field remains a validated compatibility input, but the server replaces it with
-        the immutable memo revision's source time zone before persisting task_details.
+        the immutable memo revision's source time zone before persisting task_details. For
+        EXACT_TIME and RELATIVE_EXACT, the explicit offset must be valid at that local date-time in
+        the locked source zone; DST gaps and zone/offset mismatches fail closed, while either valid
+        offset in an overlap is preserved. Invalid exact offsets return
+        DUE_ZONE_OFFSET_MISMATCH.
       properties:
         surfaceText:
           type: string
@@ -2677,7 +2687,8 @@ components:
           maxLength: 64
           description: >-
             Recognized IANA compatibility input. It cannot select the canonical persisted zone;
-            task_details.source_time_zone comes from the immutable analyzed memo revision.
+            task_details.source_time_zone comes from the immutable analyzed memo revision. Exact
+            values are also checked against that locked zone before canonical persistence.
         timeSpecified:
           type: boolean
     EventScheduleSelection:

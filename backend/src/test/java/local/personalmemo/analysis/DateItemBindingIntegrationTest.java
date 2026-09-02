@@ -151,6 +151,96 @@ class DateItemBindingIntegrationTest extends PostgresIntegrationTestSupport {
         .containsExactly("America/New_York");
   }
 
+  @Test
+  void exactDueOffsetMismatchWithImmutableRevisionZoneWritesNothing() throws Exception {
+    UUID memoId = UUID.randomUUID();
+    String rawMemo = "6시 디스코드 접속하기";
+    var createBody =
+        Map.of(
+            "id",
+            memoId,
+            "content",
+            rawMemo,
+            "clientCreatedAt",
+            OffsetDateTime.parse("2026-08-24T10:00:00-04:00"),
+            "timeZone",
+            "America/New_York");
+    var created =
+        mvc.perform(
+                post("/api/v1/memos")
+                    .header("Idempotency-Key", "binding-due-offset-create")
+                    .contentType("application/json")
+                    .content(json.writeValueAsBytes(createBody)))
+            .andReturn();
+    assertThat(created.getResponse().getStatus()).isEqualTo(201);
+
+    var started = startAnalysis(memoId, "binding-due-offset-start", 1);
+    assertThat(started.getResponse().getStatus()).isEqualTo(200);
+    UUID proposalId = UUID.fromString(response(started).path("proposalId").asText());
+    var proposalResult =
+        mvc.perform(
+                get("/api/v1/analysis-proposals/{id}", proposalId)
+                    .header("X-Analysis-Proposal-Schema-Version", "2"))
+            .andReturn();
+    assertThat(proposalResult.getResponse().getStatus()).isEqualTo(200);
+    JsonNode proposal = response(proposalResult);
+    String title = proposal.at("/suggestedTitle/value").asText().strip();
+    String proposalCandidateId = proposal.at("/itemCandidates/0/candidateId").asText();
+
+    Map<String, Object> due =
+        Map.of(
+            "surfaceText", "6시",
+            "value", "2026-08-24T18:00:00+09:00",
+            "precision", "EXACT_TIME",
+            "timeZone", "Asia/Seoul",
+            "timeSpecified", true);
+    Map<String, Object> item =
+        Map.of(
+            "proposalCandidateId", proposalCandidateId,
+            "kind", "TASK",
+            "title", title,
+            "due", due);
+    Map<String, Object> selection =
+        Map.of(
+            "expectedMemoRevision", proposal.path("memoRevision").asInt(),
+            "selectedType", "TASK",
+            "title", title,
+            "selectedTags", List.of(),
+            "items", List.of(item),
+            "selectedRelations", List.of());
+
+    var rejected = applyProposal(proposalId, "binding-due-offset-apply", selection);
+
+    assertThat(rejected.getResponse().getStatus()).isEqualTo(422);
+    assertThat(response(rejected).path("code").asText()).isEqualTo("DUE_ZONE_OFFSET_MISMATCH");
+    assertThat(
+            db.sql(
+                    "select count(*) from analysis_applications "
+                        + "where memo_id=:memo and owner_id=:owner")
+                .param("memo", memoId)
+                .param("owner", OWNER_ID)
+                .query(Long.class)
+                .single())
+        .isZero();
+    assertThat(
+            db.sql("select count(*) from memo_items where memo_id=:memo and owner_id=:owner")
+                .param("memo", memoId)
+                .param("owner", OWNER_ID)
+                .query(Long.class)
+                .single())
+        .isZero();
+    assertThat(
+            db.sql(
+                    "select count(*) from task_details t "
+                        + "join memo_items i on i.id=t.memo_item_id "
+                        + "where i.memo_id=:memo and i.owner_id=:owner")
+                .param("memo", memoId)
+                .param("owner", OWNER_ID)
+                .query(Long.class)
+                .single())
+        .isZero();
+  }
+
   private Map<String, Object> reviewedSelection(JsonNode proposal) {
     Map<String, JsonNode> datesById = new LinkedHashMap<>();
     for (JsonNode date : proposal.path("dateCandidates")) {

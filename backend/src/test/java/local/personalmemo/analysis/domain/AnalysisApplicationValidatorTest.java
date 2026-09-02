@@ -57,6 +57,46 @@ class AnalysisApplicationValidatorTest {
   }
 
   @Test
+  void exactDueOffsetMustMatchTheImmutableRevisionZoneAndRejectDstGaps() {
+    Due mismatched =
+        new Due("11월 25일 18시", "2026-11-25T18:00:00+09:00", "EXACT_TIME", "Asia/Seoul", true);
+    var mismatchedSelection = validator.validate(apply(mismatched));
+
+    assertThatThrownBy(
+            () -> validator.canonicalizeDueTimeZone(mismatchedSelection, "America/New_York"))
+        .isInstanceOf(DomainException.class)
+        .extracting(error -> ((DomainException) error).code())
+        .isEqualTo("DUE_ZONE_OFFSET_MISMATCH");
+
+    Due gap =
+        new Due(
+            "3월 8일 2시 30분",
+            "2026-03-08T02:30:00-05:00",
+            "RELATIVE_EXACT",
+            "America/New_York",
+            true);
+    var gapSelection = validator.validate(apply(gap));
+
+    assertThatThrownBy(() -> validator.canonicalizeDueTimeZone(gapSelection, "America/New_York"))
+        .isInstanceOf(DomainException.class)
+        .extracting(error -> ((DomainException) error).code())
+        .isEqualTo("DUE_ZONE_OFFSET_MISMATCH");
+  }
+
+  @Test
+  void exactDuePreservesEitherExplicitOffsetDuringADstOverlap() {
+    for (String value : List.of("2026-11-01T01:30:00-04:00", "2026-11-01T01:30:00-05:00")) {
+      Due overlap = new Due("11월 1일 1시 30분", value, "EXACT_TIME", "America/New_York", true);
+
+      var canonical =
+          validator.canonicalizeDueTimeZone(validator.validate(apply(overlap)), "America/New_York");
+
+      assertThat(canonical.items().getFirst().due().originalValue()).isEqualTo(value);
+      assertThat(canonical.items().getFirst().due().timeZone()).isEqualTo("America/New_York");
+    }
+  }
+
+  @Test
   void timedEventPreservesAnExplicitMissingEndWithoutInventingDuration() {
     EventSchedule schedule =
         new EventSchedule("TIMED", "2026-08-24T18:00:00+09:00", null, "Asia/Seoul");

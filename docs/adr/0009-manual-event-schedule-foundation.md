@@ -3,6 +3,9 @@
 - Status: Accepted for source implementation; `SOLO_PROVISIONAL` / `REPORT_ONLY`
 - Date: 2026-08-24
 - Deployment status: personal database migration, rebuild, and product smoke are not authorized
+- Partial supersession: ADR 0020 supersedes only the date-less-clock rule in Decision 2 and its
+  matching consequence. All manual selection, canonical Apply, source-zone, and schedule boundaries
+  in this ADR remain in force.
 
 ## Context
 

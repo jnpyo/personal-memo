@@ -34,7 +34,7 @@ import tools.jackson.databind.node.ObjectNode;
 @PostgresIntegration
 class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
   private static final AnalysisProvenance FAKE_PROVENANCE =
-      new AnalysisProvenance("fake-v9", "none", "none", "none");
+      new AnalysisProvenance("fake-v10", "none", "none", "none");
 
   @MockitoBean private LocalAnalyzer localAnalyzer;
   @MockitoBean private CloudAnalysisGateway cloudGateway;
@@ -592,7 +592,7 @@ class AnalysisRoutingIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(state.route()).isEqualTo(expectedRoute);
     assertThat(state.status()).isEqualTo("REVIEW_REQUIRED");
     assertThat(state.schemaVersion()).isEqualTo("2");
-    assertThat(state.analyzerVersion()).isEqualTo("fake-v9");
+    assertThat(state.analyzerVersion()).isEqualTo("fake-v10");
     assertThat(state.promptVersion()).isEqualTo("none");
     assertThat(state.localModelVersion()).isEqualTo("none");
     assertThat(state.embeddingModelVersion()).isEqualTo("none");

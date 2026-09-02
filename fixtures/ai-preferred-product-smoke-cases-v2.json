@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 2,
+  "fixtureId": "ai-preferred-product-smoke-v2",
+  "dataClass": "PUBLIC_SYNTHETIC_ONLY",
+  "clientRecordedAt": "2026-08-28T09:00:00+09:00",
+  "timeZone": "Asia/Seoul",
+  "cases": [
+    {
+      "id": "affirmative-task-same-day-time",
+      "content": "6시 디스코드 접속하기",
+      "expectation": "AFFIRMATIVE_TASK_SAME_DAY_TIME"
+    },
+    {
+      "id": "negated-non-task",
+      "content": "접속하기 싫다",
+      "expectation": "NEGATED_NON_TASK"
+    },
+    {
+      "id": "descriptive-non-task",
+      "content": "접속하기 좋은 시간",
+      "expectation": "DESCRIPTIVE_NON_TASK"
+    }
+  ]
+}

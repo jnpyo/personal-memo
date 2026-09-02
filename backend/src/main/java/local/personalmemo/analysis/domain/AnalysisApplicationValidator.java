@@ -59,8 +59,7 @@ public class AnalysisApplicationValidator {
   }
 
   public ValidatedApply canonicalizeDueTimeZone(ValidatedApply selection, String sourceTimeZone) {
-    String canonicalTimeZone = requireTimeZone(sourceTimeZone, "memo source time zone");
-    ZoneId zone = ZoneId.of(canonicalTimeZone);
+    ZoneId zone = ZoneId.of(requireTimeZone(sourceTimeZone, "memo source time zone"));
     List<ValidatedItem> items =
         selection.items().stream()
             .map(
@@ -71,16 +70,7 @@ public class AnalysisApplicationValidator {
                       item.proposalCandidateId(),
                       item.kind(),
                       item.title(),
-                      due == null
-                          ? null
-                          : new ValidatedDue(
-                              due.surfaceText(),
-                              due.originalValue(),
-                              due.precision(),
-                              canonicalTimeZone,
-                              due.timeSpecified(),
-                              due.dueInstant(),
-                              due.dueLocalDate()),
+                      due == null ? null : canonicalizeDue(due, zone),
                       eventSchedule == null
                           ? null
                           : canonicalizeEventSchedule(eventSchedule, zone));
@@ -94,6 +84,24 @@ public class AnalysisApplicationValidator {
         items,
         selection.selectedRelations(),
         selection.selectionSchemaVersion());
+  }
+
+  private ValidatedDue canonicalizeDue(ValidatedDue due, ZoneId zone) {
+    if ("EXACT_TIME".equals(due.precision()) || "RELATIVE_EXACT".equals(due.precision())) {
+      validateOffsetMatchesZone(
+          due.originalValue(),
+          zone,
+          "DUE_ZONE_OFFSET_MISMATCH",
+          "An exact due offset must match the immutable memo revision time zone.");
+    }
+    return new ValidatedDue(
+        due.surfaceText(),
+        due.originalValue(),
+        due.precision(),
+        zone.getId(),
+        due.timeSpecified(),
+        due.dueInstant(),
+        due.dueLocalDate());
   }
 
   private ValidatedEventSchedule canonicalizeEventSchedule(
@@ -116,11 +124,18 @@ public class AnalysisApplicationValidator {
   }
 
   private void validateEventOffset(String originalValue, ZoneId zone) {
+    validateOffsetMatchesZone(
+        originalValue,
+        zone,
+        "EVENT_SCHEDULE_ZONE_OFFSET_MISMATCH",
+        "A timed event offset must match the immutable memo revision time zone.");
+  }
+
+  private void validateOffsetMatchesZone(
+      String originalValue, ZoneId zone, String errorCode, String errorMessage) {
     OffsetDateTime value = OffsetDateTime.parse(originalValue);
     if (!zone.getRules().getValidOffsets(value.toLocalDateTime()).contains(value.getOffset())) {
-      throw invalid(
-          "EVENT_SCHEDULE_ZONE_OFFSET_MISMATCH",
-          "A timed event offset must match the immutable memo revision time zone.");
+      throw invalid(errorCode, errorMessage);
     }
   }
 

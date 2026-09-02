@@ -111,16 +111,230 @@ class KoreanDateParserTest {
   }
 
   @Test
-  void emitsAnUnknownCandidateForAnOtherwiseUnparsedBareTimeCue() {
+  void resolvesABareTwelveHourClockToTheEarliestStrictlyFutureTimeToday() {
     var dates = parser.parse("6시 디스코드 접속하기", BASE, SEOUL);
 
     assertThat(dates).hasSize(1);
     assertThat(dates.getFirst().surfaceText()).isEqualTo("6시");
-    assertThat(dates.getFirst().value()).isNull();
-    assertThat(dates.getFirst().precision()).isEqualTo(DatePrecision.UNKNOWN);
-    assertThat(dates.getFirst().timeSpecified()).isFalse();
-    assertThat(dates.getFirst().ambiguityReasons()).containsExactly(AmbiguityReason.IMPRECISE_DATE);
-    assertThat(parser.unparsedTemporalCueCount(dates)).isEqualTo(1);
+    assertThat(dates.getFirst().value()).isEqualTo("2026-08-05T18:00:00+09:00");
+    assertThat(dates.getFirst().precision()).isEqualTo(DatePrecision.RELATIVE_EXACT);
+    assertThat(dates.getFirst().timeSpecified()).isTrue();
+    assertThat(dates.getFirst().ambiguityReasons()).isEmpty();
+    assertThat(parser.unparsedTemporalCueCount(dates)).isZero();
+  }
+
+  @Test
+  void choosesTheMorningCandidateWhenItIsStillInTheFuture() {
+    var result = parser.parse("7시 약속", Instant.parse("2026-08-04T21:30:00Z"), SEOUL).getFirst();
+
+    assertThat(result.value()).isEqualTo("2026-08-05T07:00:00+09:00");
+    assertThat(result.precision()).isEqualTo(DatePrecision.RELATIVE_EXACT);
+  }
+
+  @Test
+  void anEqualMorningInstantIsNotFutureAndFallsThroughToTheAfternoonCandidate() {
+    var result = parser.parse("7시 약속", Instant.parse("2026-08-04T22:00:00Z"), SEOUL).getFirst();
+
+    assertThat(result.value()).isEqualTo("2026-08-05T19:00:00+09:00");
+    assertThat(result.precision()).isEqualTo(DatePrecision.RELATIVE_EXACT);
+  }
+
+  @Test
+  void leavesABareClockUnknownWhenBothSameDayCandidatesHavePassed() {
+    var result = parser.parse("7시 약속", Instant.parse("2026-08-05T11:00:00Z"), SEOUL).getFirst();
+
+    assertThat(result.value()).isNull();
+    assertThat(result.precision()).isEqualTo(DatePrecision.UNKNOWN);
+    assertThat(result.timeSpecified()).isFalse();
+    assertThat(result.ambiguityReasons()).containsExactly(AmbiguityReason.IMPRECISE_DATE);
+  }
+
+  @Test
+  void resolvesOptionalValidMinutesAndTheAtParticleWithoutDroppingTheSurface() {
+    var result = parser.parse("7시 30분에 접속", BASE, SEOUL).getFirst();
+
+    assertThat(result.surfaceText()).isEqualTo("7시 30분에");
+    assertThat(result.value()).isEqualTo("2026-08-05T19:30:00+09:00");
+    assertThat(result.precision()).isEqualTo(DatePrecision.RELATIVE_EXACT);
+  }
+
+  @Test
+  void explicitMeridiemUsesOnlyThatSameDayCandidate() {
+    var futureMorning =
+        parser.parse("오전 7시 약속", Instant.parse("2026-08-04T21:30:00Z"), SEOUL).getFirst();
+    var passedMorning = parser.parse("오전 7시 약속", BASE, SEOUL).getFirst();
+    var futureAfternoon = parser.parse("오후 7시 약속", BASE, SEOUL).getFirst();
+
+    assertThat(futureMorning.value()).isEqualTo("2026-08-05T07:00:00+09:00");
+    assertThat(passedMorning.value()).isNull();
+    assertThat(passedMorning.precision()).isEqualTo(DatePrecision.UNKNOWN);
+    assertThat(futureAfternoon.value()).isEqualTo("2026-08-05T19:00:00+09:00");
+  }
+
+  @Test
+  void treatsKoreanThirteenToTwentyThreeAndColonClocksAsTwentyFourHourTime() {
+    var koreanWithoutMinutes = parser.parse("19시에 출발", BASE, SEOUL).getFirst();
+    var korean = parser.parse("18시 5분에 출발", BASE, SEOUL).getFirst();
+    var paddedMorning =
+        parser.parse("07시 출발", Instant.parse("2026-08-04T21:30:00Z"), SEOUL).getFirst();
+    var colon = parser.parse("18:30에 출발", BASE, SEOUL).getFirst();
+    var passedColon = parser.parse("7:00 출발", BASE, SEOUL).getFirst();
+
+    assertThat(koreanWithoutMinutes.value()).isEqualTo("2026-08-05T19:00:00+09:00");
+    assertThat(korean.value()).isEqualTo("2026-08-05T18:05:00+09:00");
+    assertThat(korean.precision()).isEqualTo(DatePrecision.RELATIVE_EXACT);
+    assertThat(paddedMorning.value()).isEqualTo("2026-08-05T07:00:00+09:00");
+    assertThat(colon.value()).isEqualTo("2026-08-05T18:30:00+09:00");
+    assertThat(colon.precision()).isEqualTo(DatePrecision.RELATIVE_EXACT);
+    assertThat(passedColon.value()).isNull();
+    assertThat(passedColon.precision()).isEqualTo(DatePrecision.UNKNOWN);
+  }
+
+  @Test
+  void mapsTwelveToMidnightAndNoonBeforeChoosingTheFutureCandidate() {
+    var beforeNoon = parser.parse("12시 약속", BASE, SEOUL).getFirst();
+    var atNoon = parser.parse("12시 약속", Instant.parse("2026-08-05T03:00:00Z"), SEOUL).getFirst();
+
+    assertThat(beforeNoon.value()).isEqualTo("2026-08-05T12:00:00+09:00");
+    assertThat(atNoon.value()).isNull();
+    assertThat(atNoon.precision()).isEqualTo(DatePrecision.UNKNOWN);
+  }
+
+  @Test
+  void usesTheSourceZoneLocalDateInsteadOfTheJvmDate() {
+    Instant sameCapture = Instant.parse("2026-08-05T15:30:00Z");
+    var seoul = parser.parse("1시 약속", sameCapture, SEOUL).getFirst();
+    var newYork = parser.parse("1시 약속", sameCapture, "America/New_York").getFirst();
+
+    assertThat(seoul.value()).isEqualTo("2026-08-06T01:00:00+09:00");
+    assertThat(newYork.value()).isEqualTo("2026-08-05T13:00:00-04:00");
+  }
+
+  @Test
+  void aMissingBlankOrInvalidSourceZoneLeavesADatelessClockUnknown() {
+    for (String timeZone : List.of("", "   ", "Not/AZone")) {
+      var result = parser.parse("7시 약속", BASE, timeZone).getFirst();
+
+      assertThat(result.value()).isNull();
+      assertThat(result.precision()).isEqualTo(DatePrecision.UNKNOWN);
+    }
+
+    var nullZoneResult = parser.parse("7시 약속", BASE, null).getFirst();
+    assertThat(nullZoneResult.value()).isNull();
+    assertThat(nullZoneResult.precision()).isEqualTo(DatePrecision.UNKNOWN);
+  }
+
+  @Test
+  void skipsAGappedMorningCandidateAndCanUseTheValidAfternoonCandidate() {
+    var result =
+        parser
+            .parse("2시 30분 약속", Instant.parse("2026-03-08T05:30:00Z"), "America/New_York")
+            .getFirst();
+
+    assertThat(result.value()).isEqualTo("2026-03-08T14:30:00-04:00");
+    assertThat(result.precision()).isEqualTo(DatePrecision.RELATIVE_EXACT);
+  }
+
+  @Test
+  void failsClosedWhenAnOverlapCandidateCouldStillBeInTheFuture() {
+    var result =
+        parser
+            .parse("1시 30분 약속", Instant.parse("2026-11-01T04:30:00Z"), "America/New_York")
+            .getFirst();
+
+    assertThat(result.value()).isNull();
+    assertThat(result.precision()).isEqualTo(DatePrecision.UNKNOWN);
+  }
+
+  @Test
+  void canUseTheAfternoonCandidateAfterBothOverlapInstantsHavePassed() {
+    var result =
+        parser
+            .parse("1시 30분 약속", Instant.parse("2026-11-01T07:00:00Z"), "America/New_York")
+            .getFirst();
+
+    assertThat(result.value()).isEqualTo("2026-11-01T13:30:00-05:00");
+    assertThat(result.precision()).isEqualTo(DatePrecision.RELATIVE_EXACT);
+  }
+
+  @Test
+  void doesNotReinterpretAClockQualifiedByADateInTheSameClause() {
+    for (String content :
+        List.of(
+            "내일 7시 약속",
+            "내일은 7시 약속",
+            "내일은 오후 7시 약속",
+            "내일 저녁 7시 약속",
+            "금요일 7시 약속",
+            "금요일에는 7시 약속",
+            "이번 주 금요일 7시 약속",
+            "9월 2일에는 7시 약속",
+            "11.25 18:00 약속")) {
+      assertThat(parser.parse(content, BASE, SEOUL))
+          .noneSatisfy(
+              candidate ->
+                  assertThat(candidate.precision()).isEqualTo(DatePrecision.RELATIVE_EXACT));
+    }
+  }
+
+  @Test
+  void allowsAnIndependentDatelessClockAfterASentenceBoundary() {
+    var result = parser.parse("내일 일정. 7시 운동", BASE, SEOUL).getFirst();
+
+    assertThat(result.surfaceText()).isEqualTo("7시");
+    assertThat(result.value()).isEqualTo("2026-08-05T19:00:00+09:00");
+    assertThat(result.precision()).isEqualTo(DatePrecision.RELATIVE_EXACT);
+  }
+
+  @Test
+  void unsupportedParticlesHedgesHalfHoursAndInvalidMinutesNeverBecomeExact() {
+    for (String content :
+        List.of(
+            "6시부터 접속",
+            "6시까지 접속",
+            "6시 쯤 접속",
+            "6시경 접속",
+            "6시 무렵 접속",
+            "6시 정도 접속",
+            "6시 전후 접속",
+            "6시반 접속",
+            "6시 60분 접속")) {
+      assertThat(parser.parse(content, BASE, SEOUL))
+          .noneSatisfy(
+              candidate ->
+                  assertThat(candidate.precision()).isEqualTo(DatePrecision.RELATIVE_EXACT));
+    }
+  }
+
+  @Test
+  void unsupportedTemporalTailsStayUnknownWithoutTruncatingToABareClock() {
+    for (String content :
+        List.of(
+            "6시 이전 접속",
+            "6시 이후 접속",
+            "6시 안에 접속",
+            "6시 전 접속",
+            "6시 후 접속",
+            "6시 30초 접속",
+            "18:00 이후 접속",
+            "6시 쯤에 접속",
+            "6시경에 접속",
+            "6시 무렵에는 접속",
+            "6시 정도에도 접속",
+            "6시반에 접속",
+            "6시 넘어서 접속",
+            "6시 지나서 접속",
+            "6시 정각 접속",
+            "18:00 정각에 접속")) {
+      var result = parser.parse(content, BASE, SEOUL).getFirst();
+      var expectedSurface = content.substring(0, content.lastIndexOf(' '));
+
+      assertThat(result.surfaceText()).isEqualTo(expectedSurface);
+      assertThat(result.precision()).isEqualTo(DatePrecision.UNKNOWN);
+      assertThat(result.value()).isNull();
+      assertThat(result.surfaceText()).isNotIn("6시", "18:00");
+      assertThat(parser.unparsedTemporalCueCount(List.of(result))).isEqualTo(1);
+    }
   }
 
   @Test

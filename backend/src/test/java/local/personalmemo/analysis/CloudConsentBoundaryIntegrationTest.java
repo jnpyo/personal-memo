@@ -40,7 +40,7 @@ import tools.jackson.databind.node.ObjectNode;
 @PostgresIntegration
 class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport {
   private static final AnalysisProvenance FAKE_PROVENANCE =
-      new AnalysisProvenance("fake-v9", "none", "none", "none");
+      new AnalysisProvenance("fake-v10", "none", "none", "none");
   private static final CloudGatewayDescriptor NO_NETWORK =
       new CloudGatewayDescriptor(
           "test-local-v1", "test-fake", "none", "no-network-v1", CloudTransferMode.NO_NETWORK);
@@ -248,9 +248,9 @@ class CloudConsentBoundaryIntegrationTest extends PostgresIntegrationTestSupport
     assertEvidence(runId, NO_NETWORK, "TIMEOUT");
     assertThat(response(proposal).at("/providerMetadata/padding").isMissingNode()).isTrue();
     assertThat(response(proposal).at("/providerMetadata/analyzerVersion").asText())
-        .isEqualTo("fake-v9");
+        .isEqualTo("fake-v10");
     assertThat(response(proposal).at("/providerMetadata/deterministicRulesVersion").asText())
-        .isEqualTo("korean-rules-v7");
+        .isEqualTo("korean-rules-v8");
   }
 
   @Test

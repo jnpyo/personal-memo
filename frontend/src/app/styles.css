@@ -3096,6 +3096,106 @@ main {
   padding-top: 12px;
 }
 
+.bare-time-clarification {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  border: 1px solid #cbd9f0;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #f5f8ff 0%, #fffaf2 100%);
+  padding: 14px;
+}
+
+.bare-time-clarification__heading {
+  display: grid;
+  gap: 3px;
+}
+
+.bare-time-clarification__heading strong {
+  color: #243c68;
+  font-size: 0.92rem;
+}
+
+.bare-time-clarification__heading span {
+  color: #68746c;
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.bare-time-clarification__date {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.bare-time-clarification__date .secondary-button {
+  min-height: 48px;
+  min-width: 64px;
+}
+
+.bare-time-clarification input[type='date'] {
+  min-height: 48px;
+}
+
+.bare-time-clarification__period {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.bare-time-clarification .choice-button {
+  min-height: 48px;
+  border: 1px solid #b8c7dd;
+  border-radius: 10px;
+  background: #fff;
+  color: #35485f;
+  padding: 9px 10px;
+  font-weight: 800;
+}
+
+.bare-time-clarification .choice-button--selected {
+  border-color: #526fa8;
+  background: #e9effc;
+  color: #1f417b;
+  box-shadow: inset 0 0 0 1px #526fa8;
+}
+
+.bare-time-clarification__overlap {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #e5c789;
+  border-radius: 10px;
+  background: #fffaf0;
+  padding: 10px;
+}
+
+.bare-time-clarification__overlap legend {
+  padding: 0 4px;
+  color: #785c1c;
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.bare-time-clarification__overlap label {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 8px;
+  color: #514a3a;
+  font-size: 0.78rem;
+}
+
+.bare-time-clarification__actions {
+  display: grid;
+  gap: 6px;
+}
+
+.bare-time-clarification__actions > button {
+  min-height: 48px;
+  width: 100%;
+}
+
 .event-schedule-candidates {
   display: grid;
   gap: 8px;
@@ -3498,6 +3598,16 @@ main {
   .event-time-editor .field-error,
   .event-schedule-candidates {
     grid-column: 1 / -1;
+  }
+
+  .bare-time-clarification__actions {
+    grid-template-columns: minmax(180px, auto) auto;
+    justify-content: start;
+    align-items: center;
+  }
+
+  .bare-time-clarification__actions > button {
+    width: auto;
   }
 
   .review-actions {
