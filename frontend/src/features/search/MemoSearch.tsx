@@ -17,6 +17,10 @@ import type {
 } from '../../shared/api/types';
 import { CurrentMemoDetail } from '../memos/CurrentMemoDetail';
 import {
+  MemoDetailActions,
+  type MemoDetailActionsConfig,
+} from '../memos/MemoDetailActions';
+import {
   buildMemoSearchRequest,
   emptyMemoSearchDraft,
   MemoSearchValidationError,
@@ -113,6 +117,7 @@ type DetailDialogProps = {
   error: string | null;
   onClose: () => void;
   onRetry: () => void;
+  memoActions?: MemoDetailActionsConfig;
 };
 
 export function MemoSearchDetailDialog({
@@ -122,6 +127,7 @@ export function MemoSearchDetailDialog({
   error,
   onClose,
   onRetry,
+  memoActions,
 }: DetailDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -200,6 +206,7 @@ export function MemoSearchDetailDialog({
           headingId="memo-search-raw-content-title"
           expectedRevision={item.currentRevision}
         />
+        {memo && memoActions && <MemoDetailActions memo={memo} {...memoActions} />}
         <section className="graph-detail-block" aria-labelledby="memo-search-tags-title">
           <div className="graph-detail-block__heading">
             <h3 id="memo-search-tags-title">검색 시점 canonical 태그</h3>
@@ -223,7 +230,12 @@ export function MemoSearchDetailDialog({
   );
 }
 
-export function MemoSearch() {
+type MemoSearchProps = {
+  memoActions?: MemoDetailActionsConfig;
+  canCloseDetail?: () => boolean;
+};
+
+export function MemoSearch({ memoActions, canCloseDetail }: MemoSearchProps = {}) {
   const search = useMemoSearch();
   const [draft, setDraft] = useState<MemoSearchDraft>(() => emptyMemoSearchDraft());
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -271,6 +283,7 @@ export function MemoSearch() {
   }, []);
 
   const closeDetail = useCallback(() => {
+    if (canCloseDetail && !canCloseDetail()) return;
     const closedItem = selectedItem;
     detailGenerationRef.current += 1;
     detailAbortRef.current?.abort();
@@ -288,7 +301,7 @@ export function MemoSearch() {
       opener,
       inputRef.current,
     );
-  }, [selectedItem]);
+  }, [canCloseDetail, selectedItem]);
 
   useEffect(() => () => {
     detailGenerationRef.current += 1;
@@ -589,6 +602,28 @@ export function MemoSearch() {
           error={detailError}
           onClose={closeDetail}
           onRetry={() => void loadDetail(selectedItem)}
+          memoActions={memoActions
+            ? {
+                ...memoActions,
+                onUpdate: async (memo, content) => {
+                  const saved = await memoActions.onUpdate(memo, content);
+                  if (saved) void loadDetail(selectedItem);
+                  return saved;
+                },
+                onTrash: (memo) => {
+                  memoActions.onTrash(memo);
+                  closeDetail();
+                },
+                onRestore: (memo) => {
+                  memoActions.onRestore(memo);
+                  closeDetail();
+                },
+                onAnalyze: (memo) => {
+                  memoActions.onAnalyze(memo);
+                  closeDetail();
+                },
+              }
+            : undefined}
         />
       )}
     </section>

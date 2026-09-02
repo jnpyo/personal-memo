@@ -257,16 +257,18 @@ test('renders the synthetic graph-first shell and keeps capture out of the defau
 
   const navigation = page.getByRole('navigation', { name: '주요 화면' });
   await expect(navigation.getByRole('button')).toHaveCount(4);
-  for (const label of ['연결', '메모', '일정', '설정']) {
+  for (const label of ['연결', '추가', '일정', '설정']) {
     await expect(navigation.getByRole('button', { name: label, exact: true })).toBeVisible();
   }
   await expect(page.getByRole('button', { name: '새 메모', exact: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: '메모 내용' })).toBeHidden();
   await expect(page.getByRole('button', { name: '저장', exact: true })).toBeHidden();
 
-  await navigation.getByRole('button', { name: '메모', exact: true }).click();
+  await navigation.getByRole('button', { name: '추가', exact: true }).click();
   await expect(page.getByRole('textbox', { name: '메모 내용' })).toBeVisible();
   await expect(page.getByRole('button', { name: '저장', exact: true })).toBeVisible();
+  await expect(page.locator('.memo-section')).toHaveCount(0);
+  await expect(page.locator('.search-section')).toBeHidden();
   await expect(
     page.getByText('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.', { exact: true }),
   ).toHaveCount(0);
@@ -296,7 +298,7 @@ test('keeps public shell controls reachable at portrait and landscape mobile siz
     await expectMinimumTouchTarget(fab);
     await expectNoHorizontalOverflow(page);
 
-    await navigation.getByRole('button', { name: '메모', exact: true }).click();
+    await navigation.getByRole('button', { name: '추가', exact: true }).click();
     const saveButton = page.getByRole('button', { name: '저장', exact: true });
     await expect(saveButton).toBeVisible();
     await expectMinimumTouchTarget(saveButton);

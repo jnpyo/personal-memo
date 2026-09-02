@@ -20,7 +20,7 @@ describe('workspace navigation', () => {
     expect(markup.match(/<svg/g)).toHaveLength(4);
     expect(markup.match(/aria-hidden="true"/g)).toHaveLength(4);
     expect(markup.match(/aria-current="page"/g)).toHaveLength(1);
-    for (const label of ['연결', '메모', '일정', '설정']) {
+    for (const label of ['연결', '추가', '일정', '설정']) {
       expect(markup).toContain(`<span>${label}</span>`);
     }
   });

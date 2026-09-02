@@ -1092,6 +1092,27 @@ test, and a fail-closed server-owned public-origin capability.
   `SOURCE_QUALIFIED_LINUX_FULL_E2E_PASS_RUNTIME_AND_DEPLOYMENT_PENDING`,
   `SOLO_PROVISIONAL/REPORT_ONLY`
 
+### 7.5 Capture-only add and graph-centered memo retrieval
+
+- keep the bounded confirmed MEMO-TAG graph as the default signed-in view, while renaming the second
+  bottom destination to `추가` and limiting it to the accessible raw-memo input, required bounded
+  state/error feedback, character count, and save action
+- remove the visible all-memo card list from the capture path. Put the existing private bounded
+  search behind a collapsed `메모 찾기` entry on the connection screen so raw-only, trashed, and
+  off-home memos remain reachable without injecting search results into React Flow
+- preserve active memo edit, proposal-generation, and trash actions in graph/search detail, and
+  preserve explicit restore for trashed search results. Keep revision, owner, idempotency, retry,
+  unsaved-edit, proposal-only, and manual Apply boundaries unchanged
+- make no API, OpenAPI, JSON Schema, fixture, Flyway, persistence, analyzer/model, canonical-data,
+  Docker, Ollama, Cloudflare, connector, or deployment-topology change
+- the bounded frontend gate passed ESLint, TypeScript, 53 Vitest files/532 tests, the Vite 7.3.6 PWA
+  build, the public-app source contract, and two backend-free Microsoft Edge synthetic flows at
+  384x854/854x384 with touch and horizontal-overflow assertions. Full disposable PostgreSQL/
+  production-like Playwright, personal deployment, installed-PWA refresh, and physical-device
+  acceptance were not run. Status is
+  `SOURCE_QUALIFIED_FRONTEND_FOCUSED_E2E_PASS_FULL_STACK_AND_DEPLOYMENT_PENDING`,
+  `SOLO_PROVISIONAL/REPORT_ONLY`
+
 ## Initial issue order
 
 1. Decide PWA/data authority/auth defaults and write ADRs.

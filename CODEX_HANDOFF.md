@@ -928,3 +928,15 @@ public activation, real-feed qualification과 Google·Apple smoke는 final gate 
   WSL 2.7.12 release note에도 해당 수정은 없어 설치하지 않았다. GitHub-hosted Linux의 disposable
   full E2E 통과는 이 Windows host defect를 해결했다는 뜻이 아니다. 이 blocker가 해결되기 전에
   personal V23 rebuild나 Windows-host deployment acceptance를 진행하지 말 것.
+- 2026-09-02 M7.5 source work follows owner visual feedback: the `추가` destination is capture-only,
+  while the default connection view owns a collapsed private memo finder. The old visible all-memo
+  card list is no longer part of capture; active edit/proposal/trash and trashed restore actions remain
+  available from graph/search detail. The bounded 100-node home graph is not widened, raw/off-home
+  search results are not injected into React Flow, and proposal-only/manual Apply remains unchanged.
+  ADR 0021 records this frontend-only decision. No personal memo/session/PostgreSQL/canonical/Apply,
+  Docker, Ollama, Cloudflare, connector, or deployment state was accessed or changed for this source
+  slice. ESLint, TypeScript, 53 Vitest files/532 tests, the Vite 7.3.6 production PWA build, the
+  public-app source contract, and backend-free Microsoft Edge portrait/landscape synthetic flows 2/2
+  passed. Full disposable PostgreSQL/production-like E2E was not run. Current source status is
+  `SOURCE_QUALIFIED_FRONTEND_FOCUSED_E2E_PASS_FULL_STACK_AND_DEPLOYMENT_PENDING`,
+  `SOLO_PROVISIONAL/REPORT_ONLY`; personal deployment and physical-device acceptance are not claimed.

@@ -949,7 +949,8 @@ export function useMemoWorkspace(ownerId: string) {
     setFeedback({ kind: 'info', message: '원문을 새 revision으로 저장하고 있습니다.' });
 
     try {
-      await api.updateMemo(memo.id, body, idempotencyKey);
+      const updatedMemo = await api.updateMemo(memo.id, body, idempotencyKey);
+      setSelectedGraphMemo((current) => current?.id === updatedMemo.id ? updatedMemo : current);
       clearRetry(scope);
       setFeedback({
         kind: 'success',

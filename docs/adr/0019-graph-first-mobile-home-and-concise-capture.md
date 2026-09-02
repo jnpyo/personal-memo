@@ -11,6 +11,11 @@ ADR 0020 later supersedes only this ADR's date-less-clock rule in Decision lines
 graph-first hierarchy, concise capture, proposal-only/manual Apply, and deployment record remain
 historical and authoritative for their original scope.
 
+ADR 0021 later supersedes this ADR's placement of the raw-memo list and search inside the memo
+destination, plus the requirement that ordinary memo management have a separate visible list. The
+bounded graph, graph-independent private search fallback, concise capture, proposal-only/manual
+Apply, and original deployment record remain authoritative.
+
 ## Context
 
 Milestone 7.1 source-qualified a Today-first mobile hierarchy with quick capture, today's unfinished
