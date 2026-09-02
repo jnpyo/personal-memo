@@ -675,6 +675,73 @@ test('applies two explicitly bound task dates and undoes both together', async (
   await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
 });
 
+test('bare time selects the next remaining capture-day clock but still requires Apply', async ({
+  page,
+}, testInfo) => {
+  const rawMemo = '6시 디스코드 접속하기';
+  const taskTitle = '디스코드 접속하기';
+
+  await registerIsolatedUser(page, testInfo);
+  await page.clock.setFixedTime(new Date('2026-09-02T04:00:00.000Z'));
+  await captureMemo(page, rawMemo);
+
+  const dialog = page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('‘6시’를 정확히 지정')).toHaveCount(0);
+  await expect(dialog.getByText('마감 6시 → 2026-09-02T18:00:00+09:00')).toBeVisible();
+  await expect(page.locator('.task-row')).toHaveCount(0);
+
+  const applyRequestPromise = page.waitForRequest((request) =>
+    /\/api\/v1\/analysis-proposals\/[^/]+\/apply$/.test(new URL(request.url()).pathname),
+  );
+  const apply = page.getByRole('button', { name: '예, 이대로 적용' });
+  await expect(apply).toBeEnabled();
+  await apply.click();
+  const applyBody = (await applyRequestPromise).postDataJSON() as {
+    selectionSchemaVersion?: string;
+    selectedType?: string;
+    items?: Array<{
+      proposalCandidateId?: string | null;
+      kind?: string;
+      due?: {
+        surfaceText?: string;
+        value?: string | null;
+        precision?: string;
+        timeZone?: string;
+        timeSpecified?: boolean;
+      } | null;
+      eventSchedule?: unknown;
+    }>;
+  };
+  expect(applyBody.selectionSchemaVersion).toBeUndefined();
+  expect(applyBody).toMatchObject({
+    selectedType: 'TASK',
+    items: [{
+      kind: 'TASK',
+      due: {
+        surfaceText: '6시',
+        value: '2026-09-02T18:00:00+09:00',
+        precision: 'RELATIVE_EXACT',
+        timeZone: 'Asia/Seoul',
+        timeSpecified: true,
+      },
+    }],
+  });
+  expect(applyBody.items?.[0]?.eventSchedule).toBeUndefined();
+
+  await expect(dialog).toHaveCount(0);
+  await openAgenda(page);
+  await expect(page.locator('.task-row').filter({ hasText: taskTitle })).toBeVisible();
+  await openMemos(page);
+  await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
+
+  await undoLastApplication(page);
+  await openAgenda(page);
+  await expect(page.locator('.task-row').filter({ hasText: taskTitle })).toHaveCount(0);
+  await openMemos(page);
+  await expect(page.locator('.memo-card').filter({ hasText: rawMemo })).toBeVisible();
+});
+
 test('explicitly corrects, shares, exports, and then undoes only one event', async ({
   page,
 }, testInfo) => {

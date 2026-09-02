@@ -271,10 +271,16 @@ top-1/top-2 conflict merely because their scores are close.
 - multiple or contradictory dates
 - relative expression without a usable base context
 
-`korean-rules-v7` resolves an explicit `오늘|내일|모레 + 오전|오후 + 1–12시` expression with optional
-minutes against the immutable revision's captured instant and source zone as `RELATIVE_EXACT`, but
-only when the local time has one unambiguous valid offset. A date-less `6시` remains `UNKNOWN`; the
-analyzer does not infer today or PM.
+`korean-rules-v8` resolves an explicit `오늘|내일|모레 + 오전|오후 + 1–12시` expression with optional
+minutes against the immutable revision's capture instant and source zone as `RELATIVE_EXACT`, but
+only when the local time has one unambiguous valid offset. For the date-less explicit clock family
+with no particle or `에`—bare 1–12시 with optional minutes, explicit 오전/오후, Korean 24-hour clock,
+and `HH:mm`—it enumerates capture-day local occurrences, keeps only instants strictly after capture,
+and emits the earliest safe occurrence. Equality is not future. A DST-gap occurrence is discarded
+and a later unique same-day occurrence may be used; any future overlap occurrence fails the whole
+expression closed as `UNKNOWN`. No safe remaining occurrence or missing/invalid source zone also
+stays `UNKNOWN`; the resolver never rolls forward to tomorrow. The result is still proposal-only and
+cannot create an alarm/reminder or canonical data without the ordinary manual Apply.
 
 ### Reference ambiguity
 
@@ -291,7 +297,7 @@ The current deterministic gate thresholds and structured-proposal reconstruction
 routing policy `field-policy-v2`; changing a gate threshold, cloud-signal set, or reconstruction
 rule requires a new policy version. Lexical classification, reference extraction, date parsing,
 default-fallback coverage detection, guarded affirmative `접속하기`, and explicit TASK due binding are
-separately identified by `fake-v9` and `korean-rules-v7`; changing
+separately identified by `fake-v10` and `korean-rules-v8`; changing
 those inputs does not rename an otherwise unchanged gate. Runtime configuration and user-specific
 thresholds remain a later milestone.
 
@@ -541,8 +547,8 @@ The current version-2 result contains fields conceptually equivalent to:
   "relationCandidates": [],
   "ambiguityReasons": [],
   "providerMetadata": {
-    "analyzerVersion": "fake-v9",
-    "deterministicRulesVersion": "korean-rules-v7",
+    "analyzerVersion": "fake-v10",
+    "deterministicRulesVersion": "korean-rules-v8",
     "promptVersion": "none",
     "localModelVersion": "none",
     "embeddingModelVersion": "none",
@@ -601,7 +607,7 @@ IDs or semantic alternatives, and multiple distinct alternatives without `CONFLI
 domain validation. A missing end remains null.
 
 The nullable suggestion exists so a future policy cannot silently select by list position or score.
-The current domain gate rejects every non-null suggestion. Current `fake-v9` and the localhost
+The current domain gate rejects every non-null suggestion. Current `fake-v10` and the localhost
 semantic-patch adapter remain v2 producers. The PWA can display a v3 list but every EVENT review draft
 still starts unscheduled; only a user action copies one candidate into the editable selection. Apply
 remains explicit and selection schema v2.
@@ -799,12 +805,15 @@ for:
 
 Track precision of high-confidence local routing separately from overall accuracy. The primary safety metric is the rate of wrong local decisions that were presented as unambiguous.
 
-`fake-v9` / `korean-rules-v7` keeps the generalized weekday/time, approximate-date, reference,
+`fake-v10` / `korean-rules-v8` keeps the generalized weekday/time, approximate-date, reference,
 event, and multi-intent rules while extracting sequential item facets and source-aligned UTF-16
 spans from the immutable raw revision without copying a challenge sentence. It recognizes guarded
 affirmative `접속하기` as a TASK action while keeping negative or descriptive forms unresolved. It
-adds the explicit relative-day meridiem rule above; a bare time such as `6시` stays `UNKNOWN` and
-does not become a precise due date. It also emits
+keeps the explicit relative-day meridiem rule and adds the bounded capture-day future-occurrence
+policy above. A supported date-less explicit clock becomes precise only when one safe capture-day
+occurrence remains strictly after the revision instant and no future overlap occurrence exists;
+otherwise it stays `UNKNOWN`.
+It also emits
 proposal-local date IDs and only structurally safe TASK due references. Evaluation dataset v2 and
 its report still have no binding gold, so the capability is
 `SUPPORTED_NOT_SCORED_DATASET_V2`; binding quality cannot be a hard metric until independently

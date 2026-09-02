@@ -139,7 +139,7 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
 
   @Test
   void localMachineFailureKeepsTheExplicitTaskWithoutInventingAPreciseDate() throws Exception {
-    String content = "6시 디스코드 접속하기";
+    String content = "6시부터 디스코드 접속하기";
     AtomicReference<CloudAnalysisRequest> observedRequest = new AtomicReference<>();
     when(cloudGateway.bind())
         .thenReturn(
@@ -163,7 +163,7 @@ class DurableAnalysisLifecycleIntegrationTest extends PostgresIntegrationTestSup
     assertThat(proposal.path("itemCandidates").path(0).path("action").asText()).isEqualTo("접속하기");
     assertThat(proposal.path("itemCandidates").path(0).path("object").asText()).isEqualTo("디스코드");
     assertThat(proposal.path("dateCandidates").path(0).path("surfaceText").asText())
-        .isEqualTo("6시");
+        .isEqualTo("6시부터");
     assertThat(proposal.path("dateCandidates").path(0).path("value").isNull()).isTrue();
     assertThat(proposal.path("dateCandidates").path(0).path("precision").asText())
         .isEqualTo("UNKNOWN");

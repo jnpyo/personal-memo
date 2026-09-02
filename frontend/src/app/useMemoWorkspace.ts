@@ -41,6 +41,10 @@ import {
   type ReviewDraft,
 } from '../features/review/reviewModel';
 import {
+  findBareTimeClarification,
+  requiresReviewSourceTimeZone,
+} from '../features/review/bareTimeClarificationModel';
+import {
   deriveCapturePolicy,
   deriveRecoveryState,
   type CapturePolicy,
@@ -87,6 +91,7 @@ export function useMemoWorkspace(ownerId: string) {
   const [draftPersistenceFailed, setDraftPersistenceFailed] = useState(false);
   const [review, setReview] = useState<ReviewDraft | null>(null);
   const [reviewSourceTimeZone, setReviewSourceTimeZone] = useState<string | null>(null);
+  const [reviewClientRecordedAt, setReviewClientRecordedAt] = useState<string | null>(null);
   const [reviewSourceTimeZoneError, setReviewSourceTimeZoneError] =
     useState<string | null>(null);
   const [reviewSourceTimeZoneRetry, setReviewSourceTimeZoneRetry] = useState(0);
@@ -592,20 +597,22 @@ export function useMemoWorkspace(ownerId: string) {
 
   const reviewProposalId = review?.proposalId ?? null;
   const reviewProposal = review?.proposal ?? null;
-  const listedReviewSourceTimeZone = reviewProposal
+  const listedReviewMemo = reviewProposal
     ? activeMemos.find(
         (memo) => memo.id === reviewProposal.memoId &&
           memo.currentRevision === reviewProposal.memoRevision,
-      )?.sourceTimeZone ?? null
+      ) ?? null
     : null;
 
   useEffect(() => {
     const request = ++reviewMemoSourceRequest.current;
     setReviewSourceTimeZone(null);
+    setReviewClientRecordedAt(null);
     setReviewSourceTimeZoneError(null);
     if (!reviewProposal) return;
-    if (listedReviewSourceTimeZone) {
-      setReviewSourceTimeZone(listedReviewSourceTimeZone);
+    if (listedReviewMemo?.sourceTimeZone && listedReviewMemo.clientRecordedAt) {
+      setReviewSourceTimeZone(listedReviewMemo.sourceTimeZone);
+      setReviewClientRecordedAt(listedReviewMemo.clientRecordedAt);
       return;
     }
 
@@ -615,18 +622,22 @@ export function useMemoWorkspace(ownerId: string) {
         setReviewSourceTimeZoneError('메모 revision이 변경되어 작성 시간대를 확인할 수 없습니다.');
         return;
       }
-      if (memo.sourceTimeZone) {
+      if (memo.sourceTimeZone && memo.clientRecordedAt) {
         setReviewSourceTimeZone(memo.sourceTimeZone);
+        setReviewClientRecordedAt(memo.clientRecordedAt);
+      } else if (!memo.clientRecordedAt) {
+        setReviewSourceTimeZoneError('메모 revision의 작성 시각이 응답에 없습니다.');
       } else {
         setReviewSourceTimeZoneError('메모 revision의 시간대가 응답에 없습니다.');
       }
     }).catch((error: unknown) => {
       if (reviewMemoSourceRequest.current === request) {
         setReviewSourceTimeZone(null);
+        setReviewClientRecordedAt(null);
         setReviewSourceTimeZoneError(errorMessage(error));
       }
     });
-  }, [activeMemos, listedReviewSourceTimeZone, ownerId, reviewProposal, reviewSourceTimeZoneRetry]);
+  }, [listedReviewMemo, ownerId, reviewProposal, reviewSourceTimeZoneRetry]);
 
   useEffect(() => {
     if (!reviewProposalId || !reviewProposal) {
@@ -807,12 +818,22 @@ export function useMemoWorkspace(ownerId: string) {
       });
       return;
     }
-    const hasScheduledEvent = snapshot.items.some((item) => item.eventSchedule !== null);
-    const sourceTimeZone = reviewSourceTimeZone;
-    if (hasScheduledEvent && !sourceTimeZone) {
+    const unresolvedBareTime = findBareTimeClarification(snapshot);
+    if (unresolvedBareTime) {
       setFeedback({
         kind: 'error',
-        message: '메모 revision의 작성 시간대를 불러온 뒤 일정을 승인해 주세요.',
+        message: unresolvedBareTime.fixedHour24 === null
+          ? `‘${unresolvedBareTime.candidate.surfaceText}’의 날짜와 오전·오후를 확인하거나 시간 없이 두기를 선택해 주세요.`
+          : `‘${unresolvedBareTime.candidate.surfaceText}’의 날짜를 확인하거나 시간 없이 두기를 선택해 주세요.`,
+      });
+      return;
+    }
+    const sourceTimeZoneRequired = requiresReviewSourceTimeZone(snapshot);
+    const sourceTimeZone = reviewSourceTimeZone;
+    if (sourceTimeZoneRequired && !sourceTimeZone) {
+      setFeedback({
+        kind: 'error',
+        message: '메모 revision의 작성 시간대를 불러온 뒤 시각을 승인해 주세요.',
       });
       return;
     }
@@ -1229,6 +1250,7 @@ export function useMemoWorkspace(ownerId: string) {
     hasUnsavedReview,
     postponedReview,
     reviewSourceTimeZone,
+    reviewClientRecordedAt,
     reviewSourceTimeZoneError,
     applicationId,
     tasks,

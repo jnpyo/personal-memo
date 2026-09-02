@@ -64,13 +64,13 @@ class FakeAnalyzerTest {
     assertThat(result.path("schemaVersion").asText()).isEqualTo("2");
     assertThat(result.path("memoId").asText()).isEqualTo(memoId.toString());
     assertThat(analyzer.proposalSchemaVersion()).isEqualTo("2");
-    assertThat(analyzer.version()).isEqualTo("fake-v9");
+    assertThat(analyzer.version()).isEqualTo("fake-v10");
     assertThat(analyzer.provenance().promptVersion()).isEqualTo("none");
     assertThat(analyzer.provenance().localModelVersion()).isEqualTo("none");
     assertThat(analyzer.provenance().embeddingModelVersion()).isEqualTo("none");
-    assertThat(result.at("/providerMetadata/analyzerVersion").asText()).isEqualTo("fake-v9");
+    assertThat(result.at("/providerMetadata/analyzerVersion").asText()).isEqualTo("fake-v10");
     assertThat(result.at("/providerMetadata/deterministicRulesVersion").asText())
-        .isEqualTo("korean-rules-v7");
+        .isEqualTo("korean-rules-v8");
     assertThat(result.at("/providerMetadata/promptVersion").asText()).isEqualTo("none");
     assertThat(result.at("/providerMetadata/localModelVersion").asText()).isEqualTo("none");
     assertThat(result.at("/providerMetadata/embeddingModelVersion").asText()).isEqualTo("none");
@@ -191,7 +191,7 @@ class FakeAnalyzerTest {
   }
 
   @Test
-  void recognizesAnAffirmativeConnectActionWithoutInventingItsObject() {
+  void resolvesAnAffirmativeConnectTaskToTheNextRemainingCaptureDayClock() {
     var result = analyze("6시 디스코드 접속하기");
 
     assertThat(result.at("/typeCandidates/0/value").asText()).isEqualTo("TASK");
@@ -203,15 +203,17 @@ class FakeAnalyzerTest {
     assertThat(result.at("/itemCandidates/0/sourceSpan/end").asInt())
         .isEqualTo("6시 디스코드 접속하기".length());
     assertThat(result.at("/dateCandidates/0/surfaceText").asText()).isEqualTo("6시");
-    assertThat(result.at("/dateCandidates/0/value").isNull()).isTrue();
-    assertThat(result.at("/dateCandidates/0/precision").asText()).isEqualTo("UNKNOWN");
+    assertThat(result.at("/dateCandidates/0/value").asText())
+        .isEqualTo("2026-08-05T18:00:00+09:00");
+    assertThat(result.at("/dateCandidates/0/precision").asText()).isEqualTo("RELATIVE_EXACT");
+    assertThat(result.at("/dateCandidates/0/timeSpecified").asBoolean()).isTrue();
+    assertThat(result.at("/itemCandidates/0/dueDateCandidateId").asText()).isEqualTo("date-1");
     assertThat(result.path("ambiguityReasons").toString())
-        .contains("IMPRECISE_DATE")
-        .doesNotContain("MISSING_ACTION", "MISSING_OBJECT");
-    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("CLOUD_ENRICH");
+        .doesNotContain("IMPRECISE_DATE", "MISSING_ACTION", "MISSING_OBJECT");
+    assertThat(result.at("/providerMetadata/route").asText()).isEqualTo("LOCAL_REVIEW");
     assertThat(result.at("/providerMetadata/classificationBasis").asText())
         .isEqualTo("EXPLICIT_RULE");
-    assertThat(result.at("/providerMetadata/unparsedTemporalCueCount").asInt()).isEqualTo(1);
+    assertThat(result.at("/providerMetadata/unparsedTemporalCueCount").asInt()).isZero();
     assertThat(result.at("/providerMetadata/unrecognizedActionCueCount").asInt()).isZero();
     assertThat(result.at("/providerMetadata/detectedItemCandidateCount").asInt()).isEqualTo(1);
     assertThat(result.at("/providerMetadata/emittedItemCandidateCount").asInt()).isEqualTo(1);

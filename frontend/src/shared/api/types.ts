@@ -7,6 +7,7 @@ export type MemoView = {
   analysisState: string;
   createdAt: string;
   sourceTimeZone?: string;
+  clientRecordedAt?: string | null;
 };
 
 export type LoginMethod = 'LOCAL' | 'GOOGLE';

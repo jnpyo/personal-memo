@@ -465,7 +465,7 @@ Metrics are reported separately for regression, `VISIBLE_CHALLENGE`, and the com
 `analyzerVersion`, `deterministicRulesVersion`, and `routingPolicyVersion`.
 
 - **Schema/domain-valid rate**: proposals accepted by the supported proposal JSON Schema and the
-  production domain validator. Current `fake-v9` output is schema v2; recoverable v1 remains part of
+  production domain validator. Current `fake-v10` output is schema v2; recoverable v1 remains part of
   the compatibility contract rather than the generated baseline format.
 - **Route confusion**: expected/actual `LOCAL_REVIEW` and `CLOUD_ENRICH` counts and accuracy.
 - **Wrong local**: an actual `LOCAL_REVIEW` result whose schema, route, preferred type, or complete
@@ -528,12 +528,36 @@ not independently adjudicated or blind accuracy.
 The remaining mismatches in acceptable item semantics and ambiguity signals stay visible in the report
 and are not promoted to provider gates.
 
-Current source `fake-v9` / `korean-rules-v7` adds an explicit relative-day meridiem rule for
+The earlier source `fake-v9` / `korean-rules-v7` added an explicit relative-day meridiem rule for
 `오늘|내일|모레 + 오전|오후 + 1–12시` with optional minutes. It resolves against the immutable
 revision instant/source zone and emits `RELATIVE_EXACT` only when that local time has one unambiguous
-valid offset. A date-less `6시` remains `UNKNOWN`; today/PM is never inferred. Focused parser/analyzer
-tests cover this source change, but no new full public synthetic report is recorded here. The v8
-aggregate above must not be relabeled as a v9 result.
+valid offset. At that checkpoint a date-less `6시` remained `UNKNOWN`, and focused parser/analyzer
+tests covered the source change. No full public synthetic report was recorded for that checkpoint.
+
+Current source `fake-v10` / `korean-rules-v8` supersedes only that date-less-clock rule. The supported
+date-less explicit clock family with no particle or `에` includes bare 1–12시 with optional minutes,
+explicit 오전/오후, Korean 24-hour clock, and `HH:mm`. It uses the immutable revision capture
+instant/source zone and proposes the earliest safe capture-day occurrence strictly after capture.
+Equality is not future. A gap occurrence is discarded and a later unique same-day occurrence may be
+used; any future overlap occurrence fails the whole expression closed as `UNKNOWN`. No safe remaining
+occurrence or missing/invalid source zone also stays `UNKNOWN`, with no tomorrow rollover. This is
+proposal-only/manual Apply behavior and does not create or deliver an alarm/reminder. Focused source
+tests do not constitute a new full public synthetic or blind measurement. The v8 aggregate above
+must not be relabeled as a v9 or v10 result.
+
+Exact source SHA `2117cb2` passed GitHub-hosted Linux OpenAPI/Compose/PowerShell gates, disposable
+PostgreSQL 17.6/Flyway V1-V23 backend `mvn verify` 924/924, frontend 52 files/529 tests plus lint/build,
+and production-like isolated Playwright 28/28 in runs `33594337649` and `33594340097`. These are
+contract, persistence, and product-flow safety results, not a new LiquidAI accuracy, latency,
+GPU/VRAM, or model-contribution measurement. The v2 Docker/Ollama product smoke remains unrun.
+
+The immutable AI-preferred product-smoke v1 fixture/schema/receipt remains historical. A separate v2
+public-synthetic fixture and source contract pins `2026-08-28T09:00:00+09:00` in `Asia/Seoul` and
+requires `6시 디스코드 접속하기` to produce one grounded TASK bound to a
+`2026-08-28T18:00:00+09:00` `RELATIVE_EXACT` candidate. Its receipt schema still requires zero Apply,
+alarm/reminder, personal-data access, and canonical-write delta. The v2 Docker/Ollama product smoke
+has not run and no v2 receipt exists, so there is no new runtime pass, latency, GPU/VRAM, or
+Fake-versus-LiquidAI comparison evidence.
 
 The generated deterministic report is the source for the last measured values. It exposes the
 date and item failures rather than hiding missing spans or unresolved fields behind route/type
@@ -553,15 +577,16 @@ cohorts and must not be combined into a V20 accuracy claim.
   binding gold or analyzer output, and 6A.1 does not reinterpret it as doing so.
 - EVENT review initializes with no schedule. Reusing a precise proposal date candidate or entering a
   schedule directly is an explicit user selection; it is not a correct model prediction, automatic
-  binding, training label, or accuracy datapoint. This includes a `fake-v9` source-zone
+  binding, training label, or accuracy datapoint. This includes a `fake-v10` source-zone
   `RELATIVE_EXACT` candidate.
 - Selection schema version 2, V21 `event_details`, Apply rollback/idempotency/undo, owner/kind
   constraints, `GET /events`, and PWA review/list tests establish contract mechanics and privacy
   boundaries only. They do not change Fake/LiquidAI route, canonical/domain, latency, GPU/VRAM,
   provider, training, or LoRA results.
-- TIMED Apply also requires start/end offsets valid for the immutable revision zone. DST gaps fail
-  with `EVENT_SCHEDULE_ZONE_OFFSET_MISMATCH`; either explicitly selected valid offset in an overlap
-  is accepted. These are domain-safety tests, not analyzer accuracy evidence.
+- TIMED Apply start/end and exact TASK due values require offsets valid for the immutable revision
+  zone. DST gaps fail with `EVENT_SCHEDULE_ZONE_OFFSET_MISMATCH` or
+  `DUE_ZONE_OFFSET_MISMATCH`; either explicitly selected valid offset in an overlap is accepted.
+  These are domain-safety tests, not analyzer accuracy evidence.
 - The existing review-outcome classifier treats a temporal-candidate-bearing v3 proposal or a
   schedule-bearing selection as `unclassifiable` until a versioned temporal-review comparison policy
   exists. It must not silently count such Apply rows as `exact`, `corrected`, or model-quality gold.

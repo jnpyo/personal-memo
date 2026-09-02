@@ -181,7 +181,7 @@ class MemoSearchIntegrationTest extends PostgresIntegrationTestSupport {
             "surfaceText",
             "지난 시각",
             "value",
-            "2020-01-01T09:00:00Z",
+            "2020-01-01T18:00:00+09:00",
             "precision",
             "EXACT_TIME",
             "timeZone",

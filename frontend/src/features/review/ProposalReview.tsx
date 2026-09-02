@@ -8,6 +8,18 @@ import type {
 } from '../../shared/api/types';
 import { FeedbackBanner, type Feedback } from '../../shared/ui/FeedbackBanner';
 import {
+  BareTimeClarification,
+  EMPTY_BARE_TIME_CLARIFICATION_DRAFT,
+  type BareTimeClarificationDraft,
+} from './BareTimeClarification';
+import {
+  compactBareTimeCandidateId,
+  createUserResolvedExactDue,
+  dismissBareTimeClarification,
+  findBareTimeClarification,
+  requiresReviewSourceTimeZone,
+} from './bareTimeClarificationModel';
+import {
   addManualItem,
   changeItemDue,
   changeItemDueValue,
@@ -43,6 +55,7 @@ import {
 type Props = {
   review: ReviewDraft;
   sourceTimeZone?: string | null;
+  clientRecordedAt?: string | null;
   sourceTimeZoneError?: string | null;
   relationReviewCandidates: RelationReviewCandidate[] | null;
   relationReviewLoading: boolean;
@@ -231,6 +244,7 @@ function isSuccessfulLocalModelProposal(review: ReviewDraft): boolean {
 
 function initialStep(review: ReviewDraft): MainReviewStep {
   if (
+    findBareTimeClarification(review) !== null ||
     review.proposal.relationCandidates.length > 0 ||
     (review.proposal.schemaVersion === '3' &&
       review.proposal.itemCandidates.some((item) => item.eventScheduleCandidates.length > 0))
@@ -298,6 +312,7 @@ function eventScheduleCandidateEndLabel(
 export function ProposalReview({
   review,
   sourceTimeZone = null,
+  clientRecordedAt = null,
   sourceTimeZoneError = null,
   relationReviewCandidates,
   relationReviewLoading,
@@ -320,6 +335,9 @@ export function ProposalReview({
   const [open, setOpen] = useState(true);
   const [step, setStep] = useState<ReviewStep>(() => initialStep(review));
   const [draftChanged, setDraftChanged] = useState(false);
+  const [bareTimeDraft, setBareTimeDraft] = useState<BareTimeClarificationDraft>(
+    EMPTY_BARE_TIME_CLARIFICATION_DRAFT,
+  );
   const previousStep = useRef<MainReviewStep>(initialStep(review));
   const dialogRef = useRef<HTMLDialogElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
@@ -330,15 +348,21 @@ export function ProposalReview({
   const scrollRef = useRef<HTMLElement>(null);
   const representativeTypeRef = useRef<HTMLSelectElement>(null);
   const itemTitleRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const temporalSelectRefs = useRef<Array<HTMLSelectElement | null>>([]);
   const addItemButtonRef = useRef<HTMLButtonElement>(null);
   const pendingItemFocus = useRef<number | 'ADD_OR_TYPE' | null>(null);
+  const pendingTemporalFocus = useRef<number | null>(null);
   const dateCandidates = usableDateCandidates(review.proposal);
+  const bareTimeClarification = findBareTimeClarification(review);
+  const compactBareTimeCandidate = compactBareTimeCandidateId(review);
   const referencedDateCandidateIds = referencedProposalDateCandidateIds(review.proposal);
   const datesNeedingReview = review.proposal.schemaVersion !== '1'
     ? review.proposal.dateCandidates.filter(
         (date) =>
-          date.candidateId === null ||
-          !referencedDateCandidateIds.has(date.candidateId),
+          date.candidateId !== compactBareTimeCandidate &&
+          (date.candidateId === null ||
+            (!review.dismissedDateCandidateIds.includes(date.candidateId) &&
+              !referencedDateCandidateIds.has(date.candidateId))),
       )
     : review.proposal.dateCandidates.filter(
         (date) => !dateCandidates.some((candidate) => sameDateCandidate(candidate, date)),
@@ -346,15 +370,25 @@ export function ProposalReview({
   const primaryType = suggestedType(review);
   const isValid = isValidReviewDraft(review);
   const hasPendingTag = newTag.trim().length > 0;
+  const bareTimeDraftDirty = bareTimeClarification !== null && (
+    bareTimeDraft.date.length > 0 ||
+    bareTimeDraft.period.length > 0 ||
+    bareTimeDraft.overlapValue.length > 0
+  );
+  const transientDirty = hasPendingTag || bareTimeDraftDirty;
   const relationSelectionReady = isRelationSelectionReady(review, relationReviewCandidates);
-  const hasScheduledEvent = review.items.some((item) => item.eventSchedule !== null);
-  const scheduleZoneReady = !hasScheduledEvent || sourceTimeZone !== null;
-  const canApply = isValid && !hasPendingTag && relationSelectionReady && scheduleZoneReady;
+  const sourceTimeZoneRequired = requiresReviewSourceTimeZone(review);
+  const sourceTimeZoneReady = !sourceTimeZoneRequired || sourceTimeZone !== null;
+  const canApply = isValid &&
+    bareTimeClarification === null &&
+    !transientDirty &&
+    relationSelectionReady &&
+    sourceTimeZoneReady;
   const [retryOperation, retryProposalId] = retryScope?.split(':') ?? [];
   const retryMatchesReview = retryProposalId === review.proposalId;
   const canShowRetry = !busy && retryMatchesReview && (
     (retryOperation === 'apply' && canApply && (step === 'CONFIRM' || step === 'EDIT')) ||
-    (retryOperation === 'postpone' && !hasPendingTag && step !== 'REJECT_CONFIRM') ||
+    (retryOperation === 'postpone' && !transientDirty && step !== 'REJECT_CONFIRM') ||
     (retryOperation === 'reject' && step === 'REJECT_CONFIRM')
   );
 
@@ -396,6 +430,10 @@ export function ProposalReview({
     return () => window.cancelAnimationFrame(frame);
   }, [open, step]);
 
+  useEffect(() => {
+    onTransientDirtyChange(transientDirty);
+  }, [onTransientDirtyChange, transientDirty]);
+
   useEffect(
     () => () => onTransientDirtyChange(false),
     [onTransientDirtyChange],
@@ -417,6 +455,16 @@ export function ProposalReview({
     target?.scrollIntoView({ block: 'center', behavior: 'auto' });
   }, [review.items, review.selectedType, step]);
 
+  useEffect(() => {
+    const pending = pendingTemporalFocus.current;
+    if (pending === null || step !== 'EDIT') return;
+
+    const target = temporalSelectRefs.current[pending];
+    pendingTemporalFocus.current = null;
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView({ block: 'center', behavior: 'auto' });
+  }, [review.dismissedDateCandidateIds, review.items, step]);
+
   const changeDraft = (nextReview: ReviewDraft) => {
     setDraftChanged(true);
     onChange(nextReview);
@@ -431,7 +479,6 @@ export function ProposalReview({
     if (!canonicalName) return;
     if (review.tags.some((tag) => tag.canonicalName === canonicalName)) {
       setNewTag('');
-      onTransientDirtyChange(false);
       return;
     }
 
@@ -443,7 +490,6 @@ export function ProposalReview({
     };
     changeDraft({ ...review, tags: [...review.tags, candidate] });
     setNewTag('');
-    onTransientDirtyChange(false);
   };
 
   const moveToEdit = (nextReview: ReviewDraft = review) => {
@@ -496,12 +542,14 @@ export function ProposalReview({
     </div>
   );
 
-  const sourceZoneReviewNotice = hasScheduledEvent && !sourceTimeZone && (
+  const sourceZoneReviewNotice = sourceTimeZoneRequired &&
+    (!sourceTimeZone || (bareTimeClarification !== null && !clientRecordedAt)) &&
+    (bareTimeClarification === null || sourceTimeZoneError !== null) && (
     <div className="review-note" role={sourceTimeZoneError ? 'alert' : 'status'}>
       <p>
         {sourceTimeZoneError
-          ? '메모를 작성한 시간대를 불러오지 못했습니다. 일정 승인 전에 다시 시도해 주세요.'
-          : '메모를 작성한 시간대를 확인하고 있습니다.'}
+          ? '메모를 작성한 시각과 시간대를 불러오지 못했습니다. 시각 승인 전에 다시 시도해 주세요.'
+          : '메모를 작성한 시각과 시간대를 확인하고 있습니다.'}
       </p>
       {sourceTimeZoneError && onRetrySourceTimeZone && (
         <button type="button" className="secondary-button" onClick={onRetrySourceTimeZone}>
@@ -901,11 +949,54 @@ export function ProposalReview({
                         </label>
                       </div>
 
+                      {bareTimeClarification?.itemIndex === index &&
+                        (item.kind === 'TASK' || item.kind === 'EVENT') && (
+                        <BareTimeClarification
+                          key={`${bareTimeClarification.candidateId}-${item.kind}`}
+                          clarification={bareTimeClarification}
+                          itemKind={item.kind}
+                          sourceTimeZone={sourceTimeZone}
+                          clientRecordedAt={clientRecordedAt}
+                          disabled={busy}
+                          draft={bareTimeDraft}
+                          onDraftChange={setBareTimeDraft}
+                          onConfirm={(offsetDateTime) => {
+                            pendingTemporalFocus.current = index;
+                            if (item.kind === 'TASK') {
+                              changeDraft(changeItemDue(
+                                review,
+                                index,
+                                createUserResolvedExactDue(
+                                  bareTimeClarification.candidate,
+                                  offsetDateTime,
+                                ),
+                              ));
+                            } else {
+                              changeDraft(changeItemEventSchedule(review, index, {
+                                mode: 'TIMED',
+                                start: offsetDateTime,
+                                end: '',
+                              }));
+                            }
+                          }}
+                          onDismiss={() => {
+                            pendingTemporalFocus.current = index;
+                            changeDraft(dismissBareTimeClarification(
+                              review,
+                              bareTimeClarification.candidateId,
+                            ));
+                          }}
+                        />
+                      )}
+
                       {item.kind === 'TASK' && (
                         <div className="task-date-editor">
                           <label>
                             마감 날짜
                             <select
+                              ref={(element) => {
+                                temporalSelectRefs.current[index] = element;
+                              }}
                               aria-label={`항목 ${index + 1} 마감 날짜`}
                               aria-describedby={dateHelpId}
                               value={dueChoice}
@@ -1036,6 +1127,9 @@ export function ProposalReview({
                           <label>
                             일정 시작
                             <select
+                              ref={(element) => {
+                                temporalSelectRefs.current[index] = element;
+                              }}
                               aria-label={`항목 ${index + 1} 일정 시작`}
                               aria-describedby={eventHelpId}
                               value={eventScheduleChoice}
@@ -1347,7 +1441,6 @@ export function ProposalReview({
                       const value = event.target.value;
                       setNewTag(value);
                       setDraftChanged(true);
-                      onTransientDirtyChange(value.trim().length > 0);
                     }}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter') {

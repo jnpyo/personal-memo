@@ -184,11 +184,64 @@ function eventProposalV3(): Proposal {
   };
 }
 
+function bareTimeProposal(surfaceText = '6시'): Proposal {
+  return {
+    ...taskProposal,
+    schemaVersion: '2',
+    suggestedTitle: { value: '디스코드 접속하기', confidence: 0.93, needsConfirmation: true },
+    typeCandidates: [{ value: 'TASK', score: 0.93 }],
+    dateCandidates: [{
+      candidateId: 'date-bare-time',
+      surfaceText,
+      value: null,
+      precision: 'UNKNOWN',
+      timeSpecified: false,
+      confidence: 0.7,
+      ambiguityReasons: ['IMPRECISE_DATE'],
+    }],
+    itemCandidates: [{
+      ...taskProposal.itemCandidates[0],
+      candidateId: 'item-discord',
+      dueDateCandidateId: null,
+      title: '디스코드 접속하기',
+      action: '접속하기',
+      object: '디스코드',
+    }],
+    ambiguityReasons: ['IMPRECISE_DATE'],
+  };
+}
+
+function captureDayResolvedBareTimeProposal(): Proposal {
+  const proposal = bareTimeProposal();
+  return {
+    ...proposal,
+    dateCandidates: [{
+      ...proposal.dateCandidates[0],
+      value: '2026-09-02T18:00:00+09:00',
+      precision: 'RELATIVE_EXACT',
+      timeSpecified: true,
+      ambiguityReasons: [],
+    }],
+    itemCandidates: [{
+      ...proposal.itemCandidates[0],
+      dueDateCandidateId: 'date-bare-time',
+    }],
+    ambiguityReasons: [],
+    providerMetadata: {
+      analyzerVersion: 'fake-v10',
+      deterministicRulesVersion: 'korean-rules-v8',
+    },
+  };
+}
+
 function renderProposal(
   proposal: Proposal,
   options: {
     busy?: boolean;
     retryScope?: string;
+    sourceTimeZone?: string | null;
+    clientRecordedAt?: string | null;
+    sourceTimeZoneError?: string | null;
     relationReviewCandidates?: RelationReviewCandidate[] | null;
     relationReviewLoading?: boolean;
     relationReviewError?: string | null;
@@ -197,6 +250,13 @@ function renderProposal(
   return renderToStaticMarkup(
     <ProposalReview
       review={createReviewDraft('proposal-1', proposal)}
+      sourceTimeZone={options.sourceTimeZone === undefined ? 'Asia/Seoul' : options.sourceTimeZone}
+      clientRecordedAt={
+        options.clientRecordedAt === undefined
+          ? '2026-09-02T04:00:00Z'
+          : options.clientRecordedAt
+      }
+      sourceTimeZoneError={options.sourceTimeZoneError}
       relationReviewCandidates={
         options.relationReviewCandidates === undefined ? [] : options.relationReviewCandidates
       }
@@ -208,6 +268,7 @@ function renderProposal(
       onPostpone={vi.fn()}
       onReject={vi.fn()}
       onRetryRelationReview={vi.fn()}
+      onRetrySourceTimeZone={vi.fn()}
       onTransientDirtyChange={vi.fn()}
       feedback={options.retryScope ? { kind: 'error', message: '적용 실패' } : null}
       retryScope={options.retryScope}
@@ -304,6 +365,22 @@ describe('proposal review dialog', () => {
     expect(markup).toContain('시간대 다시 불러오기');
     expect(markup).not.toContain('temporary failure');
     expect(markup).toContain('class="approve-button" disabled=""');
+  });
+
+  it('keeps an exact TASK concise but disabled until its source time zone is restored', () => {
+    const unavailableMarkup = renderProposal(explicitDateProposal(), {
+      sourceTimeZone: null,
+      sourceTimeZoneError: 'private transport detail',
+    });
+    const readyMarkup = renderProposal(explicitDateProposal(), {
+      sourceTimeZone: 'Asia/Seoul',
+    });
+
+    expect(unavailableMarkup).toContain('AI는 이렇게 이해했어요.');
+    expect(unavailableMarkup).toContain('시간대 다시 불러오기');
+    expect(unavailableMarkup).not.toContain('private transport detail');
+    expect(unavailableMarkup).toContain('class="approve-button" disabled=""');
+    expect(readyMarkup).toContain('class="approve-button">예, 이대로 적용');
   });
 
   it('shows v3 EVENT alternatives as untrusted and keeps every schedule unselected', () => {
@@ -407,6 +484,98 @@ describe('proposal review dialog', () => {
     expect(markup).toContain('aria-label="일정 유형 선택"');
     expect(markup).not.toContain('예, 이대로 적용');
     expect(markup).not.toContain('대표 제목');
+  });
+
+  it('opens a stored or capture-day-exhausted bare time in compact explicit clarification', () => {
+    const proposal = bareTimeProposal();
+    const review = createReviewDraft('proposal-bare-time', proposal);
+    const markup = renderProposal(proposal, { sourceTimeZone: 'Asia/Seoul' });
+
+    expect(shouldFocusStepHeadingOnInitialOpen(review)).toBe(true);
+    expect(review.items[0].due).toBeNull();
+    expect(markup).toContain('‘6시’를 정확히 지정');
+    expect(markup).toContain('날짜와 오전·오후를 선택하세요.');
+    expect(markup).toContain('aria-label="6시 날짜"');
+    expect(markup).toContain('>작성일</button>');
+    expect(markup).not.toContain('>오늘</button>');
+    expect(markup).toContain('value=""');
+    expect(markup).toContain('aria-pressed="false"');
+    expect(markup).toContain('오전 6:00');
+    expect(markup).toContain('오후 6:00');
+    expect(markup).toContain('시간 없이 두기');
+    expect(markup).toContain('class="approve-button" disabled=""');
+    expect(markup).not.toContain('안전하게 연결하지 못해 자동 적용하지');
+    expect(markup).not.toContain('예, 이대로 적용');
+  });
+
+  it('shows a capture-day resolved bare time as a normal proposal without auto-applying it', () => {
+    const proposal = captureDayResolvedBareTimeProposal();
+    const review = createReviewDraft('proposal-resolved-bare-time', proposal);
+    const markup = renderProposal(proposal, { sourceTimeZone: 'Asia/Seoul' });
+
+    expect(review.items[0].due).toMatchObject({
+      surfaceText: '6시',
+      value: '2026-09-02T18:00:00+09:00',
+      precision: 'RELATIVE_EXACT',
+    });
+    expect(markup).toContain('마감 6시 → 2026-09-02T18:00:00+09:00');
+    expect(markup).toContain('예, 이대로 적용');
+    expect(markup).not.toContain('‘6시’를 정확히 지정');
+  });
+
+  it.each([
+    ['오전 6시', '원문 시각 오전 6:00'],
+    ['오후 6시', '원문 시각 오후 6:00'],
+    ['07시', '원문 시각 07:00'],
+    ['18시', '원문 시각 18:00'],
+    ['18:30', '원문 시각 18:30'],
+  ])('keeps %s fixed and asks only for an explicit date', (surfaceText, fixedLabel) => {
+    const markup = renderProposal(bareTimeProposal(surfaceText), {
+      sourceTimeZone: 'Asia/Seoul',
+      clientRecordedAt: '2026-09-02T04:00:00Z',
+    });
+
+    expect(markup).toContain('날짜를 선택하세요.');
+    expect(markup).toContain(fixedLabel);
+    expect(markup).not.toContain('aria-label="오전 또는 오후"');
+    expect(markup).toContain('class="approve-button" disabled=""');
+  });
+
+  it('offers the compact unresolved time as an explicit EVENT start without preselecting it', () => {
+    const proposal = bareTimeProposal();
+    proposal.typeCandidates = [{ value: 'EVENT', score: 0.93 }];
+    proposal.itemCandidates = [{ ...proposal.itemCandidates[0], kind: 'EVENT' }];
+    const markup = renderProposal(proposal, { sourceTimeZone: 'Asia/Seoul' });
+
+    expect(markup).toContain('‘6시’를 정확히 지정');
+    expect(markup).toContain('일정 시작으로 사용');
+    expect(markup).toContain('aria-label="항목 1 일정 시작"');
+    expect(markup).toContain('<option value="none" selected="">시간 미정으로 저장</option>');
+    expect(markup).toContain('class="approve-button" disabled=""');
+  });
+
+  it('keeps bare-time confirmation disabled and offers time-zone retry when provenance is missing', () => {
+    const markup = renderProposal(bareTimeProposal(), {
+      sourceTimeZone: null,
+      clientRecordedAt: null,
+      sourceTimeZoneError: 'private transport detail',
+    });
+
+    expect(markup).toContain('시간대 다시 불러오기');
+    expect(markup).toContain('메모를 작성한 시각과 시간대를 확인한 뒤 시각을 지정할 수 있습니다.');
+    expect(markup).not.toContain('private transport detail');
+    expect(markup).toContain('마감 시각으로 사용</button>');
+    expect(markup).toContain('class="approve-button" disabled=""');
+  });
+
+  it('does not promote a general imprecise date into the bare-time control', () => {
+    const markup = renderProposal(bareTimeProposal('주말쯤'), {
+      sourceTimeZone: 'Asia/Seoul',
+    });
+
+    expect(markup).not.toContain('정확히 지정');
+    expect(markup).toContain('AI가 다음 날짜를 특정 할 일의 마감이나 일정 후보로 안전하게 연결하지 못해');
+    expect(markup).not.toContain('예, 이대로 적용');
   });
 
   it('does not offer an invalid return to the summary when a known type has no item', () => {

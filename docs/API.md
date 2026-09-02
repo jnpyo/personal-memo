@@ -252,9 +252,15 @@ Content-Type: application/json
   "status": "ACTIVE",
   "analysisState": "NOT_STARTED",
   "createdAt": "2026-08-05T02:00:00Z",
-  "pinned": false
+  "pinned": false,
+  "clientRecordedAt": "2026-08-05T01:59:58Z",
+  "sourceTimeZone": "Asia/Seoul"
 }
 ```
+
+`clientRecordedAt`과 `sourceTimeZone`은 현재 immutable revision의 capture context다. 지연된
+proposal review는 이 두 값을 함께 사용하며 memo의 서버 `createdAt`, review 시각, browser 현재
+시간대로 날짜 없는 시각을 다시 해석하지 않는다.
 
 `id`는 client가 생성한다. `content`는 1–20,000자이며 `timeZone`은 서버에서 실제 IANA zone인지 다시 검증한다.
 
@@ -444,13 +450,19 @@ proposal은 상위 요청에도 합성 upgrade되지 않는다. 현재 PWA는 `3
 `schemaVersion`, `memoId`, `memoRevision`, `suggestedTitle`, `typeCandidates`, `dateCandidates`,
 `tagCandidates`, `itemCandidates`, `relationCandidates`, `ambiguityReasons`, `providerMetadata`를
 포함한 proposal JSON을 반환한다. 이 응답 자체는 canonical tag, task, event schedule을 생성하지
-않는다. 현재 Fake analyzer의 필수 provenance 값은 `fake-v9`, `none`, `none`, `none`,
+않는다. 현재 Fake analyzer의 필수 provenance 값은 `fake-v10`, `none`, `none`, `none`,
 `field-policy-v2`이며 `toolCalls`는 `0`이다. 추가 metadata의 `deterministicRulesVersion`은
-`korean-rules-v7`다. Current Fake와 localhost semantic-patch adapter는 계속 schema v2 producer다.
-V7 rules는 명시적인 `오늘|내일|모레 + 오전|오후 + 1–12시`(optional minutes)를 immutable revision의
-captured instant/source zone에서 `RELATIVE_EXACT`로 해석한다. 날짜 없는 `6시`는 계속 `UNKNOWN`이고
-today/PM을 자동 추론하지 않는다. `HYBRID` proposal에는 서버가 덮어쓴 bounded cloud evidence가
-추가되며 provider error detail은 포함하지 않는다.
+`korean-rules-v8`이다. Current Fake와 localhost semantic-patch adapter는 계속 schema v2 producer다.
+V8 rules는 명시적인 `오늘|내일|모레 + 오전|오후 + 1–12시`(optional minutes)를 immutable revision의
+captured instant/source zone에서 `RELATIVE_EXACT`로 해석한다. 날짜가 없고 무입자 또는 `에`인 explicit
+clock family—bare 1–12시 optional minutes, 오전/오후, Korean 24-hour clock, `HH:mm`—도 같은 작성일의
+후보 중 capture instant보다 엄격히 미래인 가장 이른 safe occurrence만 `RELATIVE_EXACT`로 제안한다.
+같은 시각이나 지난 후보는 제외한다. DST-gap occurrence는 버리고 더 늦은 unique same-day 후보를
+사용할 수 있지만 미래 overlap occurrence가 하나라도 있으면 전체 expression을 `UNKNOWN`으로 fail
+closed한다. 남은 safe 후보나 valid source zone이 없을 때도 `UNKNOWN`이며 다음 날로 이월하지 않는다.
+이 값은 proposal-only이고 manual Apply 전에는 canonical due/schedule이나 alarm/reminder를 만들지 않는다.
+`HYBRID` proposal에는 서버가 덮어쓴 bounded cloud evidence가 추가되며 provider error detail은
+포함하지 않는다.
 
 Schema v2의 모든 `dateCandidates[]`에는 proposal-local `candidateId`, 모든
 `itemCandidates[]`에는 nullable `dueDateCandidateId`가 필수다. Non-null due reference는 같은
@@ -613,8 +625,11 @@ Content-Type: application/json
 한 요청에는 최대 10개 tag와 1–3개 item을 선택할 수 있다. `newCanonicalName`은 well-formed
 UTF-16이고 U+0000을 포함하지 않아야 하며, raw name과 NFKC·여백 정규화 후 canonical
 name, `Locale.ROOT` lowercase name이 각각 1–100 Unicode code point여야 한다. 위반은 `422
-INVALID_TAG_NAME`이다. `DATE_ONLY`는 `YYYY-MM-DD`, `EXACT_TIME`은 offset을 포함한 ISO 8601
-timestamp여야 한다. 기존 tag도 현재 owner 소유인지 검증한다.
+INVALID_TAG_NAME`이다. `DATE_ONLY`는 `YYYY-MM-DD`, `EXACT_TIME`과 `RELATIVE_EXACT`는 offset을
+포함한 ISO 8601 timestamp여야 한다. Exact due의 offset은 immutable memo revision의 source IANA
+zone이 해당 local date-time에 허용하는 값이어야 한다. DST gap이나 zone/offset 불일치는
+`DUE_ZONE_OFFSET_MISMATCH`로 거절하며, overlap에서는 사용자가 명시한 두 valid offset 중 하나를
+그대로 보존한다. 기존 tag도 현재 owner 소유인지 검증한다.
 
 `items[].proposalCandidateId`는 저장된 proposal의 `itemCandidates[].candidateId`를 글자 하나도
 정규화하지 않고 복사한 opaque identity다. 사용자가 직접 추가한 item은 `null`이다.
@@ -627,13 +642,14 @@ relation field와 source candidate identity가 모두 없는 구형 request는 �
 shape로 재투영되어 이미 성공한 idempotency key를 그대로 replay할 수 있다. relation-aware request는
 별도 versioned hash material을 사용해 구형 hash와 충돌하지 않는다.
 
-apply body의 `items[].due.timeZone`은 기존 client 계약을 깨지 않기 위한 검증 대상 입력일 뿐 canonical zone 선택 권한이 아니다. 서버는 proposal이 참조하는 immutable memo revision을 잠근 뒤 모든 due의 persisted `source_time_zone`을 그 revision의 `source_time_zone`으로 교체한다. 따라서 다른 기기나 여행 중 복구·승인해도 date-only `OVERDUE` 경계는 원문을 기록한 시간대에서 계산된다.
+apply body의 `items[].due.timeZone`은 기존 client 계약을 깨지 않기 위한 검증 대상 입력일 뿐 canonical zone 선택 권한이 아니다. 서버는 proposal이 참조하는 immutable memo revision을 잠근 뒤 모든 due의 persisted `source_time_zone`을 그 revision의 `source_time_zone`으로 교체한다. Exact due는 그 locked source zone과 offset의 일치도 함께 검증한다. 따라서 다른 기기나 여행 중 복구·승인해도 exact instant와 date-only `OVERDUE` 경계는 원문을 기록한 시간대 의미를 벗어나지 않는다.
 
 Milestone 6A.1은 proposal schema v2 producer를 바꾸지 않았다. 이어진 6A.2a에서 PWA가 proposal-v3
 EVENT alternatives를 이해하더라도 모델 출력, candidate order/score, nullable suggestion으로 schedule을
 자동 연결하지 않으며 review draft는 모든 version에서 unscheduled로 시작한다. 사용자가 precise 기존
 `dateCandidate`, 표시된 v3 alternative, 또는 직접 입력을 명시적으로 선택한 결과만 다음 Apply shape로
-보낸다. 현재 `fake-v9`/`korean-rules-v7`의 `오늘 오후 6시` 같은 candidate도 사용자 선택 전에는
+보낸다. 현재 `fake-v10`/`korean-rules-v8`의 `오늘 오후 6시` 또는 안전하게 해석된 날짜 없는 clock
+candidate도 사용자 선택 전에는
 canonical EVENT start가 아니다. V3 inclusive all-day candidate를 사용자가 고른 경우에만 declared
 boundary에 따라 exclusive end를 한 day 뒤로 normalize한다; missing end는 그대로 null이다.
 
@@ -818,7 +834,7 @@ X-Expected-Owner-Id: 018f4fad-e9a9-7a01-a4d1-936938a8a1e8
   "byAnalysisVersion": [
     {
       "route": "LOCAL",
-      "analyzerVersion": "fake-v9",
+      "analyzerVersion": "fake-v10",
       "promptVersion": "none",
       "localModelVersion": "none",
       "embeddingModelVersion": "none",

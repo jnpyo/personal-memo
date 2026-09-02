@@ -31,8 +31,8 @@ import tools.jackson.databind.node.ObjectNode;
 @Component
 public class FakeAnalyzer implements LocalAnalyzer {
   private static final AnalysisProvenance PROVENANCE =
-      new AnalysisProvenance("fake-v9", "none", "none", "none");
-  private static final String DETERMINISTIC_RULES_VERSION = "korean-rules-v7";
+      new AnalysisProvenance("fake-v10", "none", "none", "none");
+  private static final String DETERMINISTIC_RULES_VERSION = "korean-rules-v8";
   private static final int MAX_DATE_CANDIDATES = 5;
   private static final int MAX_ITEM_CANDIDATES = 3;
   private static final Pattern OPERATING_SYSTEMS_ALIAS =

@@ -70,10 +70,19 @@
   final owner/reference validation authoritative. Do not use raw/related memo retrieval,
   fuzzy/vector search, or embeddings in this step.
 - Preserve original date expression, interpreted value, base time, time zone, and precision.
-- Current `fake-v9` / `korean-rules-v7` may resolve only an explicit
+- Current `fake-v10` / `korean-rules-v8` resolves an explicit
   `오늘|내일|모레 + 오전|오후 + 1–12시` expression (optional minutes) against the immutable revision
-  instant/source zone as `RELATIVE_EXACT`. Keep a date-less `6시` as `UNKNOWN`; never infer today or
-  PM. A relative local time that is invalid or ambiguous in the source zone remains unresolved.
+  capture instant/source zone as `RELATIVE_EXACT`. For the date-less explicit clock family with no
+  particle or `에`—bare 1–12시 with optional minutes, explicit 오전/오후, Korean 24-hour clock, and
+  `HH:mm`—derive capture-day local occurrences in that same source zone, keep only occurrences
+  strictly after the capture instant, and propose the earliest safe occurrence as `RELATIVE_EXACT`.
+  Equality is not future and the rule never rolls to the next day. Discard a DST-gap occurrence but
+  allow a later unique same-day occurrence; any future overlap occurrence fails the whole expression
+  closed as `UNKNOWN`. Missing safe occurrences or a missing/invalid source zone also stays
+  `UNKNOWN` for review.
+- The inferred time remains an untrusted proposal. It cannot create a canonical due, EVENT schedule,
+  alarm, or reminder until the existing owner-scoped manual Apply succeeds; alarm/reminder delivery
+  is outside the current checkpoint.
 - Reject malformed JSON, unknown schema versions, impossible dates, and stale memo revisions.
 - Keep valid historical schema-v1 proposals recoverable without rewriting their stored JSON.
 - Negotiate proposal reads fail-closed: no schema header or value `1` returns strict v1, value `2`

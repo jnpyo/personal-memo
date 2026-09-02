@@ -37,6 +37,47 @@ public final class KoreanDateParser {
   private static final Pattern RELATIVE_DAY_TIME =
       Pattern.compile(
           "(?<![\\p{L}\\p{N}])(오늘|내일|모레)\\s*(오전|오후)\\s*(\\d{1,2})시(?:\\s*(\\d+)분)?(?:\\s*(?:에|부터|까지))?(?=$|\\s|[,.;!?])");
+  private static final String TIME_CUE_BOUNDARY = "(?=$|\\s|[,.;!?])";
+  private static final String DATELESS_TIME_TAIL_PARTICLE = "(?:에는|에도|엔|에|은|는|도|까지|부터|로)?";
+  private static final String UNSUPPORTED_DATELESS_TIME_TAIL =
+      "(?:(?:\\d+\\s*(?:분|초|시간)?"
+          + DATELESS_TIME_TAIL_PARTICLE
+          + ")|"
+          + "(?:(?:부터|까지)(?:는|도)?)|"
+          + "(?:(?:이전|이후|전후|쯤|경|무렵|정도|반|정각|이내|동안|사이|전|후|뒤|안|내)"
+          + DATELESS_TIME_TAIL_PARTICLE
+          + ")|"
+          + "(?:(?:넘어서|지나서)(?:는|도)?))";
+  private static final String UNSUPPORTED_DATELESS_TIME_SUFFIX =
+      "(?!\\s*" + UNSUPPORTED_DATELESS_TIME_TAIL + TIME_CUE_BOUNDARY + ")";
+  private static final Pattern DATELESS_TWELVE_HOUR_TIME =
+      Pattern.compile(
+          "(?<![\\p{L}\\p{N}])(?:(오전|오후)\\s*)?([1-9]|1[0-2])시"
+              + "(?:\\s*([0-5]?\\d)분)?+(?:\\s*에)?+"
+              + UNSUPPORTED_DATELESS_TIME_SUFFIX
+              + TIME_CUE_BOUNDARY);
+  private static final Pattern DATELESS_TWENTY_FOUR_HOUR_KOREAN_TIME =
+      Pattern.compile(
+          "(?<![\\p{L}\\p{N}])(0?0|0[1-9]|1[3-9]|2[0-3])시"
+              + "(?:\\s*([0-5]?\\d)분)?+(?:\\s*에)?+"
+              + UNSUPPORTED_DATELESS_TIME_SUFFIX
+              + TIME_CUE_BOUNDARY);
+  private static final Pattern DATELESS_HH_MM_TIME =
+      Pattern.compile(
+          "(?<![\\p{L}\\p{N}])([01]?\\d|2[0-3]):([0-5]\\d)(?:\\s*에)?+"
+              + UNSUPPORTED_DATELESS_TIME_SUFFIX
+              + TIME_CUE_BOUNDARY);
+  private static final Pattern DATE_QUALIFIER_IN_CLAUSE =
+      Pattern.compile(
+          "(?<![\\p{L}\\p{N}])(?:(?:오늘|내일|모레|어제)|"
+              + "(?:[월화수목금토일]요일)|"
+              + "(?:(?:이번|다음|저번|지난|오는)\\s*(?:주|달|주말))|"
+              + "(?:주말)|"
+              + "(?:\\d{4}[./-]\\d{1,2}[./-]\\d{1,2})|"
+              + "(?:\\d{1,2}[./]\\d{1,2})|"
+              + "(?:\\d{1,2}월\\s*\\d{1,2}일))"
+              + "(?:에는|에도|엔|은|는|도|에|의|로|부터|까지|쯤|경|무렵)?"
+              + "(?=$|\\s|[,/:()])");
   private static final Pattern NEXT_WEEK_DAY_TIME =
       Pattern.compile(
           "(?<![\\p{L}\\p{N}])다음\\s*주\\s*([월화수목금토일])요일\\s*(오전|오후)\\s*(\\d{1,2})시(?:\\s*(\\d+)분)?(?:\\s*(?:에|부터|까지))?(?=$|\\s|[,.;!?])");
@@ -61,13 +102,16 @@ public final class KoreanDateParser {
           "(?<![\\p{L}\\p{N}])(?:(?:오늘|내일|모레)\\s*)?(?:(?:오전|오후)\\s*)?"
               + "(?:(?:[01]?\\d|2[0-3])시(?:\\s*(?:[0-5]?\\d)분)?|"
               + "(?:[01]?\\d|2[0-3]):[0-5]\\d)"
-              + "(?:\\s*(?:에|부터|까지))?(?=$|\\s|[,.;!?])");
+              + "(?:\\s*(?:에|"
+              + UNSUPPORTED_DATELESS_TIME_TAIL
+              + "))?"
+              + TIME_CUE_BOUNDARY);
 
   public List<ParsedDate> parse(String content, Instant baseInstant, String timeZoneIdentifier) {
     Objects.requireNonNull(content, "content");
     Objects.requireNonNull(baseInstant, "baseInstant");
     if (timeZoneIdentifier == null || timeZoneIdentifier.isBlank()) {
-      throw new IllegalArgumentException("A non-blank IANA time zone is required.");
+      return unknownMatchesWithoutTimeZone(content);
     }
 
     ZoneId timeZone;
@@ -110,6 +154,26 @@ public final class KoreanDateParser {
         candidates,
         RulePriority.RELATIVE_DAY_TIME,
         matcher -> parseRelativeDayTime(matcher, baseDate, timeZone));
+    collect(
+        content,
+        DATELESS_TWELVE_HOUR_TIME,
+        candidates,
+        RulePriority.DATELESS_TWELVE_HOUR_TIME,
+        matcher -> parseDatelessTwelveHourTime(content, matcher, baseDate, baseInstant, timeZone));
+    collect(
+        content,
+        DATELESS_TWENTY_FOUR_HOUR_KOREAN_TIME,
+        candidates,
+        RulePriority.DATELESS_TWENTY_FOUR_HOUR_KOREAN_TIME,
+        matcher ->
+            parseDatelessTwentyFourHourTime(content, matcher, baseDate, baseInstant, timeZone));
+    collect(
+        content,
+        DATELESS_HH_MM_TIME,
+        candidates,
+        RulePriority.DATELESS_HH_MM_TIME,
+        matcher ->
+            parseDatelessTwentyFourHourTime(content, matcher, baseDate, baseInstant, timeZone));
     collect(
         content,
         APPROXIMATE_NEXT_WEEK_DAY_TIME,
@@ -331,6 +395,115 @@ public final class KoreanDateParser {
     }
   }
 
+  private ParsedDate parseDatelessTwelveHourTime(
+      String content, Matcher matcher, LocalDate baseDate, Instant baseInstant, ZoneId timeZone) {
+    try {
+      if (hasPrecedingDateQualifierInSameClause(content, matcher.start())) {
+        return unknown(matcher);
+      }
+      String period = matcher.group(1);
+      int twelveHour = Integer.parseInt(matcher.group(2));
+      int minute = matcher.group(3) == null ? 0 : Integer.parseInt(matcher.group(3));
+      int morningHour = twelveHour % 12;
+      List<Integer> hours =
+          period == null
+              ? List.of(morningHour, morningHour + 12)
+              : List.of(morningHour + ("오후".equals(period) ? 12 : 0));
+      return resolveDatelessWallClock(matcher, baseDate, baseInstant, timeZone, hours, minute);
+    } catch (DateTimeException | NumberFormatException exception) {
+      return unknown(matcher);
+    }
+  }
+
+  private ParsedDate parseDatelessTwentyFourHourTime(
+      String content, Matcher matcher, LocalDate baseDate, Instant baseInstant, ZoneId timeZone) {
+    try {
+      if (hasPrecedingDateQualifierInSameClause(content, matcher.start())) {
+        return unknown(matcher);
+      }
+      int hour = Integer.parseInt(matcher.group(1));
+      int minute = matcher.group(2) == null ? 0 : Integer.parseInt(matcher.group(2));
+      return resolveDatelessWallClock(
+          matcher, baseDate, baseInstant, timeZone, List.of(hour), minute);
+    } catch (DateTimeException | NumberFormatException exception) {
+      return unknown(matcher);
+    }
+  }
+
+  private ParsedDate resolveDatelessWallClock(
+      Matcher matcher,
+      LocalDate baseDate,
+      Instant baseInstant,
+      ZoneId timeZone,
+      List<Integer> candidateHours,
+      int minute) {
+    List<ZonedDateTime> futureCandidates = new ArrayList<>();
+    for (int hour : candidateHours) {
+      LocalDateTime localDateTime = LocalDateTime.of(baseDate, LocalTime.of(hour, minute));
+      List<ZoneOffset> validOffsets = timeZone.getRules().getValidOffsets(localDateTime);
+      if (validOffsets.size() > 1) {
+        boolean hasFutureOverlap =
+            validOffsets.stream()
+                .map(offset -> ZonedDateTime.ofStrict(localDateTime, offset, timeZone).toInstant())
+                .anyMatch(instant -> instant.isAfter(baseInstant));
+        if (hasFutureOverlap) {
+          return unknown(matcher);
+        }
+        continue;
+      }
+      if (validOffsets.isEmpty()) {
+        continue;
+      }
+      ZonedDateTime candidate =
+          ZonedDateTime.ofStrict(localDateTime, validOffsets.getFirst(), timeZone);
+      if (candidate.toInstant().isAfter(baseInstant)) {
+        futureCandidates.add(candidate);
+      }
+    }
+    if (futureCandidates.isEmpty()) {
+      return unknown(matcher);
+    }
+    ZonedDateTime earliest =
+        futureCandidates.stream().min(Comparator.comparing(ZonedDateTime::toInstant)).orElseThrow();
+    return candidate(
+        matcher,
+        earliest.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+        DatePrecision.RELATIVE_EXACT,
+        true,
+        0.95,
+        EnumSet.noneOf(AmbiguityReason.class));
+  }
+
+  private boolean hasPrecedingDateQualifierInSameClause(String content, int matchStart) {
+    int clauseStart = 0;
+    for (int index = matchStart - 1; index >= 0; index--) {
+      char current = content.charAt(index);
+      if (current == '\r'
+          || current == '\n'
+          || current == '!'
+          || current == '?'
+          || current == ';'
+          || current == '。'
+          || current == '！'
+          || current == '？') {
+        clauseStart = index + 1;
+        break;
+      }
+      if (current == '.') {
+        boolean betweenDigits =
+            index > 0
+                && index + 1 < matchStart
+                && Character.isDigit(content.charAt(index - 1))
+                && Character.isDigit(content.charAt(index + 1));
+        if (!betweenDigits) {
+          clauseStart = index + 1;
+          break;
+        }
+      }
+    }
+    return DATE_QUALIFIER_IN_CLAUSE.matcher(content.substring(clauseStart, matchStart)).find();
+  }
+
   private ParsedDate parseNextWeekDayTime(Matcher matcher, LocalDate baseDate, ZoneId timeZone) {
     try {
       int twelveHour = Integer.parseInt(matcher.group(3));
@@ -509,6 +682,11 @@ public final class KoreanDateParser {
             new RulePattern(KOREAN_MONTH_AND_DAY, RulePriority.KOREAN_MONTH_AND_DAY),
             new RulePattern(DAY_ONLY_DEADLINE, RulePriority.DAY_ONLY_DEADLINE),
             new RulePattern(RELATIVE_DAY_TIME, RulePriority.RELATIVE_DAY_TIME),
+            new RulePattern(DATELESS_TWELVE_HOUR_TIME, RulePriority.DATELESS_TWELVE_HOUR_TIME),
+            new RulePattern(
+                DATELESS_TWENTY_FOUR_HOUR_KOREAN_TIME,
+                RulePriority.DATELESS_TWENTY_FOUR_HOUR_KOREAN_TIME),
+            new RulePattern(DATELESS_HH_MM_TIME, RulePriority.DATELESS_HH_MM_TIME),
             new RulePattern(
                 APPROXIMATE_NEXT_WEEK_DAY_TIME, RulePriority.APPROXIMATE_NEXT_WEEK_DAY_TIME),
             new RulePattern(
@@ -537,6 +715,9 @@ public final class KoreanDateParser {
     KOREAN_MONTH_AND_DAY(40),
     DAY_ONLY_DEADLINE(50),
     RELATIVE_DAY_TIME(51),
+    DATELESS_TWELVE_HOUR_TIME(52),
+    DATELESS_TWENTY_FOUR_HOUR_KOREAN_TIME(53),
+    DATELESS_HH_MM_TIME(54),
     APPROXIMATE_NEXT_WEEK_DAY_TIME(52),
     UNSUPPORTED_NEXT_WEEK_DAY_TIME(53),
     NEXT_WEEK_DAY_TIME(55),

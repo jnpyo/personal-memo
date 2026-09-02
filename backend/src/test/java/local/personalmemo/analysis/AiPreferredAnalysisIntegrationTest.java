@@ -40,7 +40,7 @@ import tools.jackson.databind.node.ObjectNode;
     })
 class AiPreferredAnalysisIntegrationTest extends PostgresIntegrationTestSupport {
   private static final AnalysisProvenance FAKE_PROVENANCE =
-      new AnalysisProvenance("fake-v9", "none", "none", "none");
+      new AnalysisProvenance("fake-v10", "none", "none", "none");
   private static final CloudGatewayDescriptor LOCAL_MODEL =
       new CloudGatewayDescriptor(
           "ai-preferred-integration-v1",

@@ -1,0 +1,331 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://personal-memo.local/schemas/ai-preferred-product-smoke-receipt-v2.json",
+  "title": "AiPreferredProductSmokeReceiptV2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "fixtureId",
+    "status",
+    "classification",
+    "decision",
+    "trainingDecision",
+    "loraDecision",
+    "ragStatus",
+    "automaticApply",
+    "recordedAt",
+    "scope",
+    "source",
+    "model",
+    "fake",
+    "liquidAi",
+    "comparison",
+    "gpu",
+    "cleanup"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "fixtureId": { "const": "ai-preferred-product-smoke-v2" },
+    "status": { "const": "PASS_NARROW_PRODUCT_PATH" },
+    "classification": { "const": "SOLO_PROVISIONAL/REPORT_ONLY" },
+    "decision": { "const": "NO_GO" },
+    "trainingDecision": { "const": "NO_GO_FOR_TRAINING" },
+    "loraDecision": { "const": "NO_GO" },
+    "ragStatus": { "const": "NOT_USED" },
+    "automaticApply": { "const": false },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "scope": { "$ref": "#/$defs/scope" },
+    "source": { "$ref": "#/$defs/source" },
+    "model": { "$ref": "#/$defs/model" },
+    "fake": {
+      "allOf": [
+        { "$ref": "#/$defs/arm" },
+        {
+          "properties": {
+            "invocationMode": { "const": "UNCERTAINTY_ONLY" },
+            "transferMode": { "const": "NO_NETWORK" },
+            "modelTokenEvidence": { "const": "NOT_APPLICABLE_ONLY" }
+          }
+        }
+      ]
+    },
+    "liquidAi": {
+      "allOf": [
+        { "$ref": "#/$defs/arm" },
+        {
+          "properties": {
+            "invocationMode": { "const": "AI_PREFERRED" },
+            "transferMode": { "const": "LOCAL_MACHINE_MEMO_CONTENT" },
+            "modelTokenEvidence": { "const": "NOT_REPORTED_OR_FALLBACK" }
+          }
+        }
+      ]
+    },
+    "comparison": { "$ref": "#/$defs/comparison" },
+    "gpu": { "$ref": "#/$defs/gpu" },
+    "cleanup": { "$ref": "#/$defs/cleanup" }
+  },
+  "$defs": {
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataClass",
+        "personalMemoAccessed",
+        "personalPostgresAccessed",
+        "personalCanonicalDataAccessed",
+        "productApplyEndpointCalled",
+        "externalProductServiceAccessed",
+        "alarmReminderCalled"
+      ],
+      "properties": {
+        "dataClass": { "const": "PUBLIC_SYNTHETIC_ONLY" },
+        "personalMemoAccessed": { "const": false },
+        "personalPostgresAccessed": { "const": false },
+        "personalCanonicalDataAccessed": { "const": false },
+        "productApplyEndpointCalled": { "const": false },
+        "externalProductServiceAccessed": { "const": false },
+        "alarmReminderCalled": { "const": false }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gitCommit",
+        "dirty",
+        "backendImageId",
+        "composeSha256",
+        "fixtureSha256",
+        "fixtureSchemaSha256",
+        "receiptSchemaSha256",
+        "orchestratorSha256",
+        "samplerSha256"
+      ],
+      "properties": {
+        "gitCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "dirty": { "type": "boolean" },
+        "backendImageId": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "composeSha256": { "$ref": "#/$defs/sha256" },
+        "fixtureSha256": { "$ref": "#/$defs/sha256" },
+        "fixtureSchemaSha256": { "$ref": "#/$defs/sha256" },
+        "receiptSchemaSha256": { "$ref": "#/$defs/sha256" },
+        "orchestratorSha256": { "$ref": "#/$defs/sha256" },
+        "samplerSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpointClass",
+        "ollamaVersion",
+        "tag",
+        "digest",
+        "gateway",
+        "contextLength",
+        "preloadedModelCount",
+        "postloadedModelCount"
+      ],
+      "properties": {
+        "endpointClass": { "const": "OWNED_LOOPBACK_127_0_0_1_11435" },
+        "ollamaVersion": { "const": "0.32.7" },
+        "tag": { "const": "hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q8_0" },
+        "digest": { "const": "677b7229e7816d6bbdf3f7b777a5321f9719ecd3ab6e2658a2ff3798d3185822" },
+        "gateway": { "const": "ollama-local-gateway-v2+local-semantic-patch-v2" },
+        "contextLength": { "const": 4096 },
+        "preloadedModelCount": { "const": 0 },
+        "postloadedModelCount": { "const": 0 }
+      }
+    },
+    "arm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "invocationMode",
+        "transferMode",
+        "analyzerVersion",
+        "deterministicRulesVersion",
+        "caseCount",
+        "reviewRequiredCount",
+        "schemaDomainAcceptedCount",
+        "cloudSuccessCount",
+        "acceptedChangedCount",
+        "acceptedUnchangedCount",
+        "localFallbackCount",
+        "toolCallCount",
+        "mutationCallCount",
+        "automaticApplyRequestCount",
+        "wallLatencyMilliseconds",
+        "attemptLatencyMilliseconds",
+        "safety",
+        "canonicalWriteDelta",
+        "modelTokenEvidence"
+      ],
+      "properties": {
+        "invocationMode": { "enum": ["UNCERTAINTY_ONLY", "AI_PREFERRED"] },
+        "transferMode": { "enum": ["NO_NETWORK", "LOCAL_MACHINE_MEMO_CONTENT"] },
+        "analyzerVersion": { "const": "fake-v10" },
+        "deterministicRulesVersion": { "const": "korean-rules-v8" },
+        "caseCount": { "const": 3 },
+        "reviewRequiredCount": { "const": 3 },
+        "schemaDomainAcceptedCount": { "const": 3 },
+        "cloudSuccessCount": { "$ref": "#/$defs/threeCount" },
+        "acceptedChangedCount": { "$ref": "#/$defs/threeCount" },
+        "acceptedUnchangedCount": { "$ref": "#/$defs/threeCount" },
+        "localFallbackCount": { "$ref": "#/$defs/threeCount" },
+        "toolCallCount": { "const": 0 },
+        "mutationCallCount": { "const": 0 },
+        "automaticApplyRequestCount": { "const": 0 },
+        "wallLatencyMilliseconds": { "$ref": "#/$defs/latency" },
+        "attemptLatencyMilliseconds": { "$ref": "#/$defs/latency" },
+        "safety": { "$ref": "#/$defs/safety" },
+        "canonicalWriteDelta": { "$ref": "#/$defs/canonicalWriteDelta" },
+        "modelTokenEvidence": {
+          "enum": ["NOT_APPLICABLE_ONLY", "NOT_REPORTED_OR_FALLBACK"]
+        }
+      }
+    },
+    "latency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "median", "max", "mean"],
+      "properties": {
+        "min": { "type": "integer", "minimum": 0, "maximum": 60000 },
+        "median": { "type": "integer", "minimum": 0, "maximum": 60000 },
+        "max": { "type": "integer", "minimum": 0, "maximum": 60000 },
+        "mean": { "type": "integer", "minimum": 0, "maximum": 60000 }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "affirmativeTaskPassCount",
+        "sameDayPreciseDatePassCount",
+        "negativeTaskPromotionCount",
+        "inventedPreciseDateCount",
+        "unresolvedHallucinationCount"
+      ],
+      "properties": {
+        "affirmativeTaskPassCount": { "const": 1 },
+        "sameDayPreciseDatePassCount": { "const": 1 },
+        "negativeTaskPromotionCount": { "const": 0 },
+        "inventedPreciseDateCount": { "const": 0 },
+        "unresolvedHallucinationCount": { "const": 0 }
+      }
+    },
+    "canonicalWriteDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "applications",
+        "memoItems",
+        "taskDetails",
+        "eventDetails",
+        "itemTags",
+        "tags",
+        "tagAliases",
+        "relations",
+        "calendarFeeds",
+        "calendarFeedEntries"
+      ],
+      "properties": {
+        "applications": { "const": 0 },
+        "memoItems": { "const": 0 },
+        "taskDetails": { "const": 0 },
+        "eventDetails": { "const": 0 },
+        "itemTags": { "const": 0 },
+        "tags": { "const": 0 },
+        "tagAliases": { "const": 0 },
+        "relations": { "const": 0 },
+        "calendarFeeds": { "const": 0 },
+        "calendarFeedEntries": { "const": 0 }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pairedCaseCount",
+        "medianWallDeltaMilliseconds",
+        "liquidToFakeMedianWallRatio",
+        "semanticImprovement"
+      ],
+      "properties": {
+        "pairedCaseCount": { "const": 3 },
+        "medianWallDeltaMilliseconds": { "type": "integer", "minimum": 0, "maximum": 60000 },
+        "liquidToFakeMedianWallRatio": { "type": "number", "minimum": 0, "maximum": 10000 },
+        "semanticImprovement": { "const": "NOT_DEMONSTRATED" }
+      }
+    },
+    "gpu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "sampleCount",
+        "sampleMissCount",
+        "baselineUsedMiB",
+        "maxUsedMiB",
+        "postUsedMiB",
+        "maxUtilizationPercent",
+        "loadedModelObserved",
+        "maxOllamaVramBytes",
+        "contextLength"
+      ],
+      "properties": {
+        "scope": { "const": "DEVICE_WIDE_NON_EXCLUSIVE" },
+        "sampleCount": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "sampleMissCount": { "type": "integer", "minimum": 0, "maximum": 100000 },
+        "baselineUsedMiB": { "$ref": "#/$defs/memoryMiB" },
+        "maxUsedMiB": { "$ref": "#/$defs/memoryMiB" },
+        "postUsedMiB": { "$ref": "#/$defs/memoryMiB" },
+        "maxUtilizationPercent": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "loadedModelObserved": { "const": true },
+        "maxOllamaVramBytes": { "type": "integer", "minimum": 1 },
+        "contextLength": { "const": 4096 }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fakeProjectContainerCount",
+        "fakeProjectNetworkCount",
+        "fakeProjectVolumeCount",
+        "liquidProjectContainerCount",
+        "liquidProjectNetworkCount",
+        "liquidProjectVolumeCount",
+        "ownedOllamaProcessCount",
+        "ownedOllamaListenerCount",
+        "tempArtifactCount",
+        "personalProjectContainerCountBefore",
+        "personalProjectContainerCountAfter",
+        "personalProjectContainerCountUnchanged",
+        "defaultOllamaEndpointAccessed",
+        "restored"
+      ],
+      "properties": {
+        "fakeProjectContainerCount": { "const": 0 },
+        "fakeProjectNetworkCount": { "const": 0 },
+        "fakeProjectVolumeCount": { "const": 0 },
+        "liquidProjectContainerCount": { "const": 0 },
+        "liquidProjectNetworkCount": { "const": 0 },
+        "liquidProjectVolumeCount": { "const": 0 },
+        "ownedOllamaProcessCount": { "const": 0 },
+        "ownedOllamaListenerCount": { "const": 0 },
+        "tempArtifactCount": { "const": 0 },
+        "personalProjectContainerCountBefore": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "personalProjectContainerCountAfter": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "personalProjectContainerCountUnchanged": { "const": true },
+        "defaultOllamaEndpointAccessed": { "const": false },
+        "restored": { "const": true }
+      }
+    },
+    "threeCount": { "type": "integer", "minimum": 0, "maximum": 3 },
+    "memoryMiB": { "type": "integer", "minimum": 0, "maximum": 262144 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

@@ -426,6 +426,7 @@ public class MemoService {
         memo.analysisState(),
         memo.createdAt(),
         memo.pinned(),
+        memo.clientRecordedAt(),
         memo.sourceTimeZone());
   }
 

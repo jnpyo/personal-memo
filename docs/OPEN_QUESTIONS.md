@@ -176,9 +176,15 @@ operational approval. Resolved decisions are not implementation prompts.
 - Keep proposal schema v2 unchanged. It has no EVENT temporal binding, so review starts unscheduled
   and only an explicit user selection from a usable precise date candidate or direct schedule entry
   may create canonical `event_details`.
-- Current `fake-v9` / `korean-rules-v7` resolves only an explicit
+- Current `fake-v10` / `korean-rules-v8` resolves an explicit
   `오늘|내일|모레 + 오전|오후 + 1–12시` expression (optional minutes) against revision capture context.
-  A date-less `6시` remains `UNKNOWN`; today/PM is never inferred.
+  It also resolves the date-less explicit clock family with no particle or `에`—bare 1–12시 with
+  optional minutes, explicit 오전/오후, Korean 24-hour clock, and `HH:mm`—to the earliest safe
+  same-capture-day occurrence strictly after the immutable revision instant. Equality is not future.
+  Discard a gap occurrence and permit a later unique same-day occurrence; any future overlap
+  occurrence fails the whole expression closed as `UNKNOWN`. No safe remaining occurrence or
+  missing/invalid source zone also stays `UNKNOWN`; there is no automatic tomorrow rollover, alarm,
+  reminder, or Apply.
 - Require Apply `selectionSchemaVersion: "2"` only when an EVENT schedule is present. Preserve
   title-only EVENT compatibility, legacy request-hash projections, manual Apply, transaction rollback,
   owner/revision checks, idempotency, and undo.

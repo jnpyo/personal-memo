@@ -92,7 +92,7 @@ Build vertical slices and keep every checkpoint runnable. Do not begin with a mo
   decisions, while Milestones 3–4 require account-delivery or Web Push product choices. The read-only,
   PostgreSQL-only Milestone 5 slices can make bounded user-visible progress without inventing those
   external decisions or opening any real-provider gate.
-- Milestone 2: in progress. Korean date policy, versioned regression/`VISIBLE_CHALLENGE` fixtures, a content-free deterministic evaluation report and narrow regression safety gate, runtime schema/domain validation, versioned field-level routing with persisted provenance, provider-independent Fake cloud enrichment, prompt-injection boundaries, `UNKNOWN` user resolution, and raw-content-free owner-scoped review-outcome aggregation are implemented. `fake-v9` / `korean-rules-v7` emits proposal schema v2 with source-aligned sequential items, proposal-local date IDs, nullable TASK due references, guarded affirmative `접속하기`, and conservative incomplete-coverage signals under `field-policy-v2`. It resolves an explicit `오늘|내일|모레 + 오전|오후 + 1–12시` expression (optional minutes) against the immutable revision instant/source zone as `RELATIVE_EXACT`; negative/descriptive forms and a date-less `6시` remain unresolved, with no automatic today/PM inference. Historical schema v1 remains recoverable and `review-default-v3` uses explicit v2/v3 TASK-due bindings while keeping temporal-candidate-bearing v3 proposals and schedule-bearing selections unclassifiable. V13 adds exact owner/policy/timestamp consent and server-owned cloud evidence, V14 adds internal authorization/grant/token evidence, V15 adds durable prepare/claim/fence/lease/deadline/recovery/finalize mechanics, and V16 adds owner-active exact tag/alias K=8 context with pre-call raw/hash/version/count snapshot and final raw scrubbing. V17 adds `gateway-attempt-v1`: at most one owner-scoped row per claimed fence and no more than `max_attempts`, monotonic local elapsed when observed, explicit executor-rejection versus gateway-result semantics, and truthful `UNKNOWN`/`NOT_APPLICABLE`/`NOT_REPORTED` model-token/cost states. Existing dispatches remain `attempt_history_version=none` with no backfilled attempt rows. The production profile runs the same lifecycle through a 25-row, 30-second bounded recovery scanner. No V17 evidence appears in public POST/DTO/proposal/`providerMetadata`/UI/evaluation-report/log/browser/service-worker contracts, and attempt rows contain no provider text/ID/token/raw/context. `NO_NETWORK` Fake needs no consent; unconsented `EXTERNAL_MEMO_CONTENT` is zero-call; typed failure/exception/invalid output persists a validated local fallback without canonical changes. Evaluation dataset v2 still has no date-to-item binding gold. A local-only static reviewer packet and an external two-manifest aggregate verifier now make the prepared protocol executable without exposing fixture notes or analyzer output, but they cannot create human evidence or prove reviewer identity/independence. Completed human review and resolution, an approved version-3 binding dataset and separately held blind gate, provider/region/consent/retention decisions including attempt purge, related-memo/fuzzy/vector/embedding context, and real-model numeric usage/cost reporting, aggregation, and budget enforcement remain before a real provider decision. No blind `PASS` is claimed. The preserved Solo LiquidAI v1 and completed v2 prompt/schema development reports are both `SOLO_PROVISIONAL` / `REPORT_ONLY` and use only the visible 24 public synthetic fixtures. V2 development acceptance is `NOT_MET`, training is `NO_GO_FOR_TRAINING`, and LoRA is `NO_GO`; the historical prompt/schema `RECOMMENDED` decision is closed by the v8-A authoritative LiquidAI `NO_GO`. ADR 0007 historically opened the personal uncertainty fallback; ADR 0008 now supersedes only that personal invocation policy with exact-pinned localhost `AI_PREFERRED`, so every validated memo is called even when the deterministic decision is clear. The normal application default remains Fake + `UNCERTAINTY_ONLY`. V19 adds raw-free decision/fallback/model-contribution evidence. V20 adds separate invocation evidence plus a K=3 same-owner approved-type anchor snapshot containing only current-memo UTF-16 offsets and kind, with final raw scrubbing. The result remains proposal-only/manual Apply and `SOLO_PROVISIONAL`/`REPORT_ONLY`; no accuracy claim, external provider, RAG corpus/vector/embedding, automatic rule promotion, training, fine-tuning, LoRA, or alarm delivery is authorized.
+- Milestone 2: in progress. Korean date policy, versioned regression/`VISIBLE_CHALLENGE` fixtures, a content-free deterministic evaluation report and narrow regression safety gate, runtime schema/domain validation, versioned field-level routing with persisted provenance, provider-independent Fake cloud enrichment, prompt-injection boundaries, `UNKNOWN` user resolution, and raw-content-free owner-scoped review-outcome aggregation are implemented. `fake-v10` / `korean-rules-v8` emits proposal schema v2 with source-aligned sequential items, proposal-local date IDs, nullable TASK due references, guarded affirmative `접속하기`, and conservative incomplete-coverage signals under `field-policy-v2`. It resolves an explicit `오늘|내일|모레 + 오전|오후 + 1–12시` expression (optional minutes) against the immutable revision capture instant/source zone as `RELATIVE_EXACT`. The date-less explicit clock family with no particle or `에`—bare 1–12시 optional minutes, explicit 오전/오후, Korean 24-hour clock, and `HH:mm`—uses that same capture context and proposes the earliest safe same-day occurrence strictly after capture. Equality is not future. A gap occurrence is discarded and a later unique same-day occurrence may be used; any future overlap occurrence fails the whole expression closed as `UNKNOWN`. No safe remaining occurrence or missing/invalid source zone also stays `UNKNOWN`, with no tomorrow rollover. Negative/descriptive forms remain unresolved. Historical schema v1 remains recoverable and `review-default-v3` uses explicit v2/v3 TASK-due bindings while keeping temporal-candidate-bearing v3 proposals and schedule-bearing selections unclassifiable. V13 adds exact owner/policy/timestamp consent and server-owned cloud evidence, V14 adds internal authorization/grant/token evidence, V15 adds durable prepare/claim/fence/lease/deadline/recovery/finalize mechanics, and V16 adds owner-active exact tag/alias K=8 context with pre-call raw/hash/version/count snapshot and final raw scrubbing. V17 adds `gateway-attempt-v1`: at most one owner-scoped row per claimed fence and no more than `max_attempts`, monotonic local elapsed when observed, explicit executor-rejection versus gateway-result semantics, and truthful `UNKNOWN`/`NOT_APPLICABLE`/`NOT_REPORTED` model-token/cost states. Existing dispatches remain `attempt_history_version=none` with no backfilled attempt rows. The production profile runs the same lifecycle through a 25-row, 30-second bounded recovery scanner. No V17 evidence appears in public POST/DTO/proposal/`providerMetadata`/UI/evaluation-report/log/browser/service-worker contracts, and attempt rows contain no provider text/ID/token/raw/context. `NO_NETWORK` Fake needs no consent; unconsented `EXTERNAL_MEMO_CONTENT` is zero-call; typed failure/exception/invalid output persists a validated local fallback without canonical changes. Evaluation dataset v2 still has no date-to-item binding gold. A local-only static reviewer packet and an external two-manifest aggregate verifier now make the prepared protocol executable without exposing fixture notes or analyzer output, but they cannot create human evidence or prove reviewer identity/independence. Completed human review and resolution, an approved version-3 binding dataset and separately held blind gate, provider/region/consent/retention decisions including attempt purge, related-memo/fuzzy/vector/embedding context, and real-model numeric usage/cost reporting, aggregation, and budget enforcement remain before a real provider decision. No blind `PASS` is claimed. The preserved Solo LiquidAI v1 and completed v2 prompt/schema development reports are both `SOLO_PROVISIONAL` / `REPORT_ONLY` and use only the visible 24 public synthetic fixtures. V2 development acceptance is `NOT_MET`, training is `NO_GO_FOR_TRAINING`, and LoRA is `NO_GO`; the historical prompt/schema `RECOMMENDED` decision is closed by the v8-A authoritative LiquidAI `NO_GO`. ADR 0007 historically opened the personal uncertainty fallback; ADR 0008 now supersedes only that personal invocation policy with exact-pinned localhost `AI_PREFERRED`, so every validated memo is called even when the deterministic decision is clear. The normal application default remains Fake + `UNCERTAINTY_ONLY`. V19 adds raw-free decision/fallback/model-contribution evidence. V20 adds separate invocation evidence plus a K=3 same-owner approved-type anchor snapshot containing only current-memo UTF-16 offsets and kind, with final raw scrubbing. The result remains proposal-only/manual Apply and `SOLO_PROVISIONAL`/`REPORT_ONLY`; no accuracy claim, external provider, RAG corpus/vector/embedding, automatic rule promotion, training, fine-tuning, LoRA, automatic Apply, or alarm/reminder delivery is authorized.
 - Milestone 2 validation parity hardening is complete in source. One public-synthetic proposal control
   plus 17 structural/cross-field mutants now pin the expected JSON Schema/domain partition, while one
   raw-free local-decision control plus 15 cross-field mutants prove schema acceptance followed by
@@ -1024,6 +1024,73 @@ test, and a fail-closed server-owned public-origin capability.
 - the exact owner has viewed the deployed interface and begun visual review. Final physical-device
   acceptance remains open. Status is `SOURCE_QUALIFIED_PERSONAL_DEPLOYED_VISUAL_REVIEW_IN_PROGRESS`,
   `SOLO_PROVISIONAL/REPORT_ONLY`; unrestricted public/production remains `NO_GO`
+
+### 7.3 Compact unresolved-time clarification
+
+- keep the existing proposal-review dialog as the only interpretation checkpoint for bare Korean
+  clock text such as `6시`; do not infer today, AM/PM, a due date, an EVENT schedule, or an alarm
+- when exactly one version-2/3 TASK or EVENT and one bounded `1시`–`12시` UNKNOWN candidate are
+  present, ask for an explicit date and AM/PM in the item editor. The optional `오늘` shortcut is an
+  explicit user action and never an initial value
+- resolve the chosen wall clock against the immutable memo revision IANA time zone. Reject DST gaps,
+  require an explicit offset choice for overlaps, and require the same source-zone proof for exact
+  TASK due values that scheduled EVENT values already require
+- copy a confirmed value only into the editable review draft; `시간 없이 두기` records an explicit
+  draft-only dismissal. Neither path changes raw text, the stored proposal, or canonical data, and
+  the existing final Apply action remains mandatory
+- keep the request shape, JSON Schema, Flyway migrations, persistence, analyzer/model policy,
+  deployment topology, Web Push/alarm delivery, RAG, provider binding, fine-tuning, and LoRA
+  unchanged. Tighten only the existing server Apply domain invariant and OpenAPI prose so an exact
+  TASK due offset must match the locked source zone before any canonical write; reject mismatches and
+  DST gaps with `DUE_ZONE_OFFSET_MISMATCH`
+- 2026-09-02 frontend gates passed ESLint, 52 Vitest files/505 tests, TypeScript 5.9.3, and the Vite
+  7.3.6 production PWA build; the updated OpenAPI YAML parsed as 3.1.0. Focused validator unit and
+  PostgreSQL no-write integration regressions were added, but Maven/PostgreSQL execution and full
+  OpenAPI lint were not run because this source-only turn did not start Docker and no local Maven
+  runtime is available. The focused disposable Playwright flow is registered but was not executed
+  because no isolated E2E stack was started. Personal deployment and physical-device acceptance
+  remain not claimed. Status:
+  `SOURCE_IMPLEMENTED_FRONTEND_GATES_PASS_BACKEND_AND_E2E_PENDING`,
+  `SOLO_PROVISIONAL/REPORT_ONLY`
+
+### 7.4 Capture-day future-clock default
+
+- supersede only the date-less-clock default from Milestone 7.3. Support no particle or `에` for bare
+  1–12시 with optional minutes, explicit 오전/오후, Korean 24-hour clock, and `HH:mm`; use the
+  immutable memo revision capture instant/source IANA zone instead of review time, device time, or
+  the current browser zone
+- derive local occurrences on the revision's capture date, keep only occurrences strictly after the
+  capture instant, and propose the earliest safe occurrence. Equality is not future and the rule
+  never rolls the clock to tomorrow
+- discard a DST-gap occurrence and permit a later unique same-day occurrence. Any future overlap
+  occurrence fails the whole expression closed as `UNKNOWN`; a fully passed overlap does not block a
+  later unique occurrence. No safe remaining occurrence or missing/invalid source zone also uses the
+  existing explicit clarification path. Negative, descriptive, approximate, `부터`/`까지`,
+  multi-candidate, and incompatible temporal semantics remain outside this narrow rule
+- identify the changed deterministic behavior as `fake-v10` / `korean-rules-v8` without rewriting
+  stored historical proposals or relabeling the prior fake-v8/fake-v9 public, shadow, deployment, or
+  evaluation evidence
+- preserve proposal-only/manual Apply. The rule may prepare an editable due/date candidate but may
+  not mutate canonical data, roll forward a day, auto-Apply, create or deliver an alarm/reminder, or
+  broaden Web Push, RAG, provider, fine-tuning, or LoRA scope
+- preserve the immutable AI-preferred product-smoke v1 fixture/schema/receipt and add a separate v2
+  public-synthetic source contract. V2 pins `2026-08-28T09:00:00+09:00` in `Asia/Seoul` and requires
+  `6시 디스코드 접속하기` to remain one grounded TASK whose due reference targets the
+  `2026-08-28T18:00:00+09:00` `RELATIVE_EXACT` date candidate. The receipt contract still requires
+  zero Apply/alarm/canonical-write delta. No v2 Docker/Ollama product smoke or receipt has been run,
+  so this is prepared source-contract coverage rather than runtime evidence
+- ADR 0020 records the superseding policy. Focused parser/analyzer/validator tests passed 106/106;
+  the complete non-PostgreSQL backend unit suite passed 663 executed with 252 environment-gated
+  skips and zero failures; frontend ESLint, 52 files/529 Vitest tests, TypeScript/PWA build, and the
+  v2 product-smoke source-contract gate passed. Exact source SHA `2117cb2` then passed duplicate
+  GitHub-hosted Linux runs `33594337649`/`33594340097`: OpenAPI and Compose/source/PowerShell contracts,
+  disposable PostgreSQL 17.6/Flyway V1-V23 backend `mvn verify` 924/924, and production-like isolated
+  Playwright 28/28. Local Docker Desktop 4.88.1 reproduced its pre-container `sailor-ingest.sock`
+  stale-endpoint failure and was restored to stopped without a new quarantine/reset or personal
+  container/volume access. The actual Docker/Ollama v2 product smoke remains unrun, so latency,
+  GPU/VRAM, and Fake/LiquidAI runtime comparison remain pending. Current status is
+  `SOURCE_QUALIFIED_LINUX_FULL_E2E_PASS_RUNTIME_AND_DEPLOYMENT_PENDING`,
+  `SOLO_PROVISIONAL/REPORT_ONLY`
 
 ## Initial issue order
 

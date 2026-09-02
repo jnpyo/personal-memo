@@ -27,6 +27,8 @@ class CaptureContextIntegrationTest extends PostgresIntegrationTestSupport {
             memoId, "capture-context-create", "original memo", clientCreatedAt, "America/New_York");
 
     assertThat(created.getResponse().getStatus()).isEqualTo(201);
+    assertThat(response(created).path("clientRecordedAt").asText())
+        .isEqualTo(clientCreatedAt.toInstant().toString());
     CaptureContext stored = captureContext(memoId, 1);
     assertThat(stored.clientRecordedAt()).isEqualTo(clientCreatedAt.toInstant());
     assertThat(stored.sourceTimeZone()).isEqualTo("America/New_York");
@@ -65,6 +67,8 @@ class CaptureContextIntegrationTest extends PostgresIntegrationTestSupport {
                 "America/New_York"));
 
     assertThat(first.getResponse().getStatus()).isEqualTo(200);
+    assertThat(response(first).path("clientRecordedAt").asText())
+        .isEqualTo(clientUpdatedAt.toInstant().toString());
     assertThat(response(replay)).isEqualTo(response(first));
     assertThat(mismatch.getResponse().getStatus()).isEqualTo(409);
     assertThat(response(mismatch).path("code").asText()).isEqualTo("IDEMPOTENCY_KEY_REUSED");

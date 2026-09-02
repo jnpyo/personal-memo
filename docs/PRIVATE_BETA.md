@@ -1,6 +1,6 @@
 # 1차 비공개 베타 체크포인트
 
-기준일은 2026-09-01이다.
+기준일은 2026-09-02이다.
 
 - `PRIOR_V19_CODE_AND_AUTOMATED_GATES`: `PASS`
 - `CURRENT_V20_BACKEND_MECHANICAL_GATE`: `PASS_773_TESTS`
@@ -8,7 +8,8 @@
 - `CURRENT_V20_MODEL_ACCURACY_QUALIFICATION`: `NOT_RUN_NO_CLAIM`
 - `CURRENT_V20_PRODUCT_SMOKE`: `PASS_NARROW_COMPATIBILITY` / `GENERAL_PROVIDER_NO_GO`
 - `CURRENT_V23_AI_PREFERRED_UI_SMOKE`: `PASS_PROVISIONAL_KEEP_ONLY` / `GENERAL_PROVIDER_NO_GO`
-- `CURRENT_REPEATABLE_AI_PREFERRED_PRODUCT_SMOKE`: `PASS_NARROW_PRODUCT_PATH` / `GENERAL_PROVIDER_NO_GO`
+- `PRIOR_V1_REPEATABLE_AI_PREFERRED_PRODUCT_SMOKE`: `PASS_NARROW_PRODUCT_PATH` / `GENERAL_PROVIDER_NO_GO`
+- `CURRENT_V2_REPEATABLE_AI_PREFERRED_PRODUCT_SMOKE`: `NOT_RUN_NO_CLAIM` / `GENERAL_PROVIDER_NO_GO`
 - `PRIOR_V18_PRIVATE_BETA_DECISION`: `GO_TO_DEVICE_ACCEPTANCE`
 - `PRIOR_V20_ROLLOUT_DECISION`: `GO_TO_DEVICE_ACCEPTANCE`
 - `PRIOR_PERSONAL_V22_ROLLOUT_DECISION`: `GO_TO_DEVICE_ACCEPTANCE`
@@ -38,6 +39,9 @@
 - `MILESTONE_6E_UNAUTH_ME_AND_PROVIDER_LOG_SENTINELS`: `UNVERIFIED`
 - `MILESTONE_7_1_TODAY_FIRST_MOBILE_HOME`: `SOURCE_QUALIFIED_LINUX_FULL_E2E_PASS_DEPLOYMENT_PENDING`
 - `MILESTONE_7_2_GRAPH_FIRST_MOBILE_HOME`: `SOURCE_QUALIFIED_PERSONAL_DEPLOYED_VISUAL_REVIEW_IN_PROGRESS`
+- `MILESTONE_7_3_COMPACT_TIME_CLARIFICATION`: `SOURCE_IMPLEMENTED_FRONTEND_GATES_PASS_BACKEND_AND_E2E_PENDING`
+- `MILESTONE_7_4_CAPTURE_DAY_FUTURE_CLOCK`:
+  `SOURCE_IMPLEMENTED_UNIT_AND_FRONTEND_GATES_PASS_POSTGRES_E2E_RUNTIME_PENDING`
 - LiquidAI evidence: `SOLO_PROVISIONAL` / `REPORT_ONLY` / `NO_GO`
 - Personal AI-preferred proposal path: `SOLO_PROVISIONAL` / `REPORT_ONLY`; owner-authorized V18→V20
   deployment, V20→V22 and V22→V23 backup/restore rehearsal/migration/rebuild/private-route smoke completed;
@@ -65,11 +69,16 @@ confirmed schedule의 RFC 5545 snapshot을 plain-text로 미리보고 같은 Blo
 추가하며 공개 URL, recipient membership/token, 자동 update/removal, alarm은 없다. 이어진 6C source에는
 recipient feed/token/membership와 update/removal tombstone이 구현되어 현재 personal V23 stack에 배포됐다.
 다만 실제 개인 feed row를 만들지 않았고 public activation과 외부 calendar client smoke는 계속 닫혀 있다.
-현재 source analyzer는 `fake-v9`/`korean-rules-v7`이며 명시적
-`오늘|내일|모레 + 오전|오후 + 1–12시`(optional minutes)만 revision capture context의
-`RELATIVE_EXACT`로 만든다. 날짜 없는 `6시`는 `UNKNOWN`이고 today/PM을 추론하지 않는다. TIMED
-Apply는 start/end offset이 immutable revision zone에서 유효해야 하며 DST gap을 거절하고 overlap의
-두 explicit valid offset 중 하나를 허용한다.
+현재 source analyzer는 `fake-v10`/`korean-rules-v8`이며 명시적
+`오늘|내일|모레 + 오전|오후 + 1–12시`(optional minutes)를 revision capture context의
+`RELATIVE_EXACT`로 만든다. 날짜가 없고 무입자 또는 `에`인 explicit clock family—bare 1–12시
+optional minutes, 오전/오후, Korean 24-hour clock, `HH:mm`—도 immutable revision capture
+instant/source zone에서 작성 당일의 엄격히 미래인 가장 이른 safe occurrence만 제안한다. DST-gap
+occurrence는 제외하고 더 늦은 unique same-day 후보를 허용하지만 미래 overlap occurrence가 있으면
+전체 expression은 `UNKNOWN`이다. 남은 safe 후보나 valid source zone이 없어도 `UNKNOWN`이며 다음
+날로 이월하지 않는다. 이 값은 proposal-only/manual Apply이고 alarm/reminder를 자동 생성하거나
+전달하지 않는다. TIMED Apply는 start/end offset이 immutable revision zone에서 유효해야 하며 DST gap을
+거절하고 overlap의 두 explicit valid offset 중 하나를 허용한다.
 
 ## 데이터와 모델 경계
 
@@ -674,3 +683,70 @@ physical-device acceptance가 아니다. Personal memo body, owner session, cano
 Cloudflare 설정은 읽거나 변경하지 않았다. 현재 판정은
 `SOURCE_QUALIFIED_PERSONAL_DEPLOYED_VISUAL_REVIEW_IN_PROGRESS`, `SOLO_PROVISIONAL/REPORT_ONLY`이며
 unrestricted public/production은 `NO_GO`다.
+
+## 2026-09-02 Milestone 7.3 compact unresolved-time clarification
+
+공개 synthetic 문장 `6시 디스코드 접속하기`의 결정론적 TASK 판정과 UNKNOWN 시간 후보는
+그대로 유지했다. Proposal review는 이 좁은 형태에서 날짜와 오전/오후를 모두 사용자가 고르기
+전까지 Apply를 막으며, `오늘`도 사용자가 누르기 전에는 선택하지 않는다. 선택한 현지 시각은
+immutable memo revision의 IANA time zone으로 해석한다. DST gap은 거절하고 overlap은 두 offset 중
+하나를 명시적으로 골라야 한다. 사용자는 대신 `시간 없이 두기`를 선택할 수 있다. 두 경로 모두
+최종 Apply 전에는 raw memo, proposal, canonical task/event를 변경하지 않는다.
+
+Frontend gate는 ESLint, 52 Vitest files/505 tests, TypeScript 5.9.3과 Vite 7.3.6 production PWA
+build를 통과했다. 단위 회귀는 초기 date/AM-PM 미선택, exact TASK와 TIMED EVENT Apply body,
+explicit no-time 선택, proposal 불변성, source-time-zone gate, particle 방향성, Asia/Seoul offset,
+DST gap/overlap을 포함한다. 격리 E2E용 Playwright 시나리오는 러너에 등록됐지만 이 source-only
+turn에는 disposable stack을 시작하지 않아 실행 결과를 주장하지 않는다.
+
+기존 Apply request shape와 JSON Schema는 유지하고, exact TASK due offset을 immutable revision
+source zone과 대조하는 서버 domain validation 및 관련 OpenAPI/API 문서만 보강했다. 불일치나 DST
+gap은 canonical write 전에 `DUE_ZONE_OFFSET_MISMATCH`로 거절한다. Validator 단위 회귀와 공개
+synthetic PostgreSQL no-write 통합 회귀를 추가했지만, local Maven runtime이 없고 Docker를 시작하지
+않았으므로 backend gate와 full OpenAPI lint는 이번 turn에 실행하지 않았다. OpenAPI YAML 3.1.0
+parse만 통과했다.
+
+Flyway, persistence shape, analyzer/model policy, prompt, RAG, fine-tuning, LoRA, Web Push/alarm
+delivery와 Cloudflare/Docker/Ollama runtime은 변경하지 않았다. Personal memo, owner session,
+PostgreSQL row, canonical data와 Apply를 읽거나 실행하지 않았고 배포 및 physical-device acceptance도
+수행하지 않았다. 현재 판정은
+`SOURCE_IMPLEMENTED_FRONTEND_GATES_PASS_BACKEND_AND_E2E_PENDING`,
+`SOLO_PROVISIONAL/REPORT_ONLY`다.
+
+## 2026-09-02 Milestone 7.4 capture-day future-clock policy
+
+Owner의 새 기본 규칙은 날짜가 없고 무입자 또는 `에`인 explicit clock family—bare 1–12시 optional
+minutes, 오전/오후, Korean 24-hour clock, `HH:mm`—를 메모 revision 작성 당일로 해석한다. 현재
+`fake-v10`/`korean-rules-v8` 계약은 immutable `client_recorded_at`과 `source_time_zone`으로 같은
+작성일의 local occurrence를 만들고, capture instant보다 엄격히 미래인 후보 중 가장 이른 safe
+occurrence만 `RELATIVE_EXACT` proposal로 제안한다. Candidate instant와 capture instant가 같으면
+미래가 아니며, 작성 당일 후보가 모두 지났다고 다음 날로 넘기지 않는다. DST-gap occurrence는
+제외하고 더 늦은 unique same-day 후보를 허용한다. 미래 overlap occurrence가 하나라도 있거나 남은
+safe 후보/valid source zone이 없으면 `UNKNOWN`으로 남겨 review에 보낸다.
+
+기존 AI-preferred product-smoke v1 fixture/schema/receipt는 immutable historical artifact로 그대로
+보존하고, 별도 v2 public-synthetic fixture/source contract를 추가했다. V2는
+`2026-08-28T09:00:00+09:00`, `Asia/Seoul`을 고정하고 `6시 디스코드 접속하기`가 grounded TASK 한
+개와 `2026-08-28T18:00:00+09:00` `RELATIVE_EXACT` candidate를 만들며 TASK
+`dueDateCandidateId`가 그 candidate를 참조하도록 강제한다. Receipt v2는 계속 Apply endpoint,
+alarm/reminder, personal memo/PostgreSQL/canonical access와 canonical write delta를 모두 0으로
+제한하며 Fake/Liquid 양 arm의 실제 proposal metadata가 `fake-v10`/`korean-rules-v8`인지 검증해
+receipt에 남긴다. 이 v2 contract를 사용하는 Docker/Ollama product smoke와 receipt 생성은 아직 실행하지
+않았으므로 runtime PASS, latency, GPU/VRAM, Fake/LiquidAI 비교 수치를 주장하지 않는다.
+
+이 결정은 ADR 0020에 기록하며 ADR 0009와 ADR 0019의 date-less-clock 조항만 supersede한다. 과거
+`fake-v8` 또는 `fake-v9` 평가·shadow·배포 기록은 당시 사실로 유지하며 `fake-v10` 측정으로 다시
+이름 붙이지 않는다. 새 값도 untrusted proposal이고 owner의 기존 manual Apply 전에는 canonical
+TASK due나 EVENT schedule을 만들지 않는다. Automatic Apply, 다음 날 이월, alarm/reminder 생성·전달,
+  Web Push, RAG, fine-tuning, LoRA는 이 정책에 포함되지 않는다. Focused
+  parser/analyzer/validator 106/106과 전체 non-PostgreSQL backend unit suite 663 executed/252
+  environment-gated skipped/0 failed가 통과했다. Frontend ESLint, 52 files/529 Vitest tests,
+  TypeScript/PWA build와 v2 product-smoke source-contract gate도 통과했다. Exact source SHA
+  `2117cb2`의 GitHub-hosted Linux runs `33594337649`/`33594340097`은 OpenAPI, Compose/source 및 Windows
+  PowerShell contracts, disposable PostgreSQL 17.6/Flyway V1-V23 backend `mvn verify` 924 tests와
+  production-like isolated Playwright 28/28을 모두 통과했다. Local Docker Desktop 4.88.1은 container
+  시작 전 `sailor-ingest.sock` stale-endpoint 오류를 재현해 새 quarantine/reset 없이 다시 stopped로
+  복구했다. Actual Docker/Ollama product smoke는 실행하지 않았으므로 latency, GPU/VRAM, Fake/LiquidAI
+  비교 수치는 계속 주장하지 않는다. 상태는
+  `SOURCE_QUALIFIED_LINUX_FULL_E2E_PASS_RUNTIME_AND_DEPLOYMENT_PENDING`,
+  `SOLO_PROVISIONAL/REPORT_ONLY`다.

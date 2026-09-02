@@ -148,8 +148,15 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 - Display any future EVENT temporal alternatives as `아직 미적용`; never initialize a schedule from
   candidate order, score, or model suggestion. A user action must choose an alternative before the
   ordinary Apply confirmation can persist it.
-- Keep a bare or date-less `6시` unresolved as `UNKNOWN`; never infer today, AM/PM, an EVENT schedule,
-  or an alarm from it.
+- Interpret the date-less explicit clock family with no particle or `에`—bare 1–12시 with optional
+  minutes, explicit 오전/오후, Korean 24-hour clock, and `HH:mm`—from the immutable revision capture
+  instant and source zone. Use the same capture date and propose only the earliest safe occurrence
+  strictly after capture. Equality is not future. Discard a DST-gap occurrence but allow a later
+  unique same-day occurrence; any future overlap occurrence fails closed as `UNKNOWN`. If no safe
+  occurrence remains or the source zone is missing/invalid, ask for review. Never roll the clock to
+  tomorrow.
+- Keep this interpretation proposal-only. The ordinary owner confirmation and manual Apply remain
+  mandatory, and no bare clock creates or delivers an automatic alarm or reminder.
 - Explain only uncertain fields, not the entire model reasoning.
 - Allow partial apply.
 
