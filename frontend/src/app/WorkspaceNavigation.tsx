@@ -7,7 +7,7 @@ type Props = {
 
 const NAVIGATION_ITEMS: ReadonlyArray<{ view: WorkspaceView; label: string }> = [
   { view: 'GRAPH', label: '연결' },
-  { view: 'MEMOS', label: '메모' },
+  { view: 'MEMOS', label: '추가' },
   { view: 'AGENDA', label: '일정' },
   { view: 'SETTINGS', label: '설정' },
 ];

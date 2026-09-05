@@ -1092,6 +1092,54 @@ test, and a fail-closed server-owned public-origin capability.
   `SOURCE_QUALIFIED_LINUX_FULL_E2E_PASS_RUNTIME_AND_DEPLOYMENT_PENDING`,
   `SOLO_PROVISIONAL/REPORT_ONLY`
 
+### 7.5 Capture-only add and graph-centered memo retrieval
+
+- keep the bounded confirmed MEMO-TAG graph as the default signed-in view, while renaming the second
+  bottom destination to `추가` and limiting it to the accessible raw-memo input, required bounded
+  state/error feedback, character count, and save action
+- remove the visible all-memo card list from the capture path. Put the existing private bounded
+  search behind a collapsed `메모 찾기` entry on the connection screen so raw-only, trashed, and
+  off-home memos remain reachable without injecting search results into React Flow
+- preserve active memo edit, proposal-generation, and trash actions in graph/search detail, and
+  preserve explicit restore for trashed search results. Keep revision, owner, idempotency, retry,
+  unsaved-edit, proposal-only, and manual Apply boundaries unchanged
+- make no API, OpenAPI, JSON Schema, fixture, Flyway, persistence, analyzer/model, canonical-data,
+  Docker, Ollama, Cloudflare, connector, or deployment-topology change
+- the bounded frontend gate passed ESLint, TypeScript, 53 Vitest files/532 tests, the Vite 7.3.6 PWA
+  build, the public-app source contract, and two backend-free Microsoft Edge synthetic flows at
+  384x854/854x384 with touch and horizontal-overflow assertions. Full disposable PostgreSQL/
+  production-like Playwright, personal deployment, installed-PWA refresh, and physical-device
+  acceptance were not run. Status is
+  `SOURCE_QUALIFIED_FRONTEND_FOCUSED_E2E_PASS_FULL_STACK_AND_DEPLOYMENT_PENDING`,
+  `SOLO_PROVISIONAL/REPORT_ONLY`
+
+#### 2026-09-05 corrective slice
+
+- The original 532-unit/two-shell-flow pass is historical and did not qualify modal edit recovery.
+  Correct delayed-save selection mixing, modal-inaccessible save retries, stale conflict recovery,
+  and dirty-detail loss on graph refresh. Keep failed retry bodies/idempotency identities stable;
+  latest-source reload retains the draft and requires explicit rebase followed by a separate save.
+- Add query-free recent/trash browsing within the graph finder using existing owner-scoped reads,
+  with an honest 50-per-lifecycle bound. Do not claim full-corpus access. Query-free pagination beyond
+  that bound remains a separate API-contract and PostgreSQL/E2E work item.
+- Scope the proposal editor's `추가` E2E locator to its dialog. Add browser regressions exercising
+  actual interactions, not just static action visibility or shell layout.
+- API/Schema/Flyway/analyzer/automatic-Apply and personal deployment state remain unchanged. Source
+  verification is separate from Linux full-stack CI, personal deployment, and physical-device proof.
+- Corrective gate: ESLint/app TypeScript, 54 unit files/547 tests, PWA build, public-app source
+  contracts, E2E TypeScript and 38-test collection passed. The executed browser subset was 12/12
+  (10 interaction regressions + two mobile shell flows), with all APIs mocked, including a rerun
+  against the built production preview. Full backend/PostgreSQL/production-like E2E and rollout
+  remain pending. Status:
+  `SOURCE_CORRECTED_SYNTHETIC_INTERACTIONS_PASS_FULL_STACK_AND_DEPLOYMENT_PENDING`,
+  `SOLO_PROVISIONAL/REPORT_ONLY`.
+- Continuation adds the recent-memo surface to delayed-save, retry, and conflict browser coverage:
+  the built-artifact mocked subset now passes 16/16, while 42 tests are discoverable in total.
+  Five source-contract gates, 36 PowerShell parses, and nine daemonless example-only Compose
+  validations passed. No Docker start or remote publication occurred. Existing Linux CI is the next
+  full-stack qualification path after source-only branch/PR publication approval; backend/PostgreSQL,
+  OpenAPI lint, edge-container smoke, and 26 integrated primary flows remain pending for this source.
+
 ## Initial issue order
 
 1. Decide PWA/data authority/auth defaults and write ADRs.

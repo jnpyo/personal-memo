@@ -11,6 +11,10 @@ import type { Node, NodeProps } from '@xyflow/react';
 import type { GraphNode, GraphProjection, MemoView } from '../../shared/api/types';
 import { CurrentMemoDetail } from '../memos/CurrentMemoDetail';
 import {
+  MemoDetailActions,
+  type MemoDetailActionsConfig,
+} from '../memos/MemoDetailActions';
+import {
   buildFlowElements,
   selectedNodeForProjection,
   type MemoGraphNodeData,
@@ -45,6 +49,7 @@ type Props = {
   onBackToNeighborhood: () => void;
   onSetPinned: (memoId: string, pinned: boolean) => void;
   onRetryPin: () => void;
+  memoActions?: MemoDetailActionsConfig;
 };
 
 type MemoGraphNode = Node<MemoGraphNodeData>;
@@ -310,6 +315,7 @@ type GraphNodeDetailDrawerProps = {
   onBackToNeighborhood: () => void;
   onSetPinned: (memoId: string, pinned: boolean) => void;
   onRetryPin: () => void;
+  memoActions?: MemoDetailActionsConfig;
 };
 
 function memoMetadata(node: GraphNode): string[] {
@@ -352,6 +358,7 @@ export function GraphNodeDetailDrawer({
   onBackToNeighborhood,
   onSetPinned,
   onRetryPin,
+  memoActions,
 }: GraphNodeDetailDrawerProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -511,6 +518,9 @@ export function GraphNodeDetailDrawer({
               onRetry={onRetry}
               headingId="graph-raw-content-title"
             />
+            {memoDetail && memoActions && (
+              <MemoDetailActions key={memoDetail.id} memo={memoDetail} {...memoActions} busy={memoActions.busy || loading} />
+            )}
             {isRootMemoDetail && neighborhoodLoading && !neighborhood && (
               <p className="graph-detail-state" role="status">전체 연결을 불러오는 중…</p>
             )}
@@ -530,7 +540,7 @@ export function GraphNodeDetailDrawer({
                     <button
                       type="button"
                       className="secondary-button"
-                      disabled={interactionDisabled || pinPending}
+                      disabled={interactionDisabled || pinPending || memoActions?.editDirty}
                       onClick={onRetryPin}
                     >
                       고정 변경 다시 시도
@@ -540,7 +550,8 @@ export function GraphNodeDetailDrawer({
                 <button
                   type="button"
                   className="approve-button graph-detail-pin"
-                  disabled={interactionDisabled || pinPending}
+                  disabled={interactionDisabled || pinPending || memoActions?.editDirty}
+                  title={memoActions?.editDirty ? '수정 내용을 저장하거나 취소해 주세요.' : undefined}
                   onClick={() => onSetPinned(memoDetail.id, !memoDetail.pinned)}
                 >
                   {pinPending
@@ -715,6 +726,7 @@ export function MemoTagGraph({
   onBackToNeighborhood,
   onSetPinned,
   onRetryPin,
+  memoActions,
 }: Props) {
   const openerRef = useRef<HTMLButtonElement | null>(null);
   const focusRestoreCancelRef = useRef<(() => void) | null>(null);
@@ -725,6 +737,7 @@ export function MemoTagGraph({
     selectedNode,
     loading,
     selectionProjectionVersion,
+    memoActions?.editDirty,
   );
   const { nodes, edges } = buildFlowElements(projection, currentNode?.id ?? null);
   const currentNodeId = currentNode?.id ?? null;
@@ -884,6 +897,7 @@ export function MemoTagGraph({
           onBackToNeighborhood={onBackToNeighborhood}
           onSetPinned={onSetPinned}
           onRetryPin={onRetryPin}
+          memoActions={memoActions}
         />
       )}
     </section>

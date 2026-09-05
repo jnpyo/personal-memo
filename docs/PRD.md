@@ -47,13 +47,17 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 
 - The mobile entry screen is a confirmed, bounded MEMO-TAG connection map that makes the owner's
   existing knowledge structure the first visual hierarchy.
-- Bottom navigation exposes four views: the connection map; a memo view containing capture, the
-  raw-memo list, and search; an agenda view containing tasks and confirmed events; and settings.
+- Bottom navigation exposes four views: the connection map with a collapsed private memo finder; a
+  capture-only `추가` view; an agenda view containing tasks and confirmed events; and settings.
 - The graph renders a curated neighborhood, not the entire corpus, and never treats an unapproved
   analysis proposal as a confirmed connection.
 - System types such as TASK and INFORMATION are represented by filters and node styling, not giant hub nodes.
-- Lists, search, tasks, and schedules remain usable without understanding graph mechanics.
-- Search can reveal and open a memo outside the bounded graph home.
+- Search, tasks, and schedules remain usable without manipulating graph nodes.
+- Search begins from the connection view and can reveal and open a raw-only, trashed, or off-home
+  memo without injecting it into the bounded graph.
+- The same disclosure provides query-free recent and trash browsing, explicitly limited to the
+  latest 50 memos per lifecycle state. This is not full-corpus traversal; older unknown-text material
+  remains a pagination follow-up, not a completed all-memo browsing capability.
 
 ### Knowledge that becomes action
 
@@ -86,16 +90,18 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
   pinned items, and important topic tags without inventing new canonical connections.
 - Tapping a node highlights its local neighborhood and opens a detail drawer.
 - Zooming changes detail level: clusters → tags → individual memos.
-- Keep four bottom-navigation destinations: connection map; memo capture, raw-memo list, and search;
-  tasks and confirmed events; and settings. Non-graph views must remain usable without graph knowledge.
+- Keep four bottom-navigation destinations: connection map with collapsed memo search; capture-only
+  add; tasks and confirmed events; and settings. Search results open a current detail surface without
+  changing the graph projection.
 - Keep detailed recovery, analysis-path, model, and infrastructure diagnostics out of the primary
   visual hierarchy. A compact same-origin reachability indicator may remain as a global utility, but
   it must describe only what the current page can prove and never claim database, Ollama, Cloudflare
   Tunnel, Access, or provider health.
 
-### 2a. Search
+### 2a. Graph-centered search
 
-- Search is usable without understanding the graph and can open a memo outside the bounded home.
+- Search opens from the graph screen but remains usable without selecting or manipulating a node,
+  and can open a memo outside the bounded home.
 - The current first slice searches the current raw body and latest applied title by literal
   normalized substring, plus canonical tags and aliases by exact normalized equality.
 - Lifecycle, task state, derived overdue, and current-revision date filters narrow results without
@@ -108,7 +114,8 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 
 ### 3. Quick capture
 
-- A dedicated memo view provides quick capture and the current raw-memo list from bottom navigation.
+- A dedicated `추가` view contains only quick capture, required bounded state/error feedback, and
+  the save action. It does not contain a raw-memo list or search results.
 - Saving creates a raw memo immediately.
 - Analysis happens after save and must not block further capture.
 - The background analysis result remains an untrusted proposal. Canonical tags, tasks, EVENT
@@ -123,6 +130,13 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
   owner-authorized backup, isolated V23-to-V23 restore, connector-first rollback, rebuild, local smoke,
   and connector-last remote boundary sequence. Visual review is in progress; status remains
   `SOLO_PROVISIONAL`/`REPORT_ONLY` rather than production acceptance.
+- Milestone 7.5 supersedes only the Milestone 7.2 placement of memo list/search. The card list is
+  removed from the capture destination, private search moves under the connection map, and existing
+  edit/proposal/trash/restore actions move to graph or search detail surfaces. The home graph remains
+  bounded and search results are never injected into it.
+- Detail editing must preserve drafts on failed save or latest-source reload, present recoverable
+  errors inside the active dialog, and prevent a late response from changing another selection.
+  Loading a newer source revision may not silently rebase or save the user's draft.
 - Connection wording reflects only same-origin API reachability and current workspace state. A green
   status must not be presented as database, model, Tunnel, Access, or provider-wide health.
 - PWA refresh remains explicit and blocked by unsaved work or a pending server operation. The UI calls

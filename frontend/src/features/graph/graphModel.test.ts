@@ -96,4 +96,14 @@ describe('buildFlowElements', () => {
       'test-v1',
     )).toBeNull();
   });
+
+  it.each([0, 2])('retains a dirty memo editor root without injecting it into a refreshed graph: %s', (index) => {
+    const selected = projection.nodes[index];
+    const refreshed: GraphProjection = {
+      projectionVersion: 'test-v2', nodes: [], edges: [], truncated: false,
+    };
+    expect(selectedNodeForProjection(refreshed, selected, false, 'test-v1', true)).toBe(selected);
+    expect(buildFlowElements(refreshed, selected.id).nodes).toEqual([]);
+    expect(selectedNodeForProjection(refreshed, selected, false, 'test-v1', false)).toBeNull();
+  });
 });

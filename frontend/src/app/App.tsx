@@ -15,13 +15,14 @@ import { EventList } from '../features/events/EventList';
 import type { CalendarSharingProtection } from '../features/events/calendarSharingModel';
 import { ConnectionStatus } from '../features/health/ConnectionStatus';
 import { OwnerRemoteAddress } from '../features/home/OwnerRemoteAddress';
-import { MemoLibrary } from '../features/memos/MemoLibrary';
 import { PwaUpdateManager } from '../features/pwa/PwaUpdateManager';
 import { PostponedReview } from '../features/review/PostponedReview';
 import { ProposalReview } from '../features/review/ProposalReview';
 import { AiProcessingDiagnostic } from '../features/review/AiProcessingDiagnostic';
 import { ReviewOutcomeSummary } from '../features/review/ReviewOutcomeSummary';
 import { MemoSearch } from '../features/search/MemoSearch';
+import { MemoBrowse } from '../features/memos/MemoBrowse';
+import type { MemoDetailActionsConfig } from '../features/memos/MemoDetailActions';
 import {
   confirmReviewDiscard,
   hasUnsavedWorkspaceChanges,
@@ -164,15 +165,15 @@ type WorkspaceAccountProps = ComponentProps<typeof AccountPanel>;
 
 const WORKSPACE_VIEW_TITLE: Record<WorkspaceView, string> = {
   GRAPH: '연결 지도',
-  MEMOS: '메모',
+  MEMOS: '새 메모',
   AGENDA: '일정',
   SETTINGS: '설정',
 };
 
 function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
-  const workspace = useMemoWorkspace(account.session.userId);
-  const [activeView, setActiveView] = useState<WorkspaceView>('GRAPH');
   const [memoEditDirty, setMemoEditDirty] = useState(false);
+  const workspace = useMemoWorkspace(account.session.userId, memoEditDirty);
+  const [activeView, setActiveView] = useState<WorkspaceView>('GRAPH');
   const [transientReviewDirty, setTransientReviewDirty] = useState(false);
   const [calendarSharingProtection, setCalendarSharingProtection] =
     useState<CalendarSharingProtection>({ pending: false, protectedState: false });
@@ -195,6 +196,11 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
     calendarSharingPending: calendarSharingProtection.pending,
   });
   const interactionLocked = serverOperationPending || pwaUpdating;
+  const analysisBlocked =
+    workspace.recoveryLoading ||
+    workspace.recoveryError !== null ||
+    workspace.review !== null ||
+    workspace.postponedReview !== null;
 
   useEffect(() => {
     if (workspace.review) {
@@ -248,6 +254,10 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
     );
   }
 
+  function confirmMemoEditDiscard(): boolean {
+    return confirmReviewDiscard(memoEditDirty, UNSAVED_WORKSPACE_NAVIGATION_MESSAGE);
+  }
+
   const guardedAccount: WorkspaceAccountProps = {
     ...account,
     interactionDisabled: interactionLocked,
@@ -299,6 +309,34 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
       window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
     });
   }
+
+  const failedUpdate = workspace.memoUpdateFailure;
+  const memoActions: MemoDetailActionsConfig = {
+    busy: interactionLocked,
+    editDirty: memoEditDirty,
+    pendingScope: workspace.pendingMemoScope,
+    analysisBlocked,
+    updateFailure: failedUpdate ? {
+      ...failedUpdate,
+      retry: failedUpdate.retry ? () => confirmSourceChange()
+        ? failedUpdate.retry!() : Promise.resolve(false) : undefined,
+    } : null,
+    onUpdate: (memo: Parameters<typeof workspace.updateMemo>[0], content: string) =>
+      confirmSourceChange() ? workspace.updateMemo(memo, content) : Promise.resolve(false),
+    onTrash: (memo: Parameters<typeof workspace.trashMemo>[0]) => {
+      if (!confirmSourceChange()) return false;
+      workspace.closeGraphNode();
+      workspace.trashMemo(memo);
+      return true;
+    },
+    onRestore: workspace.restoreMemo,
+    onAnalyze: (memo: Parameters<typeof workspace.analyzeMemo>[0]) => {
+      workspace.closeGraphNode();
+      workspace.analyzeMemo(memo);
+      return true;
+    },
+    onDirtyChange: setMemoEditDirty,
+  };
 
   return (
     <main className="workspace-shell">
@@ -381,15 +419,40 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
           interactionDisabled={interactionLocked}
           onRetry={workspace.refreshWorkspace}
           onSelectNode={workspace.selectGraphNode}
-          onCloseDetail={workspace.closeGraphNode}
+          onCloseDetail={() => {
+            if (confirmMemoEditDiscard()) workspace.closeGraphNode();
+          }}
           onRetryDetail={workspace.retryGraphNodeDetail}
           onRetryNeighborhood={workspace.retryGraphNeighborhood}
           onLoadMoreNeighborhood={workspace.loadMoreGraphNeighborhood}
-          onOpenNeighborhoodMemo={workspace.openGraphNeighborhoodMemo}
-          onBackToNeighborhood={workspace.backToGraphNeighborhood}
-          onSetPinned={workspace.setMemoPinned}
+          onOpenNeighborhoodMemo={(node) => {
+            if (confirmMemoEditDiscard()) workspace.openGraphNeighborhoodMemo(node);
+          }}
+          onBackToNeighborhood={() => {
+            if (confirmMemoEditDiscard()) workspace.backToGraphNeighborhood();
+          }}
+          onSetPinned={(memoId, pinned) => {
+            if (!memoEditDirty && !interactionLocked) workspace.setMemoPinned(memoId, pinned);
+          }}
           onRetryPin={workspace.retryGraphPin}
+          memoActions={{ ...memoActions, onReload: workspace.reloadGraphMemoDetail }}
         />
+        <details className="graph-search-disclosure">
+          <summary>메모 찾기</summary>
+          <MemoSearch
+            memoActions={memoActions}
+            canCloseDetail={confirmMemoEditDiscard}
+          />
+          <MemoBrowse
+            activeMemos={workspace.activeMemos}
+            trashedMemos={workspace.trashedMemos}
+            loading={workspace.memosLoading}
+            error={workspace.memosError}
+            onRetry={workspace.refreshMemos}
+            memoActions={memoActions}
+            canCloseDetail={confirmMemoEditDiscard}
+          />
+        </details>
         <button
           type="button"
           className="capture-fab"
@@ -407,12 +470,7 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
         hidden={activeView !== 'MEMOS'}
       >
         <section className="workspace-compose" aria-labelledby="workspace-compose-title">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">CAPTURE</span>
-              <h2 id="workspace-compose-title">새 메모</h2>
-            </div>
-          </div>
+          <h2 id="workspace-compose-title" className="visually-hidden">새 메모</h2>
           <MemoCapture
             content={workspace.content}
             disabled={workspace.captureLocked || interactionLocked}
@@ -424,33 +482,6 @@ function WorkspaceApp({ account }: { account: WorkspaceAccountProps }) {
             onSubmit={workspace.captureMemo}
           />
         </section>
-
-        <MemoSearch />
-
-        <MemoLibrary
-          activeMemos={workspace.activeMemos}
-          trashedMemos={workspace.trashedMemos}
-          loading={workspace.memosLoading}
-          error={workspace.memosError}
-          busy={interactionLocked}
-          pendingScope={workspace.pendingMemoScope}
-          analysisBlocked={
-            workspace.recoveryLoading ||
-            workspace.recoveryError !== null ||
-            workspace.review !== null ||
-            workspace.postponedReview !== null
-          }
-          onRetry={workspace.refreshMemos}
-          onUpdate={(memo, content) =>
-            confirmSourceChange() ? workspace.updateMemo(memo, content) : Promise.resolve(false)
-          }
-          onTrash={(memo) => {
-            if (confirmSourceChange()) workspace.trashMemo(memo);
-          }}
-          onRestore={workspace.restoreMemo}
-          onAnalyze={workspace.analyzeMemo}
-          onDirtyChange={setMemoEditDirty}
-        />
       </section>
 
       <section

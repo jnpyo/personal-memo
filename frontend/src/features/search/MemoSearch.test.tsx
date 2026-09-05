@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MemoSearchItem, MemoView } from '../../shared/api/types';
+import type { MemoDetailActionsConfig } from '../memos/MemoDetailActions';
 import {
   focusMemoSearchResult,
   memoSearchOverdueDisabled,
@@ -32,6 +33,17 @@ const memo: MemoView = {
   status: 'TRASHED',
   analysisState: 'NOT_STARTED',
   createdAt: '2026-08-11T03:00:00Z',
+};
+
+const memoActions: MemoDetailActionsConfig = {
+  busy: false,
+  pendingScope: null,
+  analysisBlocked: false,
+  onUpdate: async () => true,
+  onTrash: () => undefined,
+  onRestore: () => undefined,
+  onAnalyze: () => undefined,
+  onDirtyChange: () => undefined,
 };
 
 afterEach(() => {
@@ -85,6 +97,41 @@ describe('MemoSearch', () => {
     expect(memoSearchResultTitle(item)).toBe('운영체제 과제');
     expect(memoSearchResultTitle({ ...item, title: null, preview: '\n본문' })).toBe('제목 없는 메모');
     expect(memoSearchResultTitle({ ...item, title: null, preview: '첫 줄\n둘째 줄' })).toBe('첫 줄');
+  });
+
+  it('fails closed when a detail response belongs to a different search result', () => {
+    const markup = renderToStaticMarkup(
+      <MemoSearchDetailDialog
+        item={item}
+        memo={{ ...memo, id: '22222222-2222-4222-8222-222222222222' }}
+        loading={false}
+        error={null}
+        onClose={() => undefined}
+        onRetry={() => undefined}
+        memoActions={memoActions}
+      />,
+    );
+    expect(markup).toContain('선택한 메모와 상세 응답이 일치하지 않습니다');
+    expect(markup).toContain('최신 원문 다시 불러오기');
+    expect(markup).not.toContain('서버의 현재 원문');
+    expect(markup).not.toContain('memo-detail-actions');
+  });
+
+  it('keeps the same memo action surface mounted during a retained-detail refresh', () => {
+    const markup = renderToStaticMarkup(
+      <MemoSearchDetailDialog
+        item={item}
+        memo={memo}
+        loading={true}
+        error={null}
+        onClose={() => undefined}
+        onRetry={() => undefined}
+        memoActions={{ ...memoActions, busy: true }}
+      />,
+    );
+    expect(markup).toContain('최신 원문을 불러오는 중');
+    expect(markup).toContain('memo-detail-actions');
+    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>복원<\/button>/);
   });
 
   it('restores focus to a remounted result and can cancel pending restoration', () => {

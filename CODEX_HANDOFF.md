@@ -928,3 +928,69 @@ public activation, real-feed qualification과 Google·Apple smoke는 final gate 
   WSL 2.7.12 release note에도 해당 수정은 없어 설치하지 않았다. GitHub-hosted Linux의 disposable
   full E2E 통과는 이 Windows host defect를 해결했다는 뜻이 아니다. 이 blocker가 해결되기 전에
   personal V23 rebuild나 Windows-host deployment acceptance를 진행하지 말 것.
+- 2026-09-02 M7.5 source work follows owner visual feedback: the `추가` destination is capture-only,
+  while the default connection view owns a collapsed private memo finder. The old visible all-memo
+  card list is no longer part of capture; active edit/proposal/trash and trashed restore actions remain
+  available from graph/search detail. The bounded 100-node home graph is not widened, raw/off-home
+  search results are not injected into React Flow, and proposal-only/manual Apply remains unchanged.
+  ADR 0021 records this frontend-only decision. No personal memo/session/PostgreSQL/canonical/Apply,
+  Docker, Ollama, Cloudflare, connector, or deployment state was accessed or changed for this source
+  slice. ESLint, TypeScript, 53 Vitest files/532 tests, the Vite 7.3.6 production PWA build, the
+  public-app source contract, and backend-free Microsoft Edge portrait/landscape synthetic flows 2/2
+  passed. Full disposable PostgreSQL/production-like E2E was not run. Current source status is
+  `SOURCE_QUALIFIED_FRONTEND_FOCUSED_E2E_PASS_FULL_STACK_AND_DEPLOYMENT_PENDING`,
+  `SOLO_PROVISIONAL/REPORT_ONLY`; personal deployment and physical-device acceptance are not claimed.
+- 2026-09-05 M7.5 corrective source work follows the owner's audit and fix request. The original two
+  shell tests and three static action tests did not establish modal edit/recovery safety; ADR 0021
+  now states that limitation explicitly instead of treating the original 532-test gate as proof of
+  every new interaction. The corrective work keeps updates and retries bound to the submitting
+  selection/request generation, shows save failures and stable-body/idempotency retries inside the
+  active detail, reloads latest source without unmounting the draft, and requires an explicit
+  `내 수정 내용 유지` choice followed by separate save after a revision conflict. Dirty edits prevent
+  pin changes and retain their detail root through bounded graph refresh without adding graph nodes.
+  Query-free recent/trash browsing uses existing owner-scoped arrays and explicitly shows a 50-per-
+  lifecycle bound. This fixes the lost recent-browsing path, NOT unknown-text full-corpus traversal;
+  pagination beyond that bound remains separate API/PostgreSQL/E2E work. No API/Schema/Flyway,
+  analyzer, training, automatic Apply, personal data/session/DB, Docker/Ollama/Cloudflare, connector,
+  deployment, commit, or PR mutation is part of this corrective source work.
+- Operational handoff caveat: the preceding Docker-stopped/deployment-pending entries are historical
+  snapshots, not a live-state attestation. Conversation history reports later personal update and
+  connector work, but that lineage was not recorded here contemporaneously. This source-only turn
+  does not invent deployment receipts or certify current services. Before another personal rollout,
+  reconcile the approved deployment evidence and current non-content operational state; do not
+  infer permission or current safety from either an old blocker or a conversation success message.
+- Corrective verification on 2026-09-05: frontend ESLint, app TypeScript, 54 Vitest files/547 tests,
+  Vite 7.3.6 PWA build, public-app source contracts, and `git diff --check` passed. Standalone E2E
+  TypeScript checking passed with bundled Node types, without changing dependencies; Playwright
+  collection found 38 tests. Only 12 browser tests were executed (10 new recovery/browsing scenarios
+  plus the two existing mobile shell flows), passing both against Vite source and the production
+  preview serving `index-Dmwd9ZN9.js` / `index-DFcbww19.css`. They exercised different/same reopened
+  search selections during save, graph selection locks, in-dialog stable-request retry, graph/search
+  conflict reload/draft preservation/explicit rebase/separate save, dirty pin/unpin guards, and raw-only
+  recent/trash access with explicit restore and zero search requests. All API responses were synthetic
+  mocks and unexpected API calls were asserted empty. The owned loopback preview and temporary test
+  output were cleaned up. The existing >500 kB JavaScript chunk warning remains non-blocking.
+  PostgreSQL/backend full verification, the full production-like E2E suite, CI publication, personal
+  rollout, installed-PWA refresh, and physical-device acceptance were NOT run. Current corrective
+  state is `SOURCE_CORRECTED_SYNTHETIC_INTERACTIONS_PASS_FULL_STACK_AND_DEPLOYMENT_PENDING`,
+  `SOLO_PROVISIONAL/REPORT_ONLY`. The prior full-stack pass belongs to its earlier source, not this
+  uncommitted corrective worktree based on `bd443b4`.
+- 2026-09-05 continuation expanded the browser matrix to the recent-memo detail too: delayed
+  completion after switching/reopening, stable-request save retry, and conflict reload/rebase/separate
+  save. The built-PWA mocked subset passed 16/16 (14 recovery/browsing + two shell flows); collection
+  now finds 42 tests, not 42 executed tests. Targeted E2E TypeScript and frontend lint passed. The
+  previous 547-unit/build evidence remains attached to the unchanged product code. Five source
+  contract gates passed (private deployment, public feed, calendar connector, owner-only app,
+  AI-product-smoke); private ACL checks ran under Windows PowerShell 5.1 on a disposable test folder.
+  PowerShell 7 cannot run the .NET Framework ACL helper, and the sandbox initially blocked the 5.1
+  temporary ACL operation; the bounded unsandboxed 5.1 test passed without touching personal ACLs.
+  All 36 PowerShell source files parsed. Nine Compose combinations passed daemonless `config --quiet`
+  with an empty temporary Docker config, explicit `.env.example`, and synthetic parameters, never
+  `.env.personal`. Docker Desktop processes and the Linux engine pipe were absent at preflight;
+  Docker was not started. PostgreSQL/backend full verify, OpenAPI linter, edge-container smoke, and
+  the 26 integrated primary flows remain unexecuted for this corrective source. Prefer the existing
+  GitHub-hosted Linux CI after approval to publish the selected source-only branch/PR. No remote
+  upload, merge, personal rebuild, canonical access, or connector action has occurred. Preview port
+  5197 and its generated test output were cleaned up. Full-corpus query-free pagination is still
+  pending, and graph-root disappearance is covered by unit-level snapshot retention rather than a
+  newly exercised late-refresh browser scenario. Do not turn either limitation into a completed gate.
