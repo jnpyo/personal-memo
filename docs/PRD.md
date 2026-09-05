@@ -55,6 +55,9 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
 - Search, tasks, and schedules remain usable without manipulating graph nodes.
 - Search begins from the connection view and can reveal and open a raw-only, trashed, or off-home
   memo without injecting it into the bounded graph.
+- The same disclosure provides query-free recent and trash browsing, explicitly limited to the
+  latest 50 memos per lifecycle state. This is not full-corpus traversal; older unknown-text material
+  remains a pagination follow-up, not a completed all-memo browsing capability.
 
 ### Knowledge that becomes action
 
@@ -131,6 +134,9 @@ Fast capture tools preserve thoughts but make later retrieval and action difficu
   removed from the capture destination, private search moves under the connection map, and existing
   edit/proposal/trash/restore actions move to graph or search detail surfaces. The home graph remains
   bounded and search results are never injected into it.
+- Detail editing must preserve drafts on failed save or latest-source reload, present recoverable
+  errors inside the active dialog, and prevent a late response from changing another selection.
+  Loading a newer source revision may not silently rebase or save the user's draft.
 - Connection wording reflects only same-origin API reachability and current workspace state. A green
   status must not be presented as database, model, Tunnel, Access, or provider-wide health.
 - PWA refresh remains explicit and blocked by unsaved work or a pending server operation. The UI calls

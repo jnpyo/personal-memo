@@ -68,10 +68,11 @@ export function selectedNodeForProjection(
   selectedNode: GraphNode | null,
   refreshPending: boolean,
   selectionProjectionVersion: string | null,
+  protectEditor = false,
 ): GraphNode | null {
   if (!selectedNode) return null;
   return projection.nodes.find((node) => node.id === selectedNode.id) ??
-    (refreshPending && projection.projectionVersion === selectionProjectionVersion
+    (protectEditor || (refreshPending && projection.projectionVersion === selectionProjectionVersion)
       ? selectedNode
       : null);
 }

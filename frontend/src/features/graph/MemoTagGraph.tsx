@@ -518,8 +518,8 @@ export function GraphNodeDetailDrawer({
               onRetry={onRetry}
               headingId="graph-raw-content-title"
             />
-            {!loading && !error && memoDetail && memoActions && (
-              <MemoDetailActions memo={memoDetail} {...memoActions} />
+            {memoDetail && memoActions && (
+              <MemoDetailActions key={memoDetail.id} memo={memoDetail} {...memoActions} busy={memoActions.busy || loading} />
             )}
             {isRootMemoDetail && neighborhoodLoading && !neighborhood && (
               <p className="graph-detail-state" role="status">전체 연결을 불러오는 중…</p>
@@ -540,7 +540,7 @@ export function GraphNodeDetailDrawer({
                     <button
                       type="button"
                       className="secondary-button"
-                      disabled={interactionDisabled || pinPending}
+                      disabled={interactionDisabled || pinPending || memoActions?.editDirty}
                       onClick={onRetryPin}
                     >
                       고정 변경 다시 시도
@@ -550,7 +550,8 @@ export function GraphNodeDetailDrawer({
                 <button
                   type="button"
                   className="approve-button graph-detail-pin"
-                  disabled={interactionDisabled || pinPending}
+                  disabled={interactionDisabled || pinPending || memoActions?.editDirty}
+                  title={memoActions?.editDirty ? '수정 내용을 저장하거나 취소해 주세요.' : undefined}
                   onClick={() => onSetPinned(memoDetail.id, !memoDetail.pinned)}
                 >
                   {pinPending
@@ -736,6 +737,7 @@ export function MemoTagGraph({
     selectedNode,
     loading,
     selectionProjectionVersion,
+    memoActions?.editDirty,
   );
   const { nodes, edges } = buildFlowElements(projection, currentNode?.id ?? null);
   const currentNodeId = currentNode?.id ?? null;

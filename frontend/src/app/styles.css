@@ -1122,7 +1122,8 @@ main {
   font-weight: 700;
 }
 
-.memo-filter button[aria-selected="true"] {
+.memo-filter button[aria-selected="true"],
+.memo-filter button[aria-pressed="true"] {
   background: #fff;
   color: #244d3b;
   box-shadow: 0 3px 10px #17221c12;
@@ -3842,6 +3843,14 @@ main.workspace-shell {
   box-shadow: none;
 }
 
+.graph-search-disclosure > .memo-browse-section {
+  border-top: 1px solid var(--line);
+}
+
+.memo-browse-section .memo-filter button {
+  min-height: 48px;
+}
+
 .capture-fab {
   position: fixed;
   z-index: 22;
@@ -4160,7 +4169,8 @@ main.workspace-shell {
   background: var(--memo-surface);
 }
 
-.memo-filter button[aria-selected="true"] {
+.memo-filter button[aria-selected="true"],
+.memo-filter button[aria-pressed="true"] {
   color: var(--memo-ink);
 }
 

@@ -206,10 +206,16 @@ async function openMemoSearch(page: Page): Promise<void> {
 
 async function expectMemoReachable(page: Page, rawMemo: string): Promise<void> {
   await openMemoSearch(page);
-  const search = page.locator('.graph-search-disclosure');
+  const search = page.getByRole('region', { name: '메모 검색', exact: true });
   const query = search.getByLabel('메모 검색어');
   await query.fill(rawMemo);
+  const responsePromise = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === '/api/v1/search/memos' &&
+    response.request().method() === 'POST' &&
+    response.request().postDataJSON().query === rawMemo,
+  );
   await query.press('Enter');
+  expect((await responsePromise).status()).toBe(200);
   await expect(search.locator('.memo-search-result').filter({ hasText: rawMemo })).toBeVisible();
 }
 
@@ -1395,7 +1401,8 @@ test('recovers from a stale proposal without offering the same apply retry', asy
   await expect(page.getByRole('button', { name: '승인 다시 시도' })).toHaveCount(0);
   await expect(page.getByText('메모 상태가 다른 곳에서 변경되었습니다.')).toBeVisible();
   await expectMemoReachable(page, revised);
-  await page.locator('.memo-search-result').filter({ hasText: revised }).click();
+  await page.getByRole('region', { name: '메모 검색', exact: true })
+    .locator('.memo-search-result').filter({ hasText: revised }).click();
   await expect(page.locator('.search-detail-dialog')).toContainText('revision 2');
   await page.getByRole('button', { name: '검색 메모 상세 닫기' }).click();
   await expect(page.locator('.task-row')).toHaveCount(0);
@@ -1446,7 +1453,8 @@ test('raw memo survives review, apply, reload, and undo', async ({ page }, testI
   await openProposalEditor(page);
   await page.getByRole('button', { name: '과제 태그 제외' }).click();
   await page.getByLabel('새 태그').fill('운영체제');
-  await page.getByRole('button', { name: '추가', exact: true }).click();
+  await page.getByRole('dialog', { name: 'AI 제안을 확인해 주세요' })
+    .getByRole('button', { name: '추가', exact: true }).click();
   await expect(page.getByLabel('새 태그')).toHaveValue('');
   await page.getByLabel('대표 제목').fill(approvedTitle);
   await expect(page.getByLabel('항목 1 제목')).toHaveValue(approvedTitle);
@@ -1599,7 +1607,8 @@ test('private lexical search opens an off-home current raw memo without graph in
   });
   expect(searchRequest.headers()['idempotency-key']).toBeUndefined();
 
-  const result = page.locator('.memo-search-result').filter({ hasText: targetRaw });
+  const result = page.getByRole('region', { name: '메모 검색', exact: true })
+    .locator('.memo-search-result').filter({ hasText: targetRaw });
   await expect(result).toBeVisible();
   await expectMinimumTouchHeight(result, 48);
   await result.click();
@@ -1721,21 +1730,22 @@ test('latest search wins and an invalid continuation requires an explicit first-
   await delayedStarted;
   await query.fill('latest-b');
   await query.press('Enter');
-  const latestResult = page.locator('.memo-search-result').filter({ hasText: 'latest-b result' });
+  const searchRegion = page.getByRole('region', { name: '메모 검색', exact: true });
+  const latestResult = searchRegion.locator('.memo-search-result').filter({ hasText: 'latest-b result' });
   await expect(latestResult).toBeVisible();
   releaseDelayed();
   await expect(latestResult).toBeVisible();
-  await expect(page.locator('.memo-search-result').filter({ hasText: 'delayed-a result' })).toHaveCount(0);
+  await expect(searchRegion.locator('.memo-search-result').filter({ hasText: 'delayed-a result' })).toHaveCount(0);
 
   await query.fill('cursor-test');
   await query.press('Enter');
-  const staleResult = page.locator('.memo-search-result').filter({ hasText: 'stale accumulated result' });
+  const staleResult = searchRegion.locator('.memo-search-result').filter({ hasText: 'stale accumulated result' });
   await expect(staleResult).toBeVisible();
   await page.getByRole('button', { name: '결과 더 불러오기' }).click();
   await expect(page.getByRole('alert').filter({ hasText: '검색 결과가 변경되었거나' })).toBeVisible();
   await expect(page.getByRole('button', { name: '결과 더 불러오기' })).toHaveCount(0);
   await page.getByRole('button', { name: '처음부터 다시 검색' }).click();
-  await expect(page.locator('.memo-search-result').filter({ hasText: 'fresh restarted result' })).toBeVisible();
+  await expect(searchRegion.locator('.memo-search-result').filter({ hasText: 'fresh restarted result' })).toBeVisible();
   await expect(staleResult).toHaveCount(0);
 });
 
@@ -1754,7 +1764,7 @@ test('search filters send an explicit half-open private body', async ({ page }, 
     });
   });
 
-  const searchSection = page.locator('.search-section');
+  const searchSection = page.getByRole('region', { name: '메모 검색', exact: true });
   await searchSection.getByText('작업·수정일 필터').click();
   await searchSection.getByLabel('휴지통', { exact: true }).check();
   await searchSection.getByLabel('작업 상태').selectOption('NONE');

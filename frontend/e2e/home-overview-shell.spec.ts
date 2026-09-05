@@ -268,7 +268,7 @@ test('renders the synthetic graph-first shell and keeps capture out of the defau
   await expect(page.getByRole('textbox', { name: '메모 내용' })).toBeVisible();
   await expect(page.getByRole('button', { name: '저장', exact: true })).toBeVisible();
   await expect(page.locator('.memo-section')).toHaveCount(0);
-  await expect(page.locator('.search-section')).toBeHidden();
+  await expect(page.locator('.search-section:visible')).toHaveCount(0);
   await expect(
     page.getByText('메모 원문은 AI 결과와 별도로 먼저 저장됩니다.', { exact: true }),
   ).toHaveCount(0);

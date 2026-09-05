@@ -34,6 +34,7 @@ import {
   type GraphNeighborhoodRetryRequest,
 } from '../features/graph/graphNeighborhoodModel';
 import { buildUpdateMemoRequest } from '../features/memos/memoModel';
+import type { MemoUpdateFailure } from '../features/memos/MemoDetailActions';
 import {
   buildApplyRequest,
   createReviewDraft,
@@ -85,7 +86,7 @@ function browserTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Seoul';
 }
 
-export function useMemoWorkspace(ownerId: string) {
+export function useMemoWorkspace(ownerId: string, protectMemoEdit = false) {
   const [connection, setConnection] = useState<ConnectionState>('checking');
   const [content, setContent] = useState(() => rawMemoDraftStore.read(ownerId));
   const [draftPersistenceFailed, setDraftPersistenceFailed] = useState(false);
@@ -137,6 +138,7 @@ export function useMemoWorkspace(ownerId: string) {
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [retryAction, setRetryAction] = useState<RetryAction | null>(null);
+  const [memoUpdateFailure, setMemoUpdateFailure] = useState<MemoUpdateFailure | null>(null);
   const [relationReviewLoadState, setRelationReviewLoadState] =
     useState<RelationReviewLoadState | null>(null);
 
@@ -239,23 +241,25 @@ export function useMemoWorkspace(ownerId: string) {
     }
   }, []);
 
-  const loadGraphMemoDetail = useCallback(async (node: GraphNode) => {
+  const loadGraphMemoDetail = useCallback(async (node: GraphNode, preserveDetail = false) => {
     const request = ++graphDetailRequest.current;
     graphDetailAbort.current?.abort();
     const controller = new AbortController();
     graphDetailAbort.current = controller;
-    setSelectedGraphMemo(null);
+    if (!preserveDetail) setSelectedGraphMemo(null);
     setGraphDetailLoading(true);
     setGraphDetailError(null);
 
     try {
       const memo = await api.memo(graphNodeEntityId(node), controller.signal);
+      if (memo.id !== graphNodeEntityId(node)) throw new Error('요청한 메모와 응답이 일치하지 않습니다.');
       if (graphDetailRequest.current === request && !controller.signal.aborted) {
         setSelectedGraphMemo(memo);
       }
     } catch (error) {
       if (graphDetailRequest.current === request && !controller.signal.aborted) {
         setGraphDetailError(errorMessage(error));
+        if (preserveDetail) throw error;
       }
     } finally {
       if (graphDetailRequest.current === request && !controller.signal.aborted) {
@@ -436,8 +440,12 @@ export function useMemoWorkspace(ownerId: string) {
 
   const retryGraphNodeDetail = useCallback(() => {
     if (activeGraphMemoNode) {
-      void loadGraphMemoDetail(activeGraphMemoNode);
+      void loadGraphMemoDetail(activeGraphMemoNode, true).catch(() => undefined);
     }
+  }, [activeGraphMemoNode, loadGraphMemoDetail]);
+
+  const reloadGraphMemoDetail = useCallback(async () => {
+    if (activeGraphMemoNode) await loadGraphMemoDetail(activeGraphMemoNode, true);
   }, [activeGraphMemoNode, loadGraphMemoDetail]);
 
   const retryGraphNeighborhood = useCallback(() => {
@@ -658,14 +666,14 @@ export function useMemoWorkspace(ownerId: string) {
   }, [loadRelationReviewCandidates, ownerId, reviewProposal, reviewProposalId]);
 
   useEffect(() => {
-    if (workspaceLoading || !selectedGraphNode) return;
+    if (workspaceLoading || !selectedGraphNode || protectMemoEdit) return;
     const projectedNode = graph.nodes.find((node) => node.id === selectedGraphNode.id);
     if (!projectedNode) {
       closeGraphNode();
       return;
     }
     graphSelectionNodeSnapshot.current = projectedNode;
-  }, [closeGraphNode, graph.nodes, selectedGraphNode, workspaceLoading]);
+  }, [closeGraphNode, graph.nodes, protectMemoEdit, selectedGraphNode, workspaceLoading]);
 
   useEffect(() => () => {
     graphDetailRequest.current += 1;
@@ -941,16 +949,24 @@ export function useMemoWorkspace(ownerId: string) {
     setFeedback({ kind: 'info', message: '보류한 제안을 다시 열었습니다.' });
   }
 
-  async function runUpdateMemo(memo: MemoView, body: ReturnType<typeof buildUpdateMemoRequest>) {
+  async function runUpdateMemo(memo: MemoView, body: ReturnType<typeof buildUpdateMemoRequest>): Promise<boolean> {
     const scope = `update:${memo.id}`;
+    const graphRequestAtStart = graphDetailRequest.current;
+    const graphMemoAtStart = activeGraphMemoIdentity.current;
     const idempotencyKey = retryIdentities.current.keyFor(scope, JSON.stringify(body));
     setBusyAction(scope);
     clearRetry(scope);
+    setMemoUpdateFailure(null);
     setFeedback({ kind: 'info', message: '원문을 새 revision으로 저장하고 있습니다.' });
 
     try {
       const updatedMemo = await api.updateMemo(memo.id, body, idempotencyKey);
-      setSelectedGraphMemo((current) => current?.id === updatedMemo.id ? updatedMemo : current);
+      if (updatedMemo.id !== memo.id) throw new Error('요청한 메모와 응답이 일치하지 않습니다.');
+      if (graphRequestAtStart === graphDetailRequest.current && graphMemoAtStart === memo.id &&
+        activeGraphMemoIdentity.current === memo.id) {
+        setSelectedGraphMemo((current) => current?.id === updatedMemo.id &&
+          current.currentRevision <= updatedMemo.currentRevision ? updatedMemo : current);
+      }
       clearRetry(scope);
       setFeedback({
         kind: 'success',
@@ -965,13 +981,27 @@ export function useMemoWorkspace(ownerId: string) {
       retryIdentities.current.clear(scope);
       return true;
     } catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
+      const conflict = error instanceof ApiError && error.status === 409;
+      setMemoUpdateFailure({
+        memoId: memo.id,
+        revision: memo.currentRevision,
+        content: body.content,
+        message: errorMessage(error),
+        conflict,
+        ...(!conflict ? { retry: () => runUpdateMemo(memo, body) } : {}),
+      });
+      if (conflict) {
         retryIdentities.current.clear(scope);
         setFeedback({ kind: 'error', message: errorMessage(error) });
         setRetryAction({
           scope,
           label: '최신 메모 불러오기',
-          run: () => void refreshMemos(),
+          run: () => {
+            void refreshMemos();
+            if (activeGraphMemoIdentity.current === memo.id && activeGraphMemoNode) {
+              void loadGraphMemoDetail(activeGraphMemoNode, true).catch(() => undefined);
+            }
+          },
         });
       } else {
         fail(error, scope, '원문 저장 다시 시도', () => void runUpdateMemo(memo, body));
@@ -1303,6 +1333,7 @@ export function useMemoWorkspace(ownerId: string) {
     pinPending: busyAction?.startsWith('pin:') ?? false,
     feedback,
     retryAction,
+    memoUpdateFailure,
     checkConnection,
     refreshWorkspace,
     refreshEvents,
@@ -1315,6 +1346,7 @@ export function useMemoWorkspace(ownerId: string) {
     backToGraphNeighborhood,
     closeGraphNode,
     retryGraphNodeDetail,
+    reloadGraphMemoDetail,
     retryGraphNeighborhood,
     loadMoreGraphNeighborhood,
     changeContent,

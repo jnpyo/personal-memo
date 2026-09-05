@@ -133,6 +133,10 @@ export function MemoSearchDetailDialog({
   const headingRef = useRef<HTMLHeadingElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
   const title = memoSearchResultTitle(item);
+  const selectedMemo = memo?.id === item.memoId ? memo : null;
+  const selectedMemoError = memo && !selectedMemo
+    ? '선택한 메모와 상세 응답이 일치하지 않습니다. 다시 불러와 주세요.'
+    : error;
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -148,7 +152,7 @@ export function MemoSearchDetailDialog({
     };
   }, [item.memoId]);
 
-  const lifecycleChanged = memo !== null && memo.status !== item.lifecycleStatus;
+  const lifecycleChanged = selectedMemo !== null && selectedMemo.status !== item.lifecycleStatus;
   return (
     <dialog
       ref={dialogRef}
@@ -195,18 +199,18 @@ export function MemoSearchDetailDialog({
         </dl>
         {lifecycleChanged && (
           <p className="memo-detail-revision-warning" role="status">
-            검색 후 메모 상태가 변경되었습니다. 현재 상태는 {memo ? LIFECYCLE_LABEL[memo.status] : '알 수 없음'}입니다.
+            검색 후 메모 상태가 변경되었습니다. 현재 상태는 {selectedMemo ? LIFECYCLE_LABEL[selectedMemo.status] : '알 수 없음'}입니다.
           </p>
         )}
         <CurrentMemoDetail
-          memo={memo}
+          memo={selectedMemo}
           loading={loading}
-          error={error}
+          error={selectedMemoError}
           onRetry={onRetry}
           headingId="memo-search-raw-content-title"
           expectedRevision={item.currentRevision}
         />
-        {memo && memoActions && <MemoDetailActions memo={memo} {...memoActions} />}
+        {selectedMemo && memoActions && <MemoDetailActions key={selectedMemo.id} memo={selectedMemo} {...memoActions} />}
         <section className="graph-detail-block" aria-labelledby="memo-search-tags-title">
           <div className="graph-detail-block__heading">
             <h3 id="memo-search-tags-title">검색 시점 canonical 태그</h3>
@@ -247,6 +251,7 @@ export function MemoSearch({ memoActions, canCloseDetail }: MemoSearchProps = {}
   const detailOpenerRef = useRef<HTMLButtonElement | null>(null);
   const detailAbortRef = useRef<AbortController | null>(null);
   const detailGenerationRef = useRef(0);
+  const detailSelectionRef = useRef<MemoSearchItem | null>(null);
   const focusRestoreCancelRef = useRef<(() => void) | null>(null);
   const loadMoreRef = useRef<HTMLButtonElement | null>(null);
   const searchRetryRef = useRef<HTMLButtonElement | null>(null);
@@ -258,22 +263,28 @@ export function MemoSearch({ memoActions, canCloseDetail }: MemoSearchProps = {}
   const overdueDisabled = memoSearchOverdueDisabled(draft.taskState);
   const items = search.collection?.items ?? [];
 
-  const loadDetail = useCallback(async (item: MemoSearchItem) => {
+  const loadDetail = useCallback(async (item: MemoSearchItem, preserveDetail = false) => {
+    if (detailSelectionRef.current?.memoId !== item.memoId) return;
     const generation = ++detailGenerationRef.current;
     detailAbortRef.current?.abort();
     const controller = new AbortController();
     detailAbortRef.current = controller;
-    setMemoDetail(null);
+    // Conflict recovery must update the source beneath the editor, not unmount its draft.
+    setMemoDetail((current) => preserveDetail && current?.id === item.memoId ? current : null);
     setDetailLoading(true);
     setDetailError(null);
     try {
       const memo = await api.memo(item.memoId, controller.signal);
       if (detailGenerationRef.current === generation && !controller.signal.aborted) {
+        if (memo.id !== item.memoId) {
+          throw new Error('선택한 메모와 상세 응답이 일치하지 않습니다. 다시 불러와 주세요.');
+        }
         setMemoDetail(memo);
       }
     } catch (caught) {
       if (detailGenerationRef.current === generation && !controller.signal.aborted) {
         setDetailError(errorMessage(caught));
+        throw caught;
       }
     } finally {
       if (detailGenerationRef.current === generation && !controller.signal.aborted) {
@@ -283,8 +294,9 @@ export function MemoSearch({ memoActions, canCloseDetail }: MemoSearchProps = {}
   }, []);
 
   const closeDetail = useCallback(() => {
-    if (canCloseDetail && !canCloseDetail()) return;
-    const closedItem = selectedItem;
+    if (canCloseDetail && !canCloseDetail()) return false;
+    const closedItem = detailSelectionRef.current;
+    detailSelectionRef.current = null;
     detailGenerationRef.current += 1;
     detailAbortRef.current?.abort();
     detailAbortRef.current = null;
@@ -292,7 +304,7 @@ export function MemoSearch({ memoActions, canCloseDetail }: MemoSearchProps = {}
     setMemoDetail(null);
     setDetailLoading(false);
     setDetailError(null);
-    if (!closedItem) return;
+    if (!closedItem) return true;
     const opener = detailOpenerRef.current;
     detailOpenerRef.current = null;
     focusRestoreCancelRef.current?.();
@@ -301,9 +313,11 @@ export function MemoSearch({ memoActions, canCloseDetail }: MemoSearchProps = {}
       opener,
       inputRef.current,
     );
-  }, [canCloseDetail, selectedItem]);
+    return true;
+  }, [canCloseDetail]);
 
   useEffect(() => () => {
+    detailSelectionRef.current = null;
     detailGenerationRef.current += 1;
     detailAbortRef.current?.abort();
     focusRestoreCancelRef.current?.();
@@ -355,12 +369,27 @@ export function MemoSearch({ memoActions, canCloseDetail }: MemoSearchProps = {}
   }
 
   function reset() {
-    if (selectedItem) closeDetail();
+    if (selectedItem && !closeDetail()) return;
     setDraft(emptyMemoSearchDraft());
     setValidationError(null);
     search.clear();
     window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
   }
+
+  async function saveForSelectedDetail(memoId: string, save: () => Promise<boolean>): Promise<boolean> {
+    const selection = detailSelectionRef.current;
+    const generation = detailGenerationRef.current;
+    if (!selection || selection.memoId !== memoId) return false;
+    const saved = await save();
+    // A successful save belongs to the dialog instance that submitted it.
+    // Closing/reopening even the same memo invalidates that instance.
+    if (detailGenerationRef.current !== generation || detailSelectionRef.current !== selection) return false;
+    if (saved) void loadDetail(selection, true).catch(() => undefined);
+    return saved;
+  }
+
+  const updateFailure = memoActions?.updateFailure;
+  const retryUpdate = updateFailure?.retry;
 
   const liveStatus = search.loading
     ? '메모를 검색하는 중입니다.'
@@ -525,8 +554,9 @@ export function MemoSearch({ memoActions, canCloseDetail }: MemoSearchProps = {}
                     detailOpenerRef.current = event.currentTarget;
                     focusRestoreCancelRef.current?.();
                     focusRestoreCancelRef.current = null;
+                    detailSelectionRef.current = item;
                     setSelectedItem(item);
-                    void loadDetail(item);
+                    void loadDetail(item).catch(() => undefined);
                   }}
                 >
                   <span className="memo-search-result__heading">
@@ -601,26 +631,32 @@ export function MemoSearch({ memoActions, canCloseDetail }: MemoSearchProps = {}
           loading={detailLoading}
           error={detailError}
           onClose={closeDetail}
-          onRetry={() => void loadDetail(selectedItem)}
+          onRetry={() => void loadDetail(selectedItem, true).catch(() => undefined)}
           memoActions={memoActions
             ? {
                 ...memoActions,
-                onUpdate: async (memo, content) => {
-                  const saved = await memoActions.onUpdate(memo, content);
-                  if (saved) void loadDetail(selectedItem);
-                  return saved;
-                },
+                busy: memoActions.busy || detailLoading,
+                onReload: () => loadDetail(selectedItem, true),
+                updateFailure: updateFailure && retryUpdate
+                  ? { ...updateFailure, retry: () => saveForSelectedDetail(updateFailure.memoId, retryUpdate) }
+                  : updateFailure,
+                onUpdate: (memo, content) => saveForSelectedDetail(
+                  memo.id,
+                  () => memoActions.onUpdate(memo, content),
+                ),
                 onTrash: (memo) => {
-                  memoActions.onTrash(memo);
-                  closeDetail();
+                  const started = memoActions.onTrash(memo);
+                  if (started !== false) closeDetail();
+                  return started;
                 },
                 onRestore: (memo) => {
                   memoActions.onRestore(memo);
                   closeDetail();
                 },
                 onAnalyze: (memo) => {
-                  memoActions.onAnalyze(memo);
-                  closeDetail();
+                  const started = memoActions.onAnalyze(memo);
+                  if (started !== false) closeDetail();
+                  return started;
                 },
               }
             : undefined}
