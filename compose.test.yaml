@@ -16,7 +16,7 @@ services:
       - /var/lib/postgresql/data
 
   backend-integration:
-    image: maven:3.9.11-eclipse-temurin-21
+    image: maven:3.9.15-eclipse-temurin-26
     working_dir: /workspace/backend
     environment:
       RUN_POSTGRES_INTEGRATION_TESTS: "true"
