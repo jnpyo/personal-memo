@@ -8,7 +8,7 @@ COPY contracts /workspace/contracts
 COPY backend/src src
 RUN mvn -B -q -DskipTests package
 
-FROM eclipse-temurin:21-jre-alpine AS runtime
+FROM eclipse-temurin:25-jre-alpine AS runtime
 RUN addgroup -S -g 10001 app \
     && adduser -S -D -H -u 10001 -G app app
 WORKDIR /app
